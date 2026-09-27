@@ -24,7 +24,7 @@
       <summary>Tint strength</summary>
     </key>
     <key name="dock-blur-radius" type="i">
-      <default>5</default>
+      <default>2</default>
       <summary>Blur radius</summary>
     </key>
     <key name="dock-brightness" type="d">
@@ -38,7 +38,7 @@
       <description>Adjusts the contrast of the dock.</description>
     </key>
     <key name="dock-saturation" type="d">
-      <default>1.0</default>
+      <default>1.5</default>
       <summary>Saturation</summary>
       <description>Adjusts the saturation of the dock.</description>
     </key>
@@ -199,7 +199,7 @@
       <summary>Contrast</summary>
     </key>
     <key name="panel-menu-saturation" type="d">
-      <default>1.0</default>
+      <default>1.5</default>
       <summary>Saturation</summary>
     </key>
     <key name="panel-menu-corner-radius" type="d">
@@ -266,7 +266,7 @@
       <description>Adjusts the contrast of the menu.</description>
     </key>
     <key name="menu-saturation" type="d">
-      <default>1.0</default>
+      <default>1.5</default>
       <summary>Saturation</summary>
       <description>Adjusts the saturation of the menu.</description>
     </key>
@@ -331,7 +331,7 @@
       <description>Adjusts the contrast of the notifications.</description>
     </key>
     <key name="notification-saturation" type="d">
-      <default>1.0</default>
+      <default>1.5</default>
       <summary>Saturation</summary>
       <description>Adjusts the saturation of the notifications.</description>
     </key>
@@ -419,7 +419,7 @@
       <description>Adjusts the contrast of the quick settings.</description>
     </key>
     <key name="quick-settings-saturation" type="d">
-      <default>1.0</default>
+      <default>1.5</default>
       <summary>Saturation</summary>
       <description>Adjusts the saturation of the quick settings.</description>
     </key>
@@ -491,7 +491,7 @@
       <description>Adjusts the contrast of the on-screen displays.</description>
     </key>
     <key name="osd-saturation" type="d">
-      <default>1.0</default>
+      <default>1.5</default>
       <summary>Saturation</summary>
       <description>Adjusts the saturation of the on-screen displays.</description>
     </key>
@@ -616,25 +616,25 @@
     </key>
 
     <key name="glass-max-z" type="d">
-      <default>25.0</default>
+      <default>88.0</default>
       <summary>Maximum Z depth (Thickness)</summary>
       <description>Controls the physical thickness or depth of the glass effect.</description>
     </key>
 
     <key name="glass-displacement-scale" type="d">
-      <default>78.5</default>
+      <default>10.5</default>
       <summary>Displacement scale</summary>
       <description>Controls the strength of the light refraction distortion.</description>
     </key>
 
     <key name="glass-edge-smoothing" type="d">
-      <default>2.0</default>
+      <default>0.5</default>
       <summary>Edge smoothing</summary>
       <description>Geometry anti-aliasing feathering width for the glass edges.</description>
     </key>
 
     <key name="glass-profile-shape-n" type="d">
-      <default>7.0</default>
+      <default>3.6</default>
       <summary>Profile shape N</summary>
       <description>Controls the superellipse profile shape of the glass surface curvature.</description>
     </key>
@@ -646,7 +646,7 @@
     </key>
 
     <key name="glass-chroma-strength" type="d">
-      <default>1.5</default>
+      <default>0.0</default>
       <summary>Chromatic aberration strength</summary>
       <description>Controls the RGB color separation effect caused by refraction, in pixels. Previously this value was a fraction of the screen size, which capped the visible effect at well under one pixel; existing values carried over from that scale will need re-tuning.</description>
     </key>
@@ -664,67 +664,67 @@
     </key>
 
     <key name="glass-rim-width" type="d">
-      <default>5.0</default>
+      <default>2.3</default>
       <summary>Rim light width</summary>
       <description>The width of the rim lighting band near the edges.</description>
     </key>
 
     <key name="glass-rim-intensity" type="d">
-      <default>0.6</default>
+      <default>0.5</default>
       <summary>Rim light intensity</summary>
       <description>The overall brightness of the rim lighting.</description>
     </key>
 
     <key name="glass-rim-directional-power" type="d">
-      <default>2.7</default>
+      <default>1.9</default>
       <summary>Rim directional power</summary>
       <description>Controls how the light direction affects the rim mask.</description>
     </key>
 
     <key name="glass-rim-power" type="d">
-      <default>6.0</default>
+      <default>3.0</default>
       <summary>Rim Fresnel power</summary>
       <description>Controls the Fresnel effect falloff for the rim light.</description>
     </key>
 
     <key name="glass-rim-light-color-intensity" type="d">
-      <default>1.4</default>
+      <default>1.0</default>
       <summary>Rim light color intensity</summary>
       <description>Multiplier for the rim light color brightness.</description>
     </key>
 
     <key name="glass-sheen-intensity" type="d">
-      <default>0.32</default>
+      <default>0.0</default>
       <summary>Sheen intensity</summary>
       <description>The intensity of the background sheen across the glass surface.</description>
     </key>
 
     <key name="glass-light-angle-deg" type="d">
-      <default>50.0</default>
+      <default>90.0</default>
       <summary>Light angle (Degrees)</summary>
       <description>The directional angle of the virtual light source illuminating the glass.</description>
     </key>
 
     <key name="shadow-radius" type="d">
-      <default>30.0</default>
+      <default>50.0</default>
       <summary>Drop shadow radius (px)</summary>
       <description>How far the drop shadow extends past the glass edge. Helps the glass stay visible on light backgrounds (e.g. white). Set to 0 to disable.</description>
     </key>
 
     <key name="shadow-intensity" type="d">
-      <default>0.55</default>
+      <default>0.22</default>
       <summary>Drop shadow intensity</summary>
       <description>How dark the drop shadow is. 0.0 = invisible, 1.0 = maximum darkness. Helps the glass stay visible on light backgrounds (e.g. white).</description>
     </key>
 
     <key name="glass-ao-intensity" type="d">
       <range min="0.0" max="1.0"/>
-      <default>0.25</default>
+      <default>0.65</default>
       <summary>Inner edge AO darkening intensity</summary>
     </key>
     <key name="glass-ao-radius" type="d">
       <range min="0.0" max="50.0"/>
-      <default>7.5</default>
+      <default>1.0</default>
       <summary>Inner edge AO darkening radius (px)</summary>
     </key>
 

@@ -1184,29 +1184,29 @@ export const LiquidEffect = GObject.registerClass({
             this._bindSettings();
         }
         else {
-            // Fallback defaults used when no GSettings schema is available.
-            this._setFloat('max_z', 25.0);
-            this._setFloat('displacement_scale', 78.5);
-            this._setFloat('edge_smoothing', 2.0);
-            this._setFloat('profile_shape_n', 7.0);
+            // Fallback defaults used when no GSettings schema is available: the
+            // gschema's defaults (macOS 27 measurements, memo.md 追記32).
+            this._setFloat('max_z', 88.0);
+            this._setFloat('displacement_scale', 10.5);
+            this._setFloat('edge_smoothing', 0.5);
+            this._setFloat('profile_shape_n', 3.6);
             this._setFloat('ior', 2.40);
-            this._setFloat('chroma_strength', 0.006);
+            this._setFloat('chroma_strength', 0.0);
             this._setFloat('specular_intensity', 0.0);
             this._setFloat('shininess', 42.0);
-            this._setFloat('rim_width', 5.0);
-            this._setFloat('rim_intensity', 0.6);
-            this._setFloat('rim_directional_power', 2.7);
-            this._setFloat('rim_power', 6.0);
-            this._setFloat('rim_light_color_intensity', 1.4);
-            this._setFloat('sheen_intensity', 0.32);
-            this._setFloat('light_angle_deg', 0.0);
-            this._setFloat('shadow_radius', 8.0);
-            this._setFloat('shadow_intensity', 0.55);
-            // Inner edge AO darkening (independent of rim_width/shadow_radius).
-            // ~7.5px matches the old rim_width*1.5-derived falloff at the default
-            // rim_width of 5.0, so the look is unchanged until the user retunes it.
-            this._setFloat('ao_intensity', 0.25);
-            this._setFloat('ao_radius', 7.5);
+            this._setFloat('rim_width', 2.3);
+            this._setFloat('rim_intensity', 0.5);
+            this._setFloat('rim_directional_power', 1.9);
+            this._setFloat('rim_power', 3.0);
+            this._setFloat('rim_light_color_intensity', 1.0);
+            this._setFloat('sheen_intensity', 0.0);
+            this._setFloat('light_angle_deg', 90.0);
+            this._setFloat('shadow_radius', 50.0);
+            this._setFloat('shadow_intensity', 0.22);
+            // Inner edge AO darkening (independent of rim_width/shadow_radius):
+            // a one-pixel dark ring where the rim light does not reach.
+            this._setFloat('ao_intensity', 0.65);
+            this._setFloat('ao_radius', 1.0);
             this._setFloat('tint_strength', 0.0);
             this._setFloat('tint_r', 1.0);
             this._setFloat('tint_g', 1.0);
