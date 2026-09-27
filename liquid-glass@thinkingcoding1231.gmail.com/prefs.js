@@ -682,7 +682,7 @@ export default class LiquidGlassPreferences extends ExtensionPreferences {
     });
     shaderPage.add(aoGroup);
 
-    this._addSliderRow(aoGroup, settings, 'glass-ao-intensity', 'AO Intensity', 'How dark the inner edge band gets. 0 = invisible, 1 = pure black.', 0.0, 1.0, 0.01);
+    this._addSliderRow(aoGroup, settings, 'glass-ao-intensity', 'AO Intensity', 'How dark the inner edge band gets where the rim light does not reach. 0 = invisible, 1 = pure black.', 0.0, 1.0, 0.01);
     this._addSliderRow(aoGroup, settings, 'glass-ao-radius', 'AO Radius (px)', 'How far inward from the edge the darkening extends before fading out.', 0.0, 50.0, 0.5);
 
     const debugGroup = new Adw.PreferencesGroup({ title: 'Debug' });
