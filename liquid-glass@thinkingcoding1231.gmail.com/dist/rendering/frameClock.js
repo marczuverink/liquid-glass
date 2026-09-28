@@ -1,0 +1,32 @@
+export let frameSerial = 0;
+let _frameSerialStage = null;
+let _frameSerialHandler = 0;
+export function ensureFrameSerialHook() {
+    if (_frameSerialHandler)
+        return true;
+    try {
+        const stage = globalThis.global?.stage;
+        if (!stage)
+            return false;
+        _frameSerialStage = stage;
+        _frameSerialHandler = stage.connect('after-paint', () => { frameSerial++; });
+    }
+    catch {
+        _frameSerialStage = null;
+        _frameSerialHandler = 0;
+    }
+    return _frameSerialHandler !== 0;
+}
+export function frameSerialIsLive() {
+    return _frameSerialHandler !== 0;
+}
+export function releaseFrameSerialHook() {
+    if (!_frameSerialHandler)
+        return;
+    try {
+        _frameSerialStage?.disconnect(_frameSerialHandler);
+    }
+    catch { }
+    _frameSerialStage = null;
+    _frameSerialHandler = 0;
+}
