@@ -818,7 +818,10 @@ export class OsdManager {
     this._isFirstAdaptiveRun = false;
 
     this._contrastSampler
-      .chooseColorsForActors(targets, this._adaptiveConfig, null)
+      .chooseColorsForActors(targets, this._adaptiveConfig, null,
+        // [PERF B4] Skip the capture while the glass under the text has not
+        // been repainted since the last one. See chooseColorsForActors().
+        () => this._osdStates.reduce((sum: number, st: OsdState) => sum + (st.effect?.paintCount ?? NaN), 0))
       .then(colorMap => {
         this._applyAdaptiveColorMap(colorMap, isFirst);
       })
