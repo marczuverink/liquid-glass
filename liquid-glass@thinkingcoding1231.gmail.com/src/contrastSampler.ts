@@ -2,12 +2,18 @@ import Clutter from 'gi://Clutter';
 import Shell from 'gi://Shell';
 import Gio from 'gi://Gio';
 import GdkPixbuf from 'gi://GdkPixbuf';
+import GLib from 'gi://GLib';
 import { getTransformedRect } from './actors/geometry.js';
 
 const SWITCH_ADVANTAGE = 1.2;
 const SWITCH_ADVANTAGE_TOWARD_PREFERRED = 1.02;
 const SWITCH_ADVANTAGE_AGAINST_PREFERRED = 1.6;
 const AMBIGUOUS_RATIO = 1.15;
+// After the decision flips, ignore every measurement for this long. The colour
+// tween takes ~380ms and the sampler photographs the screen area the text
+// itself is drawn on, so samples taken during the tween are measuring our own
+// half-finished colour change. See the feedback-loop note on sampleLuminance().
+const SWITCH_SETTLE_MS = 600;
 const MIN_READABLE_CONTRAST = 4.5;
 const BACKDROP_COVERS_GLASS_ALPHA = 190;
 const READABILITY_FLIP_COOLDOWN = 3;
@@ -251,6 +257,8 @@ export class StageContrastSampler {
   private _screenshot: Shell.Screenshot | null = null;
   private _lastLuma: number | null = null;
   private _lastIsBright: boolean | null = null;
+  /** Monotonic time of the last polarity change (null: none yet); see SWITCH_SETTLE_MS. */
+  private _lastSwitchAt: number | null = null;
   private _roundsSinceFlip: number = READABILITY_FLIP_COOLDOWN;
   private _lastRawLuma: number | null = null;
   private _lastRect: { x: number; y: number; width: number; height: number } | null = null;
@@ -282,7 +290,19 @@ export class StageContrastSampler {
         return null;
       }
 
-      return _trimmedMean(values, 0.10);
+      // [FIX] 0.10 -> 0.30. The rectangle handed to this function contains
+      // the TEXT actors, so a large minority of the pixels in it are the
+      // glyphs themselves — and their colour is the very thing this
+      // measurement decides. At a 10% trim the mean still moved by roughly
+      // 0.1 in luminance when the text flipped, which on a background sitting
+      // anywhere near the light/dark crossover is enough to flip the decision
+      // straight back: the white -> black -> white -> black ping-pong.
+      // Trimming 30% from each end keeps the middle 40% of the sorted values
+      // — an interquartile mean — which is robust to that contamination from
+      // BOTH ends (light text on a dark background and dark text on a light
+      // one) and barely moves when the glyphs change colour. The background
+      // itself, being the majority, still decides.
+      return _trimmedMean(values, 0.30);
     } catch {
       return null;
     }
@@ -312,6 +332,21 @@ export class StageContrastSampler {
     if (config.samplePerElement) {
       if (ambiguous && hasPreference) return preferDark ? config.darkTextColor : config.lightTextColor;
       return rawDark > rawLight ? config.darkTextColor : config.lightTextColor;
+    }
+
+    // [FIX] Hold everything still for a moment after a flip. This function is
+    // driven by a screenshot of the area the text is drawn on, so for the
+    // ~380ms the colour tween runs, every measurement is partly a measurement
+    // of our own in-progress change — a feedback loop that can sustain the
+    // ping-pong on its own even with the hysteresis below. An unreadable
+    // colour is never held when the other one is readable.
+    const now = GLib.get_monotonic_time();
+    if (this._lastIsBright !== null && this._inSettleHold(now)) {
+      const heldContrast = this._lastIsBright ? rawDark : rawLight;
+      const otherContrast = this._lastIsBright ? rawLight : rawDark;
+      const heldUnreadable = heldContrast < MIN_READABLE_CONTRAST && otherContrast >= MIN_READABLE_CONTRAST;
+      if (!heldUnreadable)
+        return this._lastIsBright ? config.darkTextColor : config.lightTextColor;
     }
 
     const smoothed = this._lastLuma === null
@@ -346,8 +381,14 @@ export class StageContrastSampler {
       isBright = !isBright;
 
     this._roundsSinceFlip = isBright === wasBright ? this._roundsSinceFlip + 1 : 0;
+    if (this._lastIsBright !== null && this._lastIsBright !== isBright)
+      this._lastSwitchAt = now;
     this._lastIsBright = isBright;
     return isBright ? config.darkTextColor : config.lightTextColor;
+  }
+
+  private _inSettleHold(now: number = GLib.get_monotonic_time()): boolean {
+    return this._lastSwitchAt !== null && now - this._lastSwitchAt < SWITCH_SETTLE_MS * 1000;
   }
 
   _backdropColorFor(actor: Clutter.Actor, config: typeof AdaptiveContrastConfig,
@@ -396,6 +437,7 @@ export class StageContrastSampler {
       this._lastLuma = null;
       this._lastIsBright = null;
       this._lastRawLuma = null;
+      this._lastSwitchAt = null;
       this._roundsSinceFlip = READABILITY_FLIP_COOLDOWN;
     }
     this._lastRect = merged;
@@ -410,9 +452,10 @@ export class StageContrastSampler {
       this.invalidate();
       return result;
     }
+    const inHold = this._lastIsBright !== null && this._inSettleHold();
     const color = this.decideTextColor(luma, config);
     const converged = this._lastLuma !== null && Math.abs(this._lastLuma - _clamp(luma, 0, 1)) < 0.01;
-    settle(color !== null && color === this._lastDecided && converged &&
+    settle(!inHold && color !== null && color === this._lastDecided && converged &&
       this._roundsSinceFlip >= READABILITY_FLIP_COOLDOWN);
     this._lastDecided = color;
     if (color)

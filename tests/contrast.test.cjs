@@ -479,3 +479,63 @@ test('pixel luminance sampling matches the original un-premultiplying loop', () 
     assert.deepEqual(luminanceSamples(shot), reference(shot), `channels=${channels} step=${step}`);
   }
 });
+
+test('a flip is held while the colour tween runs, then measurements count again', () => {
+  let now = 0;
+  const { StageContrastSampler: TimedSampler } = load('contrastSampler.js', 'StageContrastSampler', {
+    Shell: { Screenshot: class {} }, getTransformedRect: actor => actor.rect,
+    GLib: { get_monotonic_time: () => now },
+    global: { stage: { width: 3840, height: 2160 } },
+  });
+  const sampler = new TimedSampler();
+  now = 1e6;
+  assert.equal(sampler.decideTextColor(0.9), config.darkTextColor);
+  assert.equal(sampler.decideTextColor(0.0), config.lightTextColor, 'a real change flips at once');
+  // Neither colour reaches 4.5:1 on 0.2, so readability forces nothing and
+  // the smoothed history would flip straight back: the tween's own pixels.
+  now += 100e3;
+  assert.equal(sampler.decideTextColor(0.2), config.lightTextColor, 'held during the tween');
+  now += 600e3;
+  assert.equal(sampler.decideTextColor(0.2), config.darkTextColor, 'released after the hold');
+});
+
+test('an unreadable colour is never held after a flip', () => {
+  let now = 0;
+  const { StageContrastSampler: TimedSampler } = load('contrastSampler.js', 'StageContrastSampler', {
+    Shell: { Screenshot: class {} }, getTransformedRect: actor => actor.rect,
+    GLib: { get_monotonic_time: () => now },
+    global: { stage: { width: 3840, height: 2160 } },
+  });
+  const sampler = new TimedSampler();
+  now = 1e6;
+  sampler.decideTextColor(0.9);
+  assert.equal(sampler.decideTextColor(0.0), config.lightTextColor);
+  now += 50e3;
+  assert.equal(sampler.decideTextColor(0.95), config.darkTextColor);
+});
+
+test('glyphs covering a large minority of the sample do not move the measured background', async () => {
+  // 70% dark background, 30% light glyphs: the interquartile mean sees only
+  // the background, where a 10% trim would have let the glyphs through.
+  const width = 10, height = 10, channels = 3;
+  const data = new Uint8Array(width * height * channels);
+  for (let i = 0; i < width * height; i++) data.fill(i < 30 ? 242 : 20, i * channels, (i + 1) * channels);
+  const { StageContrastSampler: ShotSampler } = load('contrastSampler.js', 'StageContrastSampler', {
+    Shell: { Screenshot: class {
+      screenshot_area(_x, _y, _w, _h, _stream, cb) { cb(this, null); }
+      screenshot_area_finish() { return [true]; }
+    } },
+    Gio: {
+      MemoryOutputStream: { new_resizable: () => ({ close() {}, steal_as_bytes() { return null; } }) },
+      MemoryInputStream: { new_from_bytes: () => null },
+    },
+    GdkPixbuf: { Pixbuf: { new_from_stream: () => ({
+      get_width: () => width, get_height: () => height, get_rowstride: () => width * channels,
+      get_n_channels: () => channels, get_pixels: () => data,
+    }) } },
+    getTransformedRect: actor => actor.rect, GLib: { get_monotonic_time: () => 0 },
+    global: { stage: { width: 3840, height: 2160 } },
+  });
+  const measured = await new ShotSampler().sampleLuminance({ x: 0, y: 0, width, height });
+  assert.ok(Math.abs(measured - linear(20)) < 1e-9, `measured ${measured}, background ${linear(20)}`);
+});
