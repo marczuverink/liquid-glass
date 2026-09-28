@@ -189,11 +189,6 @@ export class StageContrastSampler {
   private _lastDecided: string | null = null;
   private _unchangedSignature: number | null = null;
   private _unchangedKey: string = '';
-  private _skippedSamples: number = 0;
-
-  get skippedSamples(): number {
-    return this._skippedSamples;
-  }
 
   invalidate(): void {
     this._unchangedSignature = null;
@@ -330,12 +325,11 @@ export class StageContrastSampler {
     };
     const merged = config.samplePerElement ? null : (root ? _getActorRect(root) : null) ?? _mergeRects(rects);
     const sampledRects = config.samplePerElement ? rects : (merged ? [merged] : []);
-    const key = sampledRects
+    const key = (config.samplePerElement ? rects : [...sampledRects, ...rects])
       .map(r => `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}`)
       .join(';') + `|${config.samplePerElement ? 'e' : 'm'}|${config.lightTextColor}|${config.darkTextColor}`;
     const before = readSignature();
     if (before !== null && before === this._unchangedSignature && key === this._unchangedKey) {
-      this._skippedSamples++;
       return result;
     }
     const settle = (stable: boolean) => {

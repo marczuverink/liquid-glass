@@ -1293,6 +1293,7 @@ export class QuickSettingsManager {
 
   _startAdaptiveColorSampling(skipAnimations = false) {
     if (!this._adaptiveConfig.enabled) return;
+    if (skipAnimations) this._contrastSampler.invalidate();
     this._updateAdaptiveTextColors(skipAnimations);
     if (this._adaptiveTimerId !== 0) return;
 

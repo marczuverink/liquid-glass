@@ -78,3 +78,11 @@ test('interval settings up to one 60Hz frame mean every frame, larger ones are a
   assert.equal(ticker.normalizeAnimationIntervalMs(33), 33);
   assert.equal(ticker.normalizeAnimationIntervalMs(1000), 50);
 });
+
+test('a second stage view updating in the same frame does not step the animation again', () => {
+  const { ticker, frame } = fixture();
+  let calls = 0;
+  ticker.addFrameTicker(() => { calls++; return true; });
+  for (let i = 0; i < 10; i++) { frame(16.667); frame(1); }
+  assert.equal(calls, 10);
+});

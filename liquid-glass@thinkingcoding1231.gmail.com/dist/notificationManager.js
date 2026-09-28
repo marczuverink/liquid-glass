@@ -390,6 +390,7 @@ export class NotificationManager {
     }
     _cleanupCurrentBanner() {
         this._bannerGeneration++;
+        this._contrastSampler.invalidate();
         this._stopAdaptiveColorSampling();
         this._clearAdaptiveStyles();
         // @ts-expect-error

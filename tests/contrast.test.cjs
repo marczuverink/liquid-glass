@@ -432,3 +432,18 @@ test('the skip baseline is dropped when the region, config or screen changes', a
   for (let i = 0; i < 5; i++) await sampler.chooseColorsForActors(rows, config, root);
   assert.equal(captures, plain + 5, 'without a paint signature nothing is skipped');
 });
+
+test('invalidating the sampler forces the next round to sample', async () => {
+  const sampler = new Sampler();
+  const root = { mapped: true, rect: [0, 0, 300, 400] };
+  const rows = [{ mapped: true, rect: [10, 10, 100, 20] }];
+  let paints = 0, captures = 0;
+  sampler.sampleLuminance = async () => { captures++; paints++; return 0.9; };
+  for (let i = 0; i < 20; i++) await sampler.chooseColorsForActors(rows, config, root, () => paints);
+  const settled = captures;
+  sampler.invalidate();
+  await sampler.chooseColorsForActors(rows, config, root, () => paints);
+  assert.equal(captures, settled + 1);
+  await sampler.chooseColorsForActors([...rows, { mapped: true, rect: [10, 40, 100, 20] }], config, root, () => paints);
+  assert.equal(captures, settled + 2, 'new text inside an unchanged root samples');
+});

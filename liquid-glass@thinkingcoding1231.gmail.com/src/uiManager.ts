@@ -1136,6 +1136,7 @@ export class UIManager {
     if (!this._adaptiveConfig.enabled)
       return;
 
+    if (skipAnimations) this._contrastSampler.invalidate();
     this._updateAdaptiveTextColors(skipAnimations);
 
     if (this._adaptiveTimerId !== 0)

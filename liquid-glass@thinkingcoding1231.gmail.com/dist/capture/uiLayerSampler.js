@@ -662,8 +662,11 @@ export class UILayerSampler {
         catch (_) { }
     }
     _checkCloneDrift(source, sourceClone, expectX, expectY) {
-        if (!utilsLogEnabled())
+        if (!utilsLogEnabled()) {
+            if (this._driftingClones.size)
+                this._driftingClones.clear();
             return;
+        }
         try {
             const [gotX, gotY] = sourceClone.get_transformed_position();
             const drifted = !Number.isFinite(gotX) || !Number.isFinite(gotY) ||

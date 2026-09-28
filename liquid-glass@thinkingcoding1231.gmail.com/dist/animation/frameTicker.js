@@ -1,7 +1,7 @@
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import { reportFrameLoopError } from '../diagnostics/logging.js';
-const JITTER_SLACK_US = 4000;
+import { SAME_FRAME_WINDOW_US } from './frameSync.js';
 const MAX_INTERVAL_MS = 50;
 let _nextId = 0;
 const _tickers = new Map();
@@ -16,7 +16,9 @@ export function addFrameTicker(cb, minIntervalMs = 0) {
                 return GLib.SOURCE_REMOVE;
             let keep = true;
             const now = GLib.get_monotonic_time();
-            if (ticker.minUs <= 0 || ticker.last === 0 || now - ticker.last >= ticker.minUs - JITTER_SLACK_US) {
+            const due = ticker.last === 0 ||
+                now - ticker.last >= Math.max(SAME_FRAME_WINDOW_US, ticker.minUs - SAME_FRAME_WINDOW_US);
+            if (due) {
                 ticker.last = now;
                 try {
                     keep = !!ticker.cb();
