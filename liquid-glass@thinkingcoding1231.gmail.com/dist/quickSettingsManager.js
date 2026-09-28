@@ -7,7 +7,7 @@ import St from 'gi://St';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import { LiquidEffect } from './liquidEffect.js';
-import { StageContrastSampler, AdaptiveContrastConfig } from './contrastSampler.js';
+import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
 import { UnpickableActor, LayoutOpaqueActor, UnpickableStyledWidget } from './actors/unpickable.js';
 import { UILayerSampler } from './capture/uiLayerSampler.js';
 import { WindowCloneManager } from './capture/windowClones.js';
@@ -254,6 +254,9 @@ export class QuickSettingsManager {
         connectSetting('quick-settings-enable-adaptive-text-color', () => {
             this._adaptiveConfig.enabled = this._settings.get_boolean('quick-settings-enable-adaptive-text-color');
         });
+        connectSetting('quick-settings-adaptive-text-preference', () => {
+            this._adaptiveConfig.preference = sanitizeColorPreference(this._settings.get_string('quick-settings-adaptive-text-preference'));
+        });
         connectSetting('quick-settings-sample-interval-ms', () => {
             this._adaptiveConfig.sampleIntervalMs = this._settings.get_int('quick-settings-sample-interval-ms');
         });
@@ -308,6 +311,7 @@ export class QuickSettingsManager {
             enabled: this._settings.get_boolean('quick-settings-enable-adaptive-text-color'),
             samplePerElement: SAMPLE_PER_ELEMENT,
             sampleIntervalMs: this._settings.get_int('quick-settings-sample-interval-ms'),
+            preference: sanitizeColorPreference(this._settings.get_string('quick-settings-adaptive-text-preference')),
         };
         this.bgActor = new UnpickableActor();
         this.bgActor.set_name('liquid-glass-bg-actor');
@@ -479,6 +483,7 @@ export class QuickSettingsManager {
             enabled: this._settings.get_boolean('quick-settings-enable-adaptive-text-color'),
             samplePerElement: SAMPLE_PER_ELEMENT,
             sampleIntervalMs: this._settings.get_int('quick-settings-sample-interval-ms'),
+            preference: sanitizeColorPreference(this._settings.get_string('quick-settings-adaptive-text-preference')),
         };
         this.bgActor = new UnpickableActor();
         this.bgActor.set_name('liquid-glass-bg-actor');
@@ -1421,8 +1426,8 @@ export class QuickSettingsManager {
                 lastTime = currentTime;
                 let isClosing = (this._springScale.target === 0);
                 let dt = elapsedMs / 1000;
-                if (dt > 0.033)
-                    dt = 0.033;
+                if (dt > 0.066)
+                    dt = 0.066; // [PERF C1] covers a 20fps cap; the physics sub-steps, so no blow-up
                 let stopped = false;
                 let s, p;
                 if (isClosing) {

@@ -11,6 +11,7 @@ function load(file, exports, bindings = {}) {
 const { StageContrastSampler: Sampler, AdaptiveContrastConfig: config, _getActorRect, backdropLuminance } = load(
   'contrastSampler.js', 'StageContrastSampler, AdaptiveContrastConfig, _getActorRect, backdropLuminance', {
     Shell: { Screenshot: class {} }, getTransformedRect: actor => actor.rect,
+    GLib: { get_monotonic_time: () => 0 },
     global: { stage: { width: 3840, height: 2160 } },
   });
 const linear = byte => byte / 255 <= 0.04045 ? byte / 255 / 12.92 : ((byte / 255 + 0.055) / 1.055) ** 2.4;
