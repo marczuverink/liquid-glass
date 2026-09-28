@@ -11,6 +11,7 @@ function load(file, exports, bindings = {}) {
 const { StageContrastSampler: Sampler, AdaptiveContrastConfig: config, _getActorRect, backdropLuminance } = load(
   'contrastSampler.js', 'StageContrastSampler, AdaptiveContrastConfig, _getActorRect, backdropLuminance', {
     Shell: { Screenshot: class {} }, getTransformedRect: actor => actor.rect,
+    GLib: { get_monotonic_time: () => 0 },
     global: { stage: { width: 3840, height: 2160 } },
   });
 const linear = byte => byte / 255 <= 0.04045 ? byte / 255 / 12.92 : ((byte / 255 + 0.055) / 1.055) ** 2.4;
@@ -384,4 +385,16 @@ test('a style change repaints only the container that changed', () => {
   assert.equal(fullScans, 0, 'the whole menu is never walked for one row');
   assert.ok(rows[0].style.includes('color:'));
   assert.equal(rows[1].style.includes('color:'), false, 'untouched rows stay untouched');
+});
+
+test('a preferred colour decides the ambiguous band but never overrides readability', () => {
+  const grey = 0.18;
+  for (const preference of ['light', 'dark']) {
+    const sampler = new Sampler();
+    const expected = preference === 'dark' ? config.darkTextColor : config.lightTextColor;
+    assert.equal(sampler.decideTextColor(grey, { ...config, preference }), expected, preference);
+    assert.equal(new Sampler().decideTextColor(grey, { ...config, preference, samplePerElement: true }), expected);
+  }
+  assert.equal(new Sampler().decideTextColor(0.95, { ...config, preference: 'light' }), config.darkTextColor);
+  assert.equal(new Sampler().decideTextColor(0.01, { ...config, preference: 'dark' }), config.lightTextColor);
 });
