@@ -562,3 +562,21 @@ test('glyphs covering a large minority of the sample do not move the measured ba
   const measured = await new ShotSampler().sampleLuminance({ x: 0, y: 0, width, height });
   assert.ok(Math.abs(measured - linear(20)) < 1e-9, `measured ${measured}, background ${linear(20)}`);
 });
+
+test('changing the preferred colour ends the settle hold at once', () => {
+  let now = 0;
+  const { StageContrastSampler: TimedSampler } = load('contrastSampler.js', 'StageContrastSampler', {
+    Shell: { Screenshot: class {} }, getTransformedRect: actor => actor.rect,
+    GLib: { get_monotonic_time: () => now },
+    global: { stage: { width: 3840, height: 2160 } },
+  });
+  const sampler = new TimedSampler();
+  now = 1e6;
+  const light = { ...config, preference: 'light' }, dark = { ...config, preference: 'dark' };
+  assert.equal(sampler.decideTextColor(0.19, light), config.lightTextColor);
+  assert.equal(sampler.decideTextColor(0.19, dark), config.darkTextColor);
+  now += 50e3;
+  assert.equal(sampler.decideTextColor(0.19, light), config.lightTextColor, 'not held by the flip 50 ms ago');
+  now += 50e3;
+  assert.equal(sampler.decideTextColor(0.2, light), config.lightTextColor);
+});

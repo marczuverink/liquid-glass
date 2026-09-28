@@ -301,6 +301,8 @@ export class StageContrastSampler {
     _lastIsBright = null;
     /** Monotonic time of the last polarity change (null: none yet); see SWITCH_SETTLE_MS. */
     _lastSwitchAt = null;
+    /** The configuration the hold was started under; see decideTextColor(). */
+    _holdConfig = '';
     _roundsSinceFlip = READABILITY_FLIP_COOLDOWN;
     _lastRawLuma = null;
     _lastRect = null;
@@ -388,8 +390,15 @@ export class StageContrastSampler {
         // ~380ms the colour tween runs, every measurement is partly a measurement
         // of our own in-progress change — a feedback loop that can sustain the
         // ping-pong on its own even with the hysteresis below. An unreadable
-        // colour is never held when the other one is readable.
+        // colour is never held when the other one is readable, and a changed
+        // configuration (the preferred colour, the two text colours) ends the
+        // hold: it is not a measurement, and the user expects it to apply at once.
         const now = GLib.get_monotonic_time();
+        const holdConfig = `${preference}|${config.lightTextColor}|${config.darkTextColor}`;
+        if (holdConfig !== this._holdConfig) {
+            this._holdConfig = holdConfig;
+            this._lastSwitchAt = null;
+        }
         if (this._lastIsBright !== null && this._inSettleHold(now)) {
             const heldContrast = this._lastIsBright ? rawDark : rawLight;
             const otherContrast = this._lastIsBright ? rawLight : rawDark;
