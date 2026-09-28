@@ -1,6 +1,5 @@
 import { ToggleStyles } from './quickSettings/toggleStyles.js';
 import { Spring } from './animation/spring.js';
-// src/quickSettingsManager.ts
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
@@ -19,13 +18,10 @@ import { isFrameSyncFrozen } from './animation/frameSync.js';
 import { setClipIfChanged } from './actors/writes.js';
 import { syncGlassCaptureClip } from './capture/clip.js';
 import { resolveCrossFade, adaptiveColorTweener } from './animation/colors.js';
-// ========== Configuration Parameters ==========
 // Transparent padding outside the glass area.
 // This prevents the shader distortion or rounded corners from being clipped by the actor bounds.
 const SHADER_PADDING = 20;
-// Adaptive text color flags
 const SAMPLE_PER_ELEMENT = false;
-// ==============================================
 export class QuickSettingsManager {
     // [FIX-6] How many consecutive frames Toggles mode may keep painting its
     // last known-good region set while a structural change settles. Two frames
@@ -81,7 +77,6 @@ export class QuickSettingsManager {
     _glassExpand;
     _menuXoffset;
     _menuYoffset;
-    // Spring physics parameters
     _springScale;
     _springPos;
     _springStiffness;
@@ -93,10 +88,16 @@ export class QuickSettingsManager {
     _adaptiveTimerId;
     _adaptiveInFlight;
     _styledActors;
+    _backdropColors = new Map();
+    _backdropSignals = new Map();
+    _sampleColors = new Map();
+    _dirtyBackdropRoots = new Set();
+    _backdropRefreshId = 0;
+    _applyingForeground = false;
+    _adaptiveGeneration = 0;
     _hasAutoRefreshed;
     _settingsSignals;
     _adaptiveConfig;
-    // Used in _syncGeometry
     _stableBaseW;
     _stableBaseH;
     _lastValidAnimAbsX;
@@ -1542,7 +1543,6 @@ export class QuickSettingsManager {
         }
         return foundActors;
     }
-    // Initiates the color change for a specific actor
     _setActorColor(actor, color, skipAnimations = false, batchStart) {
         if (!actor || typeof actor.set_style !== 'function')
             return;
@@ -1571,6 +1571,7 @@ export class QuickSettingsManager {
         this._animateActorColor(actor, color, isInsensitive, 380, skipAnimations, batchStart);
     }
     _clearAdaptiveStyles() {
+        this._clearBackdropTracking();
         for (const [actor, originalStyle] of this._styledActors.entries()) {
             if (actor && typeof actor.set_style === 'function') {
                 adaptiveColorTweener.cancel(actor);
@@ -1584,18 +1585,95 @@ export class QuickSettingsManager {
         }
         this._styledActors.clear();
     }
-    // Iterates through the color map and applies the new target colors to the respective actors
     _applyAdaptiveColorMap(colorMap, skipAnimations = false) {
         if (!colorMap || colorMap.size === 0)
             return;
+        this._backdropColors ??= new Map();
+        this._backdropSignals ??= new Map();
+        this._dirtyBackdropRoots ??= new Set();
+        this._sampleColors = colorMap;
         // One timestamp for the whole map, so every actor that flips in this round
         // runs off the same clock and the toggles move as one.
         const batchStart = GLib.get_monotonic_time();
         for (const [actor, color] of colorMap.entries()) {
-            this._setActorColor(actor, color, skipAnimations, batchStart);
+            if (!this._backdropColors.has(actor)) {
+                this._watchBackdrop(actor);
+                this._backdropColors.set(actor, this._contrastSampler._backdropColorFor(actor, this._adaptiveConfig, this.menu.actor));
+            }
+            const backdrop = this._backdropColors.get(actor);
+            this._setActorColor(actor, backdrop ?? color, backdrop !== null || skipAnimations, batchStart);
         }
     }
-    // Starts the timer for periodically sampling contrast and updating adaptive text colors
+    _watchBackdrop(actor) {
+        for (let node = actor; node; node = node.get_parent()) {
+            const holder = node;
+            if (holder instanceof St.Widget && !this._backdropSignals.has(holder)) {
+                this._backdropSignals.set(holder, [
+                    holder.connect('style-changed', () => {
+                        if (!this._applyingForeground)
+                            this._queueBackdropColors(holder);
+                    }),
+                    holder.connect('notify::parent', () => {
+                        this._watchBackdrop(holder);
+                        this._queueBackdropColors(holder);
+                    }),
+                    holder.connect('destroy', () => {
+                        this._backdropSignals.delete(holder);
+                        this._backdropColors.delete(holder);
+                        this._sampleColors.delete(holder);
+                        this._dirtyBackdropRoots.delete(holder);
+                    }),
+                ]);
+            }
+            if (holder === this.menu.actor)
+                break;
+        }
+    }
+    _queueBackdropColors(root) {
+        if (!this.menu?.isOpen || !this._adaptiveConfig.enabled)
+            return;
+        this._dirtyBackdropRoots.add(root);
+        if (this._backdropRefreshId)
+            return;
+        this._backdropRefreshId = global.compositor.get_laters().add(Meta.LaterType.BEFORE_REDRAW, () => {
+            this._backdropRefreshId = 0;
+            const dirty = new Set(this._dirtyBackdropRoots);
+            this._dirtyBackdropRoots.clear();
+            if (!this.menu?.isOpen || !this._adaptiveConfig.enabled)
+                return GLib.SOURCE_REMOVE;
+            for (const [actor, fallback] of this._sampleColors) {
+                for (let node = actor; node; node = node.get_parent()) {
+                    if (dirty.has(node)) {
+                        const color = this._contrastSampler._backdropColorFor(actor, this._adaptiveConfig, this.menu.actor);
+                        this._backdropColors.set(actor, color);
+                        this._setActorColor(actor, color ?? fallback, true);
+                        break;
+                    }
+                    if (node === this.menu.actor)
+                        break;
+                }
+            }
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+    _clearBackdropTracking() {
+        this._adaptiveGeneration = (this._adaptiveGeneration ?? 0) + 1;
+        if (this._backdropRefreshId)
+            global.compositor.get_laters().remove(this._backdropRefreshId);
+        this._backdropRefreshId = 0;
+        for (const [actor, ids] of this._backdropSignals ?? []) {
+            for (const id of ids) {
+                try {
+                    actor.disconnect(id);
+                }
+                catch (_) { /* already destroyed */ }
+            }
+        }
+        this._backdropSignals?.clear();
+        this._backdropColors?.clear();
+        this._sampleColors?.clear();
+        this._dirtyBackdropRoots?.clear();
+    }
     _startAdaptiveColorSampling(skipAnimations = false) {
         if (!this._adaptiveConfig.enabled)
             return;
@@ -1611,14 +1689,13 @@ export class QuickSettingsManager {
             return GLib.SOURCE_CONTINUE;
         });
     }
-    // Stops the adaptive color sampling timer
     _stopAdaptiveColorSampling() {
+        this._clearBackdropTracking();
         if (this._adaptiveTimerId !== 0) {
             GLib.source_remove(this._adaptiveTimerId);
             this._adaptiveTimerId = 0;
         }
     }
-    // Collects target actors, samples their contrast, and triggers color updates
     _updateAdaptiveTextColors(skipAnimations = false) {
         if (!this._adaptiveConfig.enabled || this._adaptiveInFlight)
             return;
@@ -1626,9 +1703,12 @@ export class QuickSettingsManager {
         if (targets.length === 0)
             return;
         this._adaptiveInFlight = true;
+        const generation = this._adaptiveGeneration ?? 0;
         this._contrastSampler
             .chooseColorsForActors(targets, this._adaptiveConfig, this.menu?.actor)
             .then(colorMap => {
+            if (generation !== (this._adaptiveGeneration ?? 0) || this._torndown || !this._adaptiveConfig.enabled)
+                return;
             this._applyAdaptiveColorMap(colorMap, skipAnimations);
         })
             .catch(e => {
@@ -1652,20 +1732,23 @@ export class QuickSettingsManager {
         // so that an interrupted tween restarts from the colour that is actually
         // on screen rather than from a theme node St has not re-resolved yet.
         // The snap path does cancel, because nothing should keep stepping after it.
-        const originalStyle = (this._styledActors.get(actor) || '').trim();
-        const stylePrefix = originalStyle ? `${originalStyle.replace(/;$/, '')}; ` : '';
         let themeNode = actor.get_theme_node();
         let startColor = themeNode.get_foreground_color();
         let targetRgb = this._hexToRgb(targetHexColor);
         let targetAlpha = isInsensitive ? 0.5 : 1.0;
         let startAlpha = startColor.alpha / 255.0;
-        // Override text color and icon foreground color directly using inline CSS
         const apply = (r, g, b, a) => {
             const rgba = `rgba(${r}, ${g}, ${b}, ${a.toFixed(3)})`;
+            // Compose with the live background style, not the snapshot taken before alpha updates.
+            const base = (actor.get_style() || '').split(';')
+                .filter(rule => !/^\s*(color|-st-icon-foreground-color)\s*:/.test(rule)).join(';').trim();
+            this._applyingForeground = true;
             try {
-                actor.set_style(`${stylePrefix}color: ${rgba}; -st-icon-foreground-color: ${rgba};`);
+                actor.set_style(`${base}${base.endsWith(';') || !base ? '' : ';'} color: ${rgba}; -st-icon-foreground-color: ${rgba};`);
             }
-            catch (e) { }
+            finally {
+                this._applyingForeground = false;
+            }
         };
         if (skipAnimations) {
             adaptiveColorTweener.cancel(actor);
@@ -1708,60 +1791,70 @@ export class QuickSettingsManager {
         if (!button || button._isUpdatingAlpha)
             return;
         button._isUpdatingAlpha = true;
-        let origStyle = this._styledButtons.get(button) || '';
-        button.set_style(origStyle || null);
-        button.ensure_style();
-        let themeNode = button.get_theme_node();
-        if (themeNode) {
-            let bgColor = themeNode.get_background_color();
-            if (bgColor) {
-                let isToggleContainer = button instanceof St.Widget && button.has_style_class_name('quick-toggle');
-                // FIX 1: If this is a parent toggle container, hide its background if any child is active/colored.
-                // This prevents the dark pod background from muddying the semi-transparent orange child button.
-                if (isToggleContainer) {
-                    let hasColoredChild = false;
-                    let children = typeof button.get_children === 'function' ? button.get_children() : [];
-                    for (let i = 0; i < children.length; i++) {
-                        let child = children[i];
-                        if (child instanceof St.Widget) {
-                            let childTheme = child.get_theme_node();
-                            if (childTheme) {
-                                let childBg = childTheme.get_background_color();
-                                if (childBg && childBg.alpha > 0) {
-                                    hasColoredChild = true;
-                                    break;
+        const foreground = this._styledActors.has(button) ? (button.get_style() || '').split(';')
+            .filter(rule => /^\s*(color|-st-icon-foreground-color)\s*:/.test(rule)).join(';') : '';
+        try {
+            let origStyle = this._styledButtons.get(button) || '';
+            button.set_style(origStyle || null);
+            button.ensure_style();
+            let themeNode = button.get_theme_node();
+            if (themeNode) {
+                let bgColor = themeNode.get_background_color();
+                if (bgColor) {
+                    let isToggleContainer = button instanceof St.Widget && button.has_style_class_name('quick-toggle');
+                    // FIX 1: If this is a parent toggle container, hide its background if any child is active/colored.
+                    // This prevents the dark pod background from muddying the semi-transparent orange child button.
+                    if (isToggleContainer) {
+                        let hasColoredChild = false;
+                        let children = typeof button.get_children === 'function' ? button.get_children() : [];
+                        for (let i = 0; i < children.length; i++) {
+                            let child = children[i];
+                            if (child instanceof St.Widget) {
+                                let childTheme = child.get_theme_node();
+                                if (childTheme) {
+                                    let childBg = childTheme.get_background_color();
+                                    if (childBg && childBg.alpha > 0) {
+                                        hasColoredChild = true;
+                                        break;
+                                    }
                                 }
                             }
                         }
+                        if (hasColoredChild) {
+                            let newStyle = origStyle
+                                ? `${origStyle} background-color: transparent !important;`
+                                : `background-color: transparent !important;`;
+                            button.set_style(newStyle);
+                            return;
+                        }
                     }
-                    if (hasColoredChild) {
-                        let newStyle = origStyle
-                            ? `${origStyle} background-color: transparent !important;`
-                            : `background-color: transparent !important;`;
+                    // FIX 2: If the button is completely transparent by default (like power/lock buttons), keep it transparent.
+                    if (bgColor.alpha === 0) {
+                        // Keep transparent buttons transparent
+                    }
+                    else {
+                        // Apply target alpha for normally visible buttons
+                        let rgbaStr = `rgba(${bgColor.red}, ${bgColor.green}, ${bgColor.blue}, ${targetAlpha})`;
+                        let newStyle = origStyle ? `${origStyle} background-color: ${rgbaStr};` : `background-color: ${rgbaStr};`;
                         button.set_style(newStyle);
-                        button._isUpdatingAlpha = false;
-                        return;
-                    }
-                }
-                // FIX 2: If the button is completely transparent by default (like power/lock buttons), keep it transparent.
-                if (bgColor.alpha === 0) {
-                    // Keep transparent buttons transparent
-                }
-                else {
-                    // Apply target alpha for normally visible buttons
-                    let rgbaStr = `rgba(${bgColor.red}, ${bgColor.green}, ${bgColor.blue}, ${targetAlpha})`;
-                    let newStyle = origStyle ? `${origStyle} background-color: ${rgbaStr};` : `background-color: ${rgbaStr};`;
-                    button.set_style(newStyle);
-                    // Ensure the parent toggle container is also updated dynamically.
-                    // If a child button changes state, we must force the parent to re-evaluate its transparency.
-                    let parent = typeof button.get_parent === 'function' ? button.get_parent() : null;
-                    if (parent && parent instanceof St.Widget && parent.has_style_class_name('quick-toggle')) {
-                        this._updateSingleButtonAlpha(parent, targetAlpha);
+                        // Ensure the parent toggle container is also updated dynamically.
+                        // If a child button changes state, we must force the parent to re-evaluate its transparency.
+                        let parent = typeof button.get_parent === 'function' ? button.get_parent() : null;
+                        if (parent && parent instanceof St.Widget && parent.has_style_class_name('quick-toggle')) {
+                            this._updateSingleButtonAlpha(parent, targetAlpha);
+                        }
                     }
                 }
             }
         }
-        button._isUpdatingAlpha = false;
+        finally {
+            if (foreground) {
+                const base = (button.get_style() || '').split(';')
+                    .filter(rule => !/^\s*(color|-st-icon-foreground-color)\s*:/.test(rule)).join(';');
+                button.set_style(`${base};${foreground};`);
+            }
+            button._isUpdatingAlpha = false;
+        }
     }
     _updateButtonAlpha() {
         if (!this.menu?.isOpen)
@@ -1773,7 +1866,7 @@ export class QuickSettingsManager {
         for (let button of buttons) {
             if (!this._styledButtons.has(button)) {
                 if (button instanceof St.Widget) {
-                    let origStyle = typeof button.get_style === 'function' ? button.get_style() : null;
+                    let origStyle = this._styledActors.get(button) ?? button.get_style();
                     this._styledButtons.set(button, origStyle || '');
                 }
                 const updateHandler = () => {
@@ -1794,11 +1887,9 @@ export class QuickSettingsManager {
                 signalIds.push(button.connect('key-focus-out', updateHandler));
                 this._buttonSignalIds.set(button, signalIds);
             }
-            // Apply style safely
             this._updateSingleButtonAlpha(button, targetAlpha);
         }
     }
-    // Start sampling timer
     _startButtonAlphaSampling() {
         this._updateButtonAlpha();
         if (this._buttonTimerId !== 0)
@@ -1818,7 +1909,6 @@ export class QuickSettingsManager {
             this._buttonTimerId = 0;
         }
     }
-    // Revert processing when extension is disabled, etc.
     _clearButtonStyles() {
         this._stopButtonAlphaSampling();
         if (this._buttonSignalIds) {
@@ -1888,7 +1978,6 @@ export class QuickSettingsManager {
                     this._springPos.value += (0 - this._springPos.value) * (1.0 - Math.exp(-speed * dt));
                     s = this._springScale.value;
                     p = this._springPos.value;
-                    // Stop animation completely when it's virtually invisible
                     if (s < 0.005) {
                         s = 0;
                         p = 0;
@@ -1948,7 +2037,6 @@ export class QuickSettingsManager {
     _adjustSubmenuPositions() {
         if (!this._enableSubmenuFix || !this.menu?.isOpen || !this.animActor)
             return;
-        // Scan when there's no cached submenus yet
         if (!this._cachedSubmenus) {
             this._cachedSubmenus = [];
             let deepScan = (actor) => {
@@ -2046,7 +2134,6 @@ export class QuickSettingsManager {
         }
     }
     _clearSubmenuFix() {
-        // Scan when there's no cached submenus yet
         let foundMenus = this._cachedSubmenus || [];
         if (foundMenus.length === 0) {
             let deepScan = (actor) => {
@@ -2083,7 +2170,6 @@ export class QuickSettingsManager {
         this._clearSubmenuFix();
         this._toggleStyles.clear();
         this._destroyPanelContentClone();
-        // Disconnect all event listeners
         for (let sig of this._signals) {
             try {
                 if (sig && sig.id)
@@ -2099,13 +2185,11 @@ export class QuickSettingsManager {
             catch (e) { }
             this._animSignalId = 0;
         }
-        // Stop the render frame loop
         if (this._frameSyncId !== 0) {
             if (global.compositor?.get_laters)
                 global.compositor.get_laters().remove(this._frameSyncId);
             this._frameSyncId = 0;
         }
-        // Remove transparent CSS overrides
         this.targetActor.remove_style_class_name('liquid-glass-transparent');
         if (this.animActor) {
             this.animActor.remove_style_class_name('liquid-glass-transparent');

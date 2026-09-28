@@ -11,6 +11,7 @@ The extension source is in `liquid-glass@thinkingcoding1231.gmail.com/src`.
 | `rendering/` | Blur buffers, pipelines, crop targets, glass extents, uniform caching and material settings |
 | `diagnostics/` | Logging, the opt-in ring recorder and Looking Glass controls |
 | `quickSettings/toggleStyles.ts` | Toggle discovery, native theme colours, temporary styles and their timer/signal lifetime |
+| `preferences/` | Shared appearance controls, grouped settings writes and application selection; see [Preferences](preferences.md) |
 | `liquidEffect.ts` | Clutter effect lifecycle, frame reuse and the existing interface used by managers |
 
 `utils.ts` remains an explicit compatibility export list. Internal modules import directly from the owner; new functionality should not be added to the compatibility file. The diagnostic exports previously provided by `liquidEffect.ts` remain available there too.
