@@ -3,6 +3,30 @@ import St from 'gi://St';
 import GLib from 'gi://GLib';
 import type { Logger } from '../logger.js';
 
+const TRANSPARENT_OVERRIDE = 'background-color: transparent !important;';
+
+type ToggleEntry = {
+  destroyId: number;
+  baseColor: [number, number, number];
+  baseAlpha: number;
+  styledSubs: { actor: Clutter.Actor; origStyle: string }[];
+  stateKey: string;
+};
+
+function _withOverride(origStyle: string): string {
+  return origStyle ? `${origStyle} ${TRANSPARENT_OVERRIDE}` : TRANSPARENT_OVERRIDE;
+}
+
+function _releaseEntry(pod: Clutter.Actor, entry: ToggleEntry): void {
+  if (entry.destroyId) {
+    try { pod.disconnect(entry.destroyId); } catch (_) { }
+  }
+  for (const { actor, origStyle } of entry.styledSubs) {
+    if (!(actor instanceof St.Widget) || typeof actor.set_style !== 'function') continue;
+    try { actor.set_style(origStyle || null); } catch (e) { }
+  }
+}
+
 export class ToggleStyles {
   constructor(private _logger: Logger, private _isOpen: () => boolean) {}
 
@@ -24,13 +48,7 @@ export class ToggleStyles {
 
   private static readonly TOGGLE_COLOR_FULL_PASS_EVERY = 8;
 
-  private _toggleRegions: Map<Clutter.Actor, {
-    destroyId: number;
-    baseColor: [number, number, number];
-    baseAlpha: number;
-    styledSubs: { actor: Clutter.Actor; origStyle: string }[];
-    stateKey: string;
-  }> = new Map();
+  private _toggleRegions: Map<Clutter.Actor, ToggleEntry> = new Map();
 
   private _toggleColorTimerId: number = 0;
 
@@ -45,25 +63,13 @@ export class ToggleStyles {
   ): Clutter.Actor[] {
     if (!actor) return found;
 
-    let isHasMenuPod = actor instanceof St.Widget && actor.has_style_class_name('quick-toggle-has-menu');
-    if (isHasMenuPod) {
-      if (actor.visible) found.push(actor);
-      return found;
-    }
-
-    let isToggle = actor instanceof St.Widget && actor.has_style_class_name('quick-toggle');
-    if (isToggle) {
-      if (actor.visible) found.push(actor);
-      return found;
-    }
-
-    if (inSystemItem && actor instanceof St.Widget && actor.has_style_class_name('icon-button')) {
-      if (actor.visible) found.push(actor);
-      return found;
-    }
-
-    if (actor instanceof St.Widget && actor.has_style_class_name('quick-slider')) {
+    const leaf = this._toggleLeafKind(actor, inSystemItem);
+    if (leaf === 'slider') {
       if (actor.visible && this._paintsOwnBackground(actor)) found.push(actor);
+      return found;
+    }
+    if (leaf === 'toggle') {
+      if (actor.visible) found.push(actor);
       return found;
     }
 
@@ -73,6 +79,15 @@ export class ToggleStyles {
     let children = typeof actor.get_children === 'function' ? actor.get_children() : [];
     for (let child of children) this._findAllToggleContainers(child, found, entersSystemItem);
     return found;
+  }
+
+  private _toggleLeafKind(actor: Clutter.Actor, inSystemItem: boolean): 'toggle' | 'slider' | null {
+    if (!(actor instanceof St.Widget)) return null;
+    if (actor.has_style_class_name('quick-toggle-has-menu')) return 'toggle';
+    if (actor.has_style_class_name('quick-toggle')) return 'toggle';
+    if (inSystemItem && actor.has_style_class_name('icon-button')) return 'toggle';
+    if (actor.has_style_class_name('quick-slider')) return 'slider';
+    return null;
   }
 
   private _paintsOwnBackground(actor: Clutter.Actor): boolean {
@@ -212,113 +227,110 @@ export class ToggleStyles {
   }
 
   private _ensureToggleStyles(toggles: Clutter.Actor[]) {
-    const OVERRIDE = 'background-color: transparent !important;';
-
     for (let pod of toggles) {
       if (!(pod instanceof St.Widget)) continue;
+      const entry = this._ensureEntry(pod);
+      const primary = this._getPrimaryToggleButton(pod);
+      if (primary instanceof St.Widget && !this._hasOverride(primary)) this._updateBaseColor(entry, pod, primary);
+      this._overrideSubStyles(entry, pod);
+    }
+  }
 
-      let entry = this._toggleRegions.get(pod);
-      if (!entry) {
-        entry = { destroyId: 0, baseColor: [1.0, 1.0, 1.0], baseAlpha: 0, styledSubs: [], stateKey: '' };
-        this._toggleRegions.set(pod, entry);
-        entry.destroyId = pod.connect('destroy', () => {
-          this._toggleRegions.delete(pod);
-        });
-      }
+  private _ensureEntry(pod: Clutter.Actor): ToggleEntry {
+    let entry = this._toggleRegions.get(pod);
+    if (entry) return entry;
+    entry = { destroyId: 0, baseColor: [1.0, 1.0, 1.0], baseAlpha: 0, styledSubs: [], stateKey: '' };
+    this._toggleRegions.set(pod, entry);
+    entry.destroyId = pod.connect('destroy', () => {
+      this._toggleRegions.delete(pod);
+    });
+    return entry;
+  }
 
-      let primary = this._getPrimaryToggleButton(pod);
-      if (primary instanceof St.Widget) {
-        let curStyle = typeof primary.get_style === 'function' ? primary.get_style() : null;
-        if (!curStyle || !curStyle.includes(OVERRIDE)) {
-          let sampled = this._samplePodColor(pod, primary);
-          if (sampled.a > 0.02) {
-            entry.baseColor = [sampled.r, sampled.g, sampled.b];
-            entry.baseAlpha = sampled.a;
-          }
-        }
-      }
+  private _hasOverride(actor: Clutter.Actor): boolean {
+    const style = typeof (actor as any).get_style === 'function' ? (actor as any).get_style() : null;
+    return !!style && style.includes(TRANSPARENT_OVERRIDE);
+  }
 
-      let known = new Set(entry.styledSubs.map(s => s.actor));
-      for (let sub of this._getStylableSubActors(pod)) {
-        if (!(sub instanceof St.Widget)) continue;
+  private _updateBaseColor(entry: ToggleEntry, pod: Clutter.Actor, primary: Clutter.Actor) {
+    const sampled = this._samplePodColor(pod, primary);
+    if (sampled.a > 0.02) {
+      entry.baseColor = [sampled.r, sampled.g, sampled.b];
+      entry.baseAlpha = sampled.a;
+    }
+    return sampled;
+  }
 
-        let style = typeof sub.get_style === 'function' ? sub.get_style() : null;
-        if (style && style.includes(OVERRIDE)) continue;
-
-        let origStyle = style || '';
-        let newStyle = origStyle ? `${origStyle} ${OVERRIDE}` : OVERRIDE;
-        sub.set_style(newStyle);
-
-        if (!known.has(sub)) entry.styledSubs.push({ actor: sub, origStyle });
-      }
+  private _overrideSubStyles(entry: ToggleEntry, pod: Clutter.Actor) {
+    const known = new Set(entry.styledSubs.map(s => s.actor));
+    for (let sub of this._getStylableSubActors(pod)) {
+      if (!(sub instanceof St.Widget) || this._hasOverride(sub)) continue;
+      const origStyle = sub.get_style() || '';
+      sub.set_style(_withOverride(origStyle));
+      if (!known.has(sub)) entry.styledSubs.push({ actor: sub, origStyle });
     }
   }
 
   private _resampleToggleColors() {
     let forceFull = (this._resamplePassCount++ % ToggleStyles.TOGGLE_COLOR_FULL_PASS_EVERY) === 0;
-
     for (const [pod, entry] of this._toggleRegions.entries()) {
-      if (!pod) continue;
-
-      let primary = this._getPrimaryToggleButton(pod);
-
-      let stateKey = this._podStateKey(pod, primary);
-      if (!forceFull && stateKey === entry.stateKey) continue;
-      entry.stateKey = stateKey;
-
-      for (const { actor, origStyle } of entry.styledSubs) {
-        if (actor instanceof St.Widget) actor.set_style(origStyle || null);
-      }
-
-      if (pod instanceof St.Widget && pod.has_style_class_name('quick-slider')) {
-        let pill = this._readThemeBg(pod);
-        if (!(pill && pill.a > 0.02)) {
-          this._logger.log(
-            `[Liquid Glass][toggle-color] releasing .quick-slider pod — theme no longer paints a pill ` +
-            `(bg=${JSON.stringify(pill)})`
-          );
-          if (entry.destroyId) pod.disconnect(entry.destroyId);
-          this._toggleRegions.delete(pod);
-          continue;
-        }
-      }
-
-      if (primary instanceof St.Widget) {
-        let sampled = this._samplePodColor(pod, primary);
-        if (sampled.a > 0.02) {
-          entry.baseColor = [sampled.r, sampled.g, sampled.b];
-          entry.baseAlpha = sampled.a;
-        }
-
-        if (this._debugToggleColorLogFrames > 0) {
-          let isHasMenu = pod instanceof St.Widget && pod.has_style_class_name('quick-toggle-has-menu');
-          let podCls = pod instanceof St.Widget && typeof pod.get_style_class_name === 'function' ? (pod.get_style_class_name() || '') : '';
-          let primaryCls = typeof primary.get_style_class_name === 'function' ? (primary.get_style_class_name() || '') : '';
-          let checked = typeof (primary as any).has_style_pseudo_class === 'function' ? (primary as any).has_style_pseudo_class('checked') : 'n/a';
-          let wrapperBg = isHasMenu ? this._readThemeBg(pod) : null;
-          let iconBgs = this._getToggleIconActors(pod !== primary ? primary : pod)
-            .map(a => JSON.stringify(this._readThemeBg(a))).join(' ');
-          this._logger.log(
-            `[Liquid Glass][toggle-color] pod class="${podCls}" isHasMenu=${isHasMenu} ` +
-            `primary class="${primaryCls}" checked=${checked} ` +
-            `primaryBg=${JSON.stringify(this._readThemeBg(primary))} ` +
-            `wrapperBg=${wrapperBg ? JSON.stringify(wrapperBg) : 'n/a'} ` +
-            `iconBg=[${iconBgs || 'none'}] ` +
-            `chosen.a=${sampled.a.toFixed(2)} trusted=${sampled.a > 0.02} ` +
-            `entry.baseColor=[${entry.baseColor.map(v => v.toFixed(2)).join(',')}] entry.baseAlpha=${entry.baseAlpha.toFixed(2)}`
-          );
-        }
-      }
-
-      for (const { actor, origStyle } of entry.styledSubs) {
-        if (!(actor instanceof St.Widget)) continue;
-        let newStyle = origStyle
-          ? `${origStyle} background-color: transparent !important;`
-          : `background-color: transparent !important;`;
-        actor.set_style(newStyle);
-      }
+      if (pod) this._resamplePod(pod, entry, forceFull);
     }
     if (this._debugToggleColorLogFrames > 0) this._debugToggleColorLogFrames--;
+  }
+
+  private _resamplePod(pod: Clutter.Actor, entry: ToggleEntry, forceFull: boolean) {
+    const primary = this._getPrimaryToggleButton(pod);
+    const stateKey = this._podStateKey(pod, primary);
+    if (!forceFull && stateKey === entry.stateKey) return;
+    entry.stateKey = stateKey;
+
+    for (const { actor, origStyle } of entry.styledSubs) {
+      if (actor instanceof St.Widget) actor.set_style(origStyle || null);
+    }
+
+    if (this._releaseIfSliderLostPill(pod, entry)) return;
+
+    if (primary instanceof St.Widget) {
+      const sampled = this._updateBaseColor(entry, pod, primary);
+      if (this._debugToggleColorLogFrames > 0) this._logPodColor(pod, primary, entry, sampled);
+    }
+
+    for (const { actor, origStyle } of entry.styledSubs) {
+      if (actor instanceof St.Widget) actor.set_style(_withOverride(origStyle));
+    }
+  }
+
+  private _releaseIfSliderLostPill(pod: Clutter.Actor, entry: ToggleEntry): boolean {
+    if (!(pod instanceof St.Widget) || !pod.has_style_class_name('quick-slider')) return false;
+    const pill = this._readThemeBg(pod);
+    if (pill && pill.a > 0.02) return false;
+    this._logger.log(
+      `[Liquid Glass][toggle-color] releasing .quick-slider pod — theme no longer paints a pill ` +
+      `(bg=${JSON.stringify(pill)})`
+    );
+    if (entry.destroyId) pod.disconnect(entry.destroyId);
+    this._toggleRegions.delete(pod);
+    return true;
+  }
+
+  private _logPodColor(pod: Clutter.Actor, primary: Clutter.Actor, entry: ToggleEntry, sampled: { a: number }) {
+    let isHasMenu = pod instanceof St.Widget && pod.has_style_class_name('quick-toggle-has-menu');
+    let podCls = pod instanceof St.Widget && typeof pod.get_style_class_name === 'function' ? (pod.get_style_class_name() || '') : '';
+    let primaryCls = typeof (primary as any).get_style_class_name === 'function' ? ((primary as any).get_style_class_name() || '') : '';
+    let checked = typeof (primary as any).has_style_pseudo_class === 'function' ? (primary as any).has_style_pseudo_class('checked') : 'n/a';
+    let wrapperBg = isHasMenu ? this._readThemeBg(pod) : null;
+    let iconBgs = this._getToggleIconActors(pod !== primary ? primary : pod)
+      .map(a => JSON.stringify(this._readThemeBg(a))).join(' ');
+    this._logger.log(
+      `[Liquid Glass][toggle-color] pod class="${podCls}" isHasMenu=${isHasMenu} ` +
+      `primary class="${primaryCls}" checked=${checked} ` +
+      `primaryBg=${JSON.stringify(this._readThemeBg(primary))} ` +
+      `wrapperBg=${wrapperBg ? JSON.stringify(wrapperBg) : 'n/a'} ` +
+      `iconBg=[${iconBgs || 'none'}] ` +
+      `chosen.a=${sampled.a.toFixed(2)} trusted=${sampled.a > 0.02} ` +
+      `entry.baseColor=[${entry.baseColor.map(v => v.toFixed(2)).join(',')}] entry.baseAlpha=${entry.baseAlpha.toFixed(2)}`
+    );
   }
 
   start() {
@@ -366,16 +378,7 @@ export class ToggleStyles {
 
   clear() {
     this.stop();
-    for (const [pod, entry] of this._toggleRegions.entries()) {
-      if (entry.destroyId) {
-        try { pod.disconnect(entry.destroyId); } catch (_) { }
-      }
-      for (const { actor, origStyle } of entry.styledSubs) {
-        if (actor instanceof St.Widget && typeof actor.set_style === 'function') {
-          try { actor.set_style(origStyle || null); } catch (e) { }
-        }
-      }
-    }
+    for (const [pod, entry] of this._toggleRegions.entries()) _releaseEntry(pod, entry);
     this._toggleRegions.clear();
   }
 }

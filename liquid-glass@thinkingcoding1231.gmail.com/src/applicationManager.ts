@@ -17,7 +17,7 @@ import { isFrameSyncFrozen, SAME_FRAME_WINDOW_US } from './animation/frameSync.j
 import { getNestedGlassFix, innerGlassEffectOf, isFocusDebugEnabled } from './capture/nestedGlass.js';
 import { setTranslationIfChanged, setSizeIfChanged, setScaleIfChanged, setOpacityIfChanged, setCloneCulled } from './actors/writes.js';
 import { isCullSiteEnabled } from './capture/options.js';
-import { createBackgroundMirror, setBackgroundMirrorEnabled, isBackgroundMirrorEnabled } from './capture/background.js';
+import { createBackgroundMirror } from './capture/background.js';
 import { reportClonedWindowActors, releaseClonedWindowActors } from './capture/windowCulling.js';
 
 import { Logger } from './logger.js';
@@ -1402,7 +1402,7 @@ export class ApplicationManager {
     const container = state.windowsContainer;
     if (!isActorValid(container)) return 0;
 
-    let x = NaN, y = NaN;
+    let x: number, y: number;
     try { [x, y] = container.get_transformed_position(); } catch (e) { return 0; }
 
     const offBy = (!Number.isFinite(x) || !Number.isFinite(y))

@@ -1,4 +1,5 @@
 import { ToggleStyles } from './quickSettings/toggleStyles.js';
+import { stepMenuSprings, applyMenuFrame, showMenuAtRest } from './animation/menuSpring.js';
 import { addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs } from './animation/frameTicker.js';
 import { Spring } from './animation/spring.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -361,66 +362,8 @@ export class QuickSettingsManager {
         this._windowCloneManager = new WindowCloneManager(this.liquidBox, this._cloneContainer, 'lg-qs');
         this._uiSampler = new UILayerSampler(this.bgActor, this.liquidBox, [menuRoot, global.windowGroup, global.window_group], this._cloneContainer, 'quick-settings');
         this.bgActor.hide();
-        const laterAdd = (laterType, callback) => {
-            return global.compositor?.get_laters?.().add(laterType, callback);
-        };
-        const laterRemove = (id) => {
-            if (!id)
-                return;
-            if (global.compositor?.get_laters)
-                global.compositor.get_laters().remove(id);
-        };
-        const frameLaterType = Meta.LaterType.BEFORE_REDRAW;
-        let buildClones = () => {
-            if (!this.bgActor)
-                return;
-            if (this._uiSampler) {
-                for (let child of Main.layoutManager.uiGroup.get_children()) {
-                    if (child === this.bgActor)
-                        continue;
-                    let isLiquidBg = child.get_name?.() === 'liquid-glass-bg-actor' ||
-                        (typeof child.get_children === 'function' &&
-                            child.get_children().some((c) => c.get_name?.() === 'liquid-box'));
-                    if (isLiquidBg)
-                        this._uiSampler.addExclusion(child);
-                }
-            }
-            this._windowCloneManager?.rebuildClones();
-            this._uiSampler?.rebindSelf();
-            this._uiSampler?.refresh();
-        };
-        let frameTick = () => {
-            this._frameSyncId = 0;
-            if (this._torndown)
-                return GLib.SOURCE_REMOVE;
-            if (!this.bgActor || !this.targetActor.mapped)
-                return GLib.SOURCE_REMOVE;
-            if (isFrameSyncFrozen()) {
-                this._frameSyncId = laterAdd(frameLaterType, frameTick);
-                return GLib.SOURCE_REMOVE;
-            }
-            ensureGlassAllocated(this.bgActor);
-            try {
-                this._syncGeometry();
-            }
-            catch (e) {
-                reportFrameLoopError('QuickSettingsManager', e);
-            }
-            this._frameSyncId = laterAdd(frameLaterType, frameTick);
-            return GLib.SOURCE_REMOVE;
-        };
-        let startFrameSync = () => {
-            if (this._frameSyncId === 0) {
-                buildClones();
-                this._frameSyncId = laterAdd(frameLaterType, frameTick);
-            }
-        };
-        let stopFrameSync = () => {
-            if (this._frameSyncId !== 0) {
-                laterRemove(this._frameSyncId);
-                this._frameSyncId = 0;
-            }
-        };
+        const startFrameSync = () => this._startFrameSync(() => this._syncGeometry(), 'QuickSettingsManager', true);
+        const stopFrameSync = () => this._stopFrameSync();
         if (this._hasAutoRefreshed === undefined)
             this._hasAutoRefreshed = false;
         this._signals = [];
@@ -543,62 +486,8 @@ export class QuickSettingsManager {
         this._windowCloneManager = new WindowCloneManager(this.liquidBox, this._cloneContainer, 'lg-qs-toggles');
         this._uiSampler = new UILayerSampler(this.bgActor, this.liquidBox, [menuRoot, global.windowGroup, global.window_group], this._cloneContainer, 'quick-settings-toggles');
         this.bgActor.hide();
-        const laterAdd = (laterType, callback) => {
-            return global.compositor?.get_laters?.().add(laterType, callback);
-        };
-        const laterRemove = (id) => {
-            if (!id)
-                return;
-            if (global.compositor?.get_laters)
-                global.compositor.get_laters().remove(id);
-        };
-        const frameLaterType = Meta.LaterType.BEFORE_REDRAW;
-        let buildClones = () => {
-            if (!this.bgActor)
-                return;
-            if (this._uiSampler) {
-                for (let child of Main.layoutManager.uiGroup.get_children()) {
-                    if (child === this.bgActor)
-                        continue;
-                    let isLiquidBg = child.get_name?.() === 'liquid-glass-bg-actor' ||
-                        (typeof child.get_children === 'function' &&
-                            child.get_children().some((c) => c.get_name?.() === 'liquid-box'));
-                    if (isLiquidBg)
-                        this._uiSampler.addExclusion(child);
-                }
-            }
-            this._windowCloneManager?.rebuildClones();
-            this._uiSampler?.rebindSelf();
-            this._uiSampler?.refresh();
-        };
-        let frameTick = () => {
-            this._frameSyncId = 0;
-            if (this._torndown)
-                return GLib.SOURCE_REMOVE;
-            if (!this.bgActor || !this.targetActor.mapped)
-                return GLib.SOURCE_REMOVE;
-            ensureGlassAllocated(this.bgActor);
-            try {
-                this._syncToggleRegions();
-            }
-            catch (e) {
-                reportFrameLoopError('QuickSettingsManager(toggles)', e);
-            }
-            this._frameSyncId = laterAdd(frameLaterType, frameTick);
-            return GLib.SOURCE_REMOVE;
-        };
-        let startFrameSync = () => {
-            if (this._frameSyncId === 0) {
-                buildClones();
-                this._frameSyncId = laterAdd(frameLaterType, frameTick);
-            }
-        };
-        let stopFrameSync = () => {
-            if (this._frameSyncId !== 0) {
-                laterRemove(this._frameSyncId);
-                this._frameSyncId = 0;
-            }
-        };
+        const startFrameSync = () => this._startFrameSync(() => this._syncToggleRegions(), 'QuickSettingsManager(toggles)', false);
+        const stopFrameSync = () => this._stopFrameSync();
         this._signals = [];
         this._animSignalId = this.menu.connect('open-state-changed', (menu, isOpen) => {
             if (isOpen) {
@@ -627,6 +516,60 @@ export class QuickSettingsManager {
         if (this.targetActor.mapped) {
             startFrameSync();
         }
+    }
+    _laterAdd(callback) {
+        return global.compositor?.get_laters?.().add(Meta.LaterType.BEFORE_REDRAW, callback);
+    }
+    _buildClones() {
+        if (!this.bgActor)
+            return;
+        if (this._uiSampler) {
+            for (let child of Main.layoutManager.uiGroup.get_children()) {
+                if (child === this.bgActor)
+                    continue;
+                let isLiquidBg = child.get_name?.() === 'liquid-glass-bg-actor' ||
+                    (typeof child.get_children === 'function' &&
+                        child.get_children().some((c) => c.get_name?.() === 'liquid-box'));
+                if (isLiquidBg)
+                    this._uiSampler.addExclusion(child);
+            }
+        }
+        this._windowCloneManager?.rebuildClones();
+        this._uiSampler?.rebindSelf();
+        this._uiSampler?.refresh();
+    }
+    _startFrameSync(sync, errorTag, honourFreeze) {
+        if (this._frameSyncId !== 0)
+            return;
+        this._buildClones();
+        const tick = () => {
+            this._frameSyncId = 0;
+            if (this._torndown)
+                return GLib.SOURCE_REMOVE;
+            if (!this.bgActor || !this.targetActor.mapped)
+                return GLib.SOURCE_REMOVE;
+            if (honourFreeze && isFrameSyncFrozen()) {
+                this._frameSyncId = this._laterAdd(tick);
+                return GLib.SOURCE_REMOVE;
+            }
+            ensureGlassAllocated(this.bgActor);
+            try {
+                sync();
+            }
+            catch (e) {
+                reportFrameLoopError(errorTag, e);
+            }
+            this._frameSyncId = this._laterAdd(tick);
+            return GLib.SOURCE_REMOVE;
+        };
+        this._frameSyncId = this._laterAdd(tick);
+    }
+    _stopFrameSync() {
+        if (this._frameSyncId === 0)
+            return;
+        if (global.compositor?.get_laters)
+            global.compositor.get_laters().remove(this._frameSyncId);
+        this._frameSyncId = 0;
     }
     _panelActorWarned = false;
     _resolvePanelActor() {
@@ -875,7 +818,7 @@ export class QuickSettingsManager {
                 this.bgActor.opacity = this.targetActor.get_first_child()?.opacity ?? 255;
         }
         let [inW, inH] = this.animActor.get_size();
-        let [outW, outH] = this.targetActor.get_size();
+        let [outW] = this.targetActor.get_size();
         inW = Number.isNaN(inW) || inW <= 0 ? (this._stableBaseW || 1) : inW;
         inH = Number.isNaN(inH) || inH <= 0 ? (this._stableBaseH || 1) : inH;
         let [scaleX, scaleY] = this.animActor.get_scale();
@@ -1392,15 +1335,7 @@ export class QuickSettingsManager {
             this._tickId = 0;
         }
         if (!this._enableAnimation) {
-            if (this.bgActor) {
-                this.bgActor.remove_all_transitions();
-                this.bgActor.opacity = 255;
-                this.bgActor.set_scale(1.0, 1.0);
-                if (this.animActor) {
-                    this.animActor.set_scale(1.0, 1.0);
-                    this.animActor.opacity = 255;
-                }
-            }
+            showMenuAtRest(this.bgActor, this.animActor);
             return;
         }
         if (this.animActor)
@@ -1419,64 +1354,11 @@ export class QuickSettingsManager {
                 let currentTime = GLib.get_monotonic_time();
                 let elapsedMs = (currentTime - lastTime) / 1000;
                 lastTime = currentTime;
-                let isClosing = (this._springScale.target === 0);
-                let dt = elapsedMs / 1000;
-                if (dt > 0.033)
-                    dt = 0.033;
-                let stopped = false;
-                let s, p;
-                if (isClosing) {
-                    let speed = 15.0;
-                    this._springScale.value += (0 - this._springScale.value) * (1.0 - Math.exp(-speed * dt));
-                    this._springPos.value += (0 - this._springPos.value) * (1.0 - Math.exp(-speed * dt));
-                    s = this._springScale.value;
-                    p = this._springPos.value;
-                    if (s < 0.005) {
-                        s = 0;
-                        p = 0;
-                        stopped = true;
-                    }
-                }
-                else {
-                    stopped = this._springScale.update(elapsedMs) && this._springPos.update(elapsedMs);
-                    s = this._springScale.value;
-                    p = this._springPos.value;
-                    if (Math.abs(1.0 - s) < 0.002 && Math.abs(this._springScale.velocity) < 0.03) {
-                        s = 1.0;
-                        p = 1.0;
-                        stopped = true;
-                    }
-                }
-                let currentScale;
-                let opacity;
-                if (isClosing) {
-                    currentScale = Math.max(0.001, s);
-                    opacity = Math.min(255, Math.max(0, (s - 0.3) / 0.7 * 255));
-                }
-                else {
-                    currentScale = 0.2 + (s * 0.8);
-                    opacity = Math.min(255, Math.max(0, (s / 0.3) * 255));
-                }
-                this.animActor.set_scale(currentScale, currentScale);
-                this.bgActor.opacity = opacity;
-                this.animActor.opacity = opacity;
-                this._syncGeometry();
-                if (stopped) {
+                const frame = stepMenuSprings(this._springScale, this._springPos, elapsedMs);
+                if (frame.stopped)
                     this._tickId = 0;
-                    if (isClosing && this.menu.actor) {
-                        this.menu.actor.hide();
-                        this.bgActor.opacity = 0;
-                        this.animActor.opacity = 0;
-                    }
-                    if (!isClosing) {
-                        this.animActor.set_scale(1.0, 1.0);
-                        this.animActor.opacity = 255;
-                        this.bgActor.opacity = 255;
-                        this._syncGeometry();
-                    }
-                    return GLib.SOURCE_REMOVE;
-                }
-                return GLib.SOURCE_CONTINUE;
+                applyMenuFrame(frame, this.animActor, this.bgActor, this.menu.actor, () => this._syncGeometry());
+                return frame.stopped ? GLib.SOURCE_REMOVE : GLib.SOURCE_CONTINUE;
             }, normalizeAnimationIntervalMs(this._animationInterval));
         }
     }

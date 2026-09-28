@@ -1219,7 +1219,7 @@ export class ApplicationManager {
         const container = state.windowsContainer;
         if (!isActorValid(container))
             return 0;
-        let x = NaN, y = NaN;
+        let x, y;
         try {
             [x, y] = container.get_transformed_position();
         }

@@ -69,7 +69,7 @@ function fixture(background = dark, luma = 0.7) {
       const callbacks = [...pending.values()]; pending.clear(); callbacks.forEach(fn => fn());
     }
   };
-  return {manager, sampler, root, button, label, sample, flush, pending, reads: () => reads, Button, Label};
+  return {manager, sampler, root, button, label, sample, flush, pending, load, reads: () => reads, Button, Label};
 }
 
 for (const alpha of [255, 204]) test(`dark Quick Settings tile (alpha=${alpha}) keeps light text on bright glass`, async () => {
@@ -175,4 +175,33 @@ test('turning adaptive contrast off also rejects an already queued hover update'
   f.manager._adaptiveConfig.enabled = false;
   f.flush();
   assert.equal(f.label._currentTargetColor, '#f2f2f2');
+});
+
+for (const honourFreeze of [true, false]) test(`quick-settings frame sync keeps one loop (freeze honoured: ${honourFreeze}) and stops cleanly`, () => {
+  const { manager, pending, load } = fixture();
+  const { setFrameSyncFrozen } = load(path.join(dist, 'animation/frameSync.js'));
+  let syncs = 0, builds = 0;
+  Object.assign(manager, { _frameSyncId: 0, _torndown: false, targetActor: { mapped: true },
+    bgActor: { get_parent: () => null, mapped: false, visible: false }, _buildClones() { builds++; } });
+  const run = () => { const callbacks = [...pending.values()]; pending.clear(); callbacks.forEach(fn => fn()); };
+  manager._startFrameSync(() => syncs++, 'test', honourFreeze);
+  manager._startFrameSync(() => syncs++, 'test', honourFreeze);
+  assert.equal(builds, 1);
+  assert.equal(pending.size, 1);
+  run(); run();
+  assert.equal(syncs, 2);
+  setFrameSyncFrozen(true);
+  run();
+  assert.equal(syncs, honourFreeze ? 2 : 3);
+  assert.equal(pending.size, 1, 'the loop keeps exactly one later');
+  setFrameSyncFrozen(false);
+  manager.targetActor.mapped = false;
+  run();
+  assert.equal(pending.size, 0, 'an unmapped menu ends the loop');
+  manager.targetActor.mapped = true;
+  manager._frameSyncId = 0;
+  manager._startFrameSync(() => syncs++, 'test', honourFreeze);
+  manager._stopFrameSync();
+  assert.equal(pending.size, 0);
+  assert.equal(manager._frameSyncId, 0);
 });

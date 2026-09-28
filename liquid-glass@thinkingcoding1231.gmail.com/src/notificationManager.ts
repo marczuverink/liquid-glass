@@ -644,7 +644,7 @@ export class NotificationManager {
   _updateAdaptiveTextColors() {
     if (!this._adaptiveConfig.enabled || this._adaptiveInFlight) return;
 
-    let [absX, absY] = this.currentBanner?.get_transformed_position() ?? [0, 0];
+    let [, absY] = this.currentBanner?.get_transformed_position() ?? [0, 0];
     if (absY < 0) return;
 
     const targets = this._collectAdaptiveTextTargets();

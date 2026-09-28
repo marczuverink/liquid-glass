@@ -272,10 +272,6 @@ export class OsdManager {
         }
         targetBox.add_style_class_name('liquid-glass-transparent');
         targetBox.translation_y = -this._osdYOffset;
-        let monitorIndex = Main.layoutManager.findIndexForActor(osdWindow);
-        if (monitorIndex < 0)
-            monitorIndex = Main.layoutManager.primaryIndex;
-        let monitor = Main.layoutManager.monitors[monitorIndex] || Main.layoutManager.primaryMonitor;
         let bgActor = new UnpickableActor();
         bgActor.set_name('liquid-glass-bg-actor');
         bgActor.set_size(1.0, 1.0);
@@ -404,7 +400,7 @@ export class OsdManager {
         if (state._stableBaseH === undefined) {
             let initH = h;
             try {
-                let [_, naturalH] = state.targetBox.get_preferred_height(-1);
+                let [, naturalH] = state.targetBox.get_preferred_height(-1);
                 if (naturalH > 0) {
                     initH = naturalH;
                 }

@@ -154,6 +154,59 @@ export function backdropLuminance(actor, root = null) {
     }
     return null;
 }
+function _visibleTargets(actors) {
+    const targets = [];
+    const rects = [];
+    for (const actor of actors) {
+        const rect = _getActorRect(actor);
+        if (!rect)
+            continue;
+        targets.push(actor);
+        rects.push(rect);
+    }
+    return { targets, rects };
+}
+function _readSignature(paintSignature) {
+    if (!paintSignature)
+        return null;
+    try {
+        const v = paintSignature();
+        return Number.isFinite(v) ? v : null;
+    }
+    catch (_) {
+        return null;
+    }
+}
+function _skipKey(rects, config) {
+    return rects
+        .map(r => `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}`)
+        .join(';') + `|${config.samplePerElement ? 'e' : 'm'}|${config.lightTextColor}|${config.darkTextColor}`;
+}
+function _pixelLuminance(data, idx, channels) {
+    if (channels <= 3)
+        return _luminanceFromRgb(data[idx], data[idx + 1], data[idx + 2]);
+    const a = data[idx + 3];
+    if (a < 32)
+        return null;
+    if (a >= 255)
+        return _luminanceFromRgb(data[idx], data[idx + 1], data[idx + 2]);
+    const inv = 255.0 / a;
+    const unpremultiply = (c) => _clamp(Math.round(c * inv), 0, 255);
+    return _luminanceFromRgb(unpremultiply(data[idx]), unpremultiply(data[idx + 1]), unpremultiply(data[idx + 2]));
+}
+export function luminanceSamples(shot) {
+    const { data, width, height, stride, channels, step } = shot;
+    const values = [];
+    for (let y = 0; y < height; y += step) {
+        const row = y * stride;
+        for (let x = 0; x < width; x += step) {
+            const luma = _pixelLuminance(data, row + x * channels, channels);
+            if (luma !== null)
+                values.push(luma);
+        }
+    }
+    return values;
+}
 export class StageContrastSampler {
     _screenshot = null;
     _lastLuma = null;
@@ -179,28 +232,7 @@ export class StageContrastSampler {
             return null;
         }
         try {
-            const { data, width, height, stride, channels, step } = shot;
-            const values = [];
-            for (let y = 0; y < height; y += step) {
-                const row = y * stride;
-                for (let x = 0; x < width; x += step) {
-                    const idx = row + x * channels;
-                    if (channels > 3) {
-                        const a = data[idx + 3];
-                        if (a < 32)
-                            continue;
-                        if (a < 255) {
-                            const inv = 255.0 / a;
-                            const r = _clamp(Math.round(data[idx + 0] * inv), 0, 255);
-                            const g = _clamp(Math.round(data[idx + 1] * inv), 0, 255);
-                            const b = _clamp(Math.round(data[idx + 2] * inv), 0, 255);
-                            values.push(_luminanceFromRgb(r, g, b));
-                            continue;
-                        }
-                    }
-                    values.push(_luminanceFromRgb(data[idx + 0], data[idx + 1], data[idx + 2]));
-                }
-            }
+            const values = luminanceSamples(shot);
             if (values.length === 0) {
                 _reportCapturePath('capture produced no usable pixels (everything below the alpha cutoff)');
                 return null;
@@ -258,40 +290,17 @@ export class StageContrastSampler {
         return this.decideTextColor(backdrop.luminance, { ...config, samplePerElement: true });
     }
     async chooseColorsForActors(actors, config = AdaptiveContrastConfig, root = null, paintSignature) {
-        const rects = [];
-        const targets = [];
-        for (const actor of actors) {
-            const rect = _getActorRect(actor);
-            if (!rect)
-                continue;
-            targets.push(actor);
-            rects.push(rect);
-        }
-        const result = new Map();
+        const { targets, rects } = _visibleTargets(actors);
         if (targets.length === 0)
-            return result;
-        const readSignature = () => {
-            if (!paintSignature)
-                return null;
-            try {
-                const v = paintSignature();
-                return Number.isFinite(v) ? v : null;
-            }
-            catch (_) {
-                return null;
-            }
-        };
+            return new Map();
         const merged = config.samplePerElement ? null : (root ? _getActorRect(root) : null) ?? _mergeRects(rects);
         const sampledRects = config.samplePerElement ? rects : (merged ? [merged] : []);
-        const key = (config.samplePerElement ? rects : [...sampledRects, ...rects])
-            .map(r => `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}`)
-            .join(';') + `|${config.samplePerElement ? 'e' : 'm'}|${config.lightTextColor}|${config.darkTextColor}`;
-        const before = readSignature();
-        if (before !== null && before === this._unchangedSignature && key === this._unchangedKey) {
-            return result;
-        }
+        const key = _skipKey(config.samplePerElement ? rects : [...sampledRects, ...rects], config);
+        const before = _readSignature(paintSignature);
+        if (before !== null && before === this._unchangedSignature && key === this._unchangedKey)
+            return new Map();
         const settle = (stable) => {
-            const after = readSignature();
+            const after = _readSignature(paintSignature);
             if (stable && before !== null && after !== null && after - before <= sampledRects.length) {
                 this._unchangedSignature = after;
                 this._unchangedKey = key;
@@ -300,32 +309,43 @@ export class StageContrastSampler {
                 this.invalidate();
             }
         };
-        if (!config.samplePerElement) {
-            if (!merged)
-                return result;
-            if (!this._lastRect || ['x', 'y', 'width', 'height'].some(key => Math.abs(merged[key] - this._lastRect[key]) > 2)) {
-                this._lastLuma = null;
-                this._lastIsBright = null;
-                this._lastRawLuma = null;
-                this._roundsSinceFlip = READABILITY_FLIP_COOLDOWN;
-            }
-            this._lastRect = merged;
-            const luma = await this.sampleLuminance(merged);
-            if (luma === null) {
-                this.invalidate();
-                return result;
-            }
-            const color = this.decideTextColor(luma, config);
-            const converged = this._lastLuma !== null && Math.abs(this._lastLuma - _clamp(luma, 0, 1)) < 0.01;
-            settle(color !== null && color === this._lastDecided && converged &&
-                this._roundsSinceFlip >= READABILITY_FLIP_COOLDOWN);
-            this._lastDecided = color;
-            if (!color)
-                return result;
-            for (const actor of targets)
-                result.set(actor, color);
+        if (config.samplePerElement)
+            return this._choosePerElement(targets, rects, config, settle);
+        if (!merged)
+            return new Map();
+        return this._chooseMerged(targets, merged, config, settle);
+    }
+    _resetIfRegionMoved(merged) {
+        const last = this._lastRect;
+        const moved = !last || ['x', 'y', 'width', 'height'].some(k => Math.abs(merged[k] - last[k]) > 2);
+        if (moved) {
+            this._lastLuma = null;
+            this._lastIsBright = null;
+            this._lastRawLuma = null;
+            this._roundsSinceFlip = READABILITY_FLIP_COOLDOWN;
+        }
+        this._lastRect = merged;
+    }
+    async _chooseMerged(targets, merged, config, settle) {
+        const result = new Map();
+        this._resetIfRegionMoved(merged);
+        const luma = await this.sampleLuminance(merged);
+        if (luma === null) {
+            this.invalidate();
             return result;
         }
+        const color = this.decideTextColor(luma, config);
+        const converged = this._lastLuma !== null && Math.abs(this._lastLuma - _clamp(luma, 0, 1)) < 0.01;
+        settle(color !== null && color === this._lastDecided && converged &&
+            this._roundsSinceFlip >= READABILITY_FLIP_COOLDOWN);
+        this._lastDecided = color;
+        if (color)
+            for (const actor of targets)
+                result.set(actor, color);
+        return result;
+    }
+    async _choosePerElement(targets, rects, config, settle) {
+        const result = new Map();
         for (let i = 0; i < targets.length; i++) {
             const luma = await this.sampleLuminance(rects[i]);
             if (luma === null) {

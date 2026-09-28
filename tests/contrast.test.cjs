@@ -8,8 +8,8 @@ function load(file, exports, bindings = {}) {
     .replace(/^import[\s\S]*?;\n/gm, '').replace(/export (class|const|function) /g, '$1 ');
   return new Function(...Object.keys(bindings), `${code}\nreturn {${exports}};`)(...Object.values(bindings));
 }
-const { StageContrastSampler: Sampler, AdaptiveContrastConfig: config, _getActorRect, backdropLuminance } = load(
-  'contrastSampler.js', 'StageContrastSampler, AdaptiveContrastConfig, _getActorRect, backdropLuminance', {
+const { StageContrastSampler: Sampler, AdaptiveContrastConfig: config, _getActorRect, backdropLuminance, luminanceSamples } = load(
+  'contrastSampler.js', 'StageContrastSampler, AdaptiveContrastConfig, _getActorRect, backdropLuminance, luminanceSamples', {
     Shell: { Screenshot: class {} }, getTransformedRect: actor => actor.rect,
     global: { stage: { width: 3840, height: 2160 } },
   });
@@ -446,4 +446,35 @@ test('invalidating the sampler forces the next round to sample', async () => {
   assert.equal(captures, settled + 1);
   await sampler.chooseColorsForActors([...rows, { mapped: true, rect: [10, 40, 100, 20] }], config, root, () => paints);
   assert.equal(captures, settled + 2, 'new text inside an unchanged root samples');
+});
+
+test('pixel luminance sampling matches the original un-premultiplying loop', () => {
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const rgb = (r, g, b) => 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+  const reference = ({ data, width, height, stride, channels, step }) => {
+    const values = [];
+    for (let y = 0; y < height; y += step) for (let x = 0; x < width; x += step) {
+      const idx = y * stride + x * channels;
+      if (channels > 3) {
+        const a = data[idx + 3];
+        if (a < 32) continue;
+        if (a < 255) {
+          const inv = 255.0 / a;
+          values.push(rgb(clamp(Math.round(data[idx] * inv), 0, 255), clamp(Math.round(data[idx + 1] * inv), 0, 255),
+            clamp(Math.round(data[idx + 2] * inv), 0, 255)));
+          continue;
+        }
+      }
+      values.push(rgb(data[idx], data[idx + 1], data[idx + 2]));
+    }
+    return values;
+  };
+  let seed = 11;
+  const rand = () => (seed = (seed * 1664525 + 1013904223) >>> 0) % 256;
+  for (const channels of [3, 4]) for (const step of [1, 2, 3]) {
+    const width = 17, height = 9, stride = width * channels + 3;
+    const data = Uint8Array.from({ length: stride * height }, rand);
+    const shot = { data, width, height, stride, channels, step };
+    assert.deepEqual(luminanceSamples(shot), reference(shot), `channels=${channels} step=${step}`);
+  }
 });
