@@ -9,7 +9,7 @@ export function utilsLog(msg) {
     try {
         _utilsLogger?.log(msg);
     }
-    catch (_) { }
+    catch { }
 }
 const _frameLoopErrorLastLogged = new Map();
 const FRAME_LOOP_ERROR_LOG_INTERVAL_MS = 5000;
@@ -25,5 +25,5 @@ export function reportFrameLoopError(tag, e) {
         if (stack)
             console.error(`[Liquid Glass] ${stack}`);
     }
-    catch (_) { }
+    catch { }
 }

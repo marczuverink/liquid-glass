@@ -86,7 +86,7 @@ export class WindowCloneManager {
             try {
                 bg.remove_clip();
             }
-            catch (_) { }
+            catch { }
         }
     }
     _syncDamageHooks() {
@@ -107,7 +107,7 @@ export class WindowCloneManager {
                 });
                 this._damageHooks.set(src, id);
             }
-            catch (_) { }
+            catch { }
         }
         if (this._damageHooks.size > this._windowClones.size) {
             for (const [src, id] of [...this._damageHooks]) {
@@ -117,7 +117,7 @@ export class WindowCloneManager {
                     if (isActorValid(src))
                         src.disconnect(id);
                 }
-                catch (_) { }
+                catch { }
                 this._damageHooks.delete(src);
             }
         }
@@ -130,7 +130,7 @@ export class WindowCloneManager {
                 if (isActorValid(src))
                     src.disconnect(id);
             }
-            catch (_) { }
+            catch { }
         }
         this._damageHooks.clear();
     }
@@ -169,7 +169,7 @@ export class WindowCloneManager {
                     try {
                         return metaWindow.get_title() || '(untitled)';
                     }
-                    catch (_) {
+                    catch {
                         return '(?)';
                     }
                 })();
@@ -221,14 +221,14 @@ export class WindowCloneManager {
             try {
                 this.windowClonesContainer.destroy();
             }
-            catch (_) { }
+            catch { }
         }
         this._windowClones.clear();
         if (isActorValid(this.bgClone)) {
             try {
                 this.bgClone.destroy();
             }
-            catch (_) { }
+            catch { }
         }
         this.container = null;
     }

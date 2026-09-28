@@ -191,10 +191,13 @@ for (const honourFreeze of [true, false]) test(`quick-settings frame sync keeps 
   run(); run();
   assert.equal(syncs, 2);
   setFrameSyncFrozen(true);
-  run();
-  assert.equal(syncs, honourFreeze ? 2 : 3);
-  assert.equal(pending.size, 1, 'the loop keeps exactly one later');
-  setFrameSyncFrozen(false);
+  try {
+    run();
+    assert.equal(syncs, honourFreeze ? 2 : 3);
+    assert.equal(pending.size, 1, 'the loop keeps exactly one later');
+  } finally {
+    setFrameSyncFrozen(false);
+  }
   manager.targetActor.mapped = false;
   run();
   assert.equal(pending.size, 0, 'an unmapped menu ends the loop');

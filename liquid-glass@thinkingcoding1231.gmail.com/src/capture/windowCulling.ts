@@ -38,13 +38,13 @@ function _reconcileCullOptOut(): void {
     _cullOptOutEffects.delete(actor);
     try {
       if (isActorValid(actor)) actor.remove_effect(effect);
-    } catch (_) { }
+    } catch { }
   }
 
   if (_cullOptOutEffects.size !== before) {
     utilsLog(`[cull-opt-out] holding ${_cullOptOutEffects.size} window actor(s)` +
       ` [${[..._cullOptOutEffects.keys()].map(a => {
-        try { return a.get_meta_window()?.get_title() ?? '?'; } catch (_) { return '?'; }
+        try { return a.get_meta_window()?.get_title() ?? '?'; } catch { return '?'; }
       }).join(', ')}]`);
   }
 }

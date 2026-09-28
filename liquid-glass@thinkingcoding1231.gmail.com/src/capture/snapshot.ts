@@ -38,7 +38,7 @@ export class SelfExcludingSnapshotCapture {
         if (this._frameCounter % SelfExcludingSnapshotCapture.FRAME_SKIP !== 0) return;
         this._captureOnce();
       });
-    } catch (e) {
+    } catch {
     }
   }
 
@@ -71,7 +71,7 @@ export class SelfExcludingSnapshotCapture {
     if (this._activeCheck) {
       try {
         if (!this._activeCheck()) return;
-      } catch (e) {
+      } catch {
         return;
       }
     }
@@ -90,7 +90,7 @@ export class SelfExcludingSnapshotCapture {
             actor.hide();
             hidden.push(actor);
           }
-        } catch (_) { }
+        } catch { }
       }
 
       const rect = new Mtk.Rectangle({ x: Math.round(x), y: Math.round(y), width: Math.round(w), height: Math.round(h) });
@@ -111,7 +111,7 @@ export class SelfExcludingSnapshotCapture {
       this._report('paint_to_content threw', `${e}`);
     } finally {
       for (const actor of hidden) {
-        try { actor.show(); } catch (_) { }
+        try { actor.show(); } catch { }
       }
     }
   }
@@ -123,7 +123,7 @@ export class SelfExcludingSnapshotCapture {
   destroy(): void {
     this._destroyed = true;
     if (this._afterPaintId) {
-      try { (this._stage as any).disconnect(this._afterPaintId); } catch (_) { }
+      try { (this._stage as any).disconnect(this._afterPaintId); } catch { }
       this._afterPaintId = 0;
     }
   }

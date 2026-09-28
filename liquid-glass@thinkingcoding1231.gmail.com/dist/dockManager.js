@@ -654,7 +654,7 @@ export class DashManager {
             try {
                 this._logger?.error(`[Liquid Glass] ${this.constructor.name}.${name} failed during cleanup: ${e}`);
             }
-            catch (_) {
+            catch {
                 console.error(`[Liquid Glass] ${name} failed during cleanup: ${e}`);
             }
         }
@@ -669,7 +669,7 @@ export class DashManager {
                     try {
                         this._settings.disconnect(id);
                     }
-                    catch (e) { }
+                    catch { }
                 }
                 this._settingsSignals = [];
             }

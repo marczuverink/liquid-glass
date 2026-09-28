@@ -44,7 +44,7 @@ export const InvertedPositionConstraint = GObject.registerClass({
     try {
       const actor = this.get_actor();
       if (actor) actor.queue_relayout();
-    } catch (_) { }
+    } catch { }
   }
 
   setOffset(x: number, y: number): void {

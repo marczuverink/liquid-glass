@@ -9,7 +9,7 @@ export function ensureFrameSerialHook(): boolean {
     if (!stage) return false;
     _frameSerialStage = stage;
     _frameSerialHandler = stage.connect('after-paint', () => { frameSerial++; });
-  } catch (e) {
+  } catch {
     _frameSerialStage = null;
     _frameSerialHandler = 0;
   }
@@ -22,7 +22,7 @@ export function frameSerialIsLive(): boolean {
 
 export function releaseFrameSerialHook(): void {
   if (!_frameSerialHandler) return;
-  try { _frameSerialStage?.disconnect(_frameSerialHandler); } catch (e) { }
+  try { _frameSerialStage?.disconnect(_frameSerialHandler); } catch { }
   _frameSerialStage = null;
   _frameSerialHandler = 0;
 }

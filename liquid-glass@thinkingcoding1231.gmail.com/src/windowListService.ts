@@ -51,7 +51,7 @@ export class WindowListService {
     const connectDisplay = (signal: string, callback: (...args: any[]) => void) => {
       try {
         this._displaySignals.push({ obj: global.display, id: global.display.connect(signal as any, callback) });
-      } catch (e) { }
+      } catch { }
     };
 
     connectDisplay('window-created', (_display: any, metaWindow: Meta.Window) => {
@@ -73,19 +73,19 @@ export class WindowListService {
     }
 
     for (const sig of this._displaySignals) {
-      try { sig.obj.disconnect(sig.id); } catch (e) { }
+      try { sig.obj.disconnect(sig.id); } catch { }
     }
     this._displaySignals = [];
 
     for (const [metaWindow, ids] of this._windowSignals) {
       for (const id of ids) {
-        try { metaWindow.disconnect(id); } catch (e) { }
+        try { metaWindow.disconnect(id); } catch { }
       }
     }
     this._windowSignals.clear();
 
     if (this._dbusImpl) {
-      try { this._dbusImpl.unexport(); } catch (e) { }
+      try { this._dbusImpl.unexport(); } catch { }
       this._dbusImpl = null;
     }
   }
@@ -107,14 +107,14 @@ export class WindowListService {
     for (const signal of ['notify::wm-class', 'notify::title', 'notify::window-type']) {
       try {
         ids.push(metaWindow.connect(signal as any, () => this._queueChanged()));
-      } catch (e) { }
+      } catch { }
     }
     try {
       ids.push(metaWindow.connect('unmanaged', () => {
         this._untrackWindow(metaWindow);
         this._queueChanged();
       }));
-    } catch (e) { }
+    } catch { }
 
     this._windowSignals.set(metaWindow, ids);
   }
@@ -124,7 +124,7 @@ export class WindowListService {
     if (!ids)
       return;
     for (const id of ids) {
-      try { metaWindow.disconnect(id); } catch (e) { }
+      try { metaWindow.disconnect(id); } catch { }
     }
     this._windowSignals.delete(metaWindow);
   }
@@ -144,7 +144,7 @@ export class WindowListService {
       if (tracker === undefined) {
         try {
           tracker = Shell.WindowTracker.get_default();
-        } catch (e) {
+        } catch {
           tracker = null;
         }
       }
@@ -161,7 +161,7 @@ export class WindowListService {
         wmClass = metaWindow.get_wm_class() ?? '';
         windowType = metaWindow.get_window_type();
         title = metaWindow.get_title() ?? '';
-      } catch (e) {
+      } catch {
         continue;
       }
 
@@ -199,7 +199,7 @@ export class WindowListService {
             if (icon)
               entry.iconName = icon.to_string() ?? '';
           }
-        } catch (e) { }
+        } catch { }
       }
     }
 

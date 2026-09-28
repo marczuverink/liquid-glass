@@ -26,12 +26,9 @@ export function setBmsMode(mode) {
             sampler.rebuildBmsClones();
             n++;
         }
-        catch (_) { }
+        catch { }
     }
-    const name = mode === BMS_MODE.SNAPSHOT ? 'SNAPSHOT'
-        : mode === BMS_MODE.CLONE ? 'CLONE'
-            : mode === BMS_MODE.SKIP ? 'SKIP'
-                : mode === BMS_MODE.REPLICATE ? 'REPLICATE' : `? (${mode})`;
+    const name = Object.keys(BMS_MODE).find(k => BMS_MODE[k] === mode) ?? `? (${mode})`;
     const msg = `[Liquid Glass] BMS mode = ${name} on ${n} sampler(s)`;
     console.log(msg);
     return msg;
@@ -122,7 +119,7 @@ export class UILayerSampler {
             const actor = ext?.stateObj?._panel_blur?.actors_list?.[0]?.bg_manager?.backgroundActor;
             return actor ?? null;
         }
-        catch (_) {
+        catch {
             return null;
         }
     }
@@ -137,7 +134,7 @@ export class UILayerSampler {
                 return target;
             }
         }
-        catch (_) { }
+        catch { }
         return null;
     }
     setDebugDisableBmsClone(_disabled) { }
@@ -187,7 +184,7 @@ export class UILayerSampler {
             if (Array.isArray(off) && Number.isFinite(off[0]) && Number.isFinite(off[1]))
                 return [off[0], off[1]];
         }
-        catch (_) { }
+        catch { }
         return [0, 0];
     }
     _buildReplicaBlurEffect(bmsTarget) {
@@ -260,7 +257,7 @@ export class UILayerSampler {
                                 blurWidget.add_effect(this._buildReplicaBlurEffect(src));
                                 ours = blurWidget.get_effects()[0];
                             }
-                            catch (_) { }
+                            catch { }
                         }
                         if (ours.radius !== theirs.radius)
                             ours.radius = theirs.radius;
@@ -303,7 +300,7 @@ export class UILayerSampler {
             replica.lastGeomLine = line;
             utilsLog(`[Liquid Glass][ui-sampler:${this._label}] replica geom ${line}`);
         }
-        catch (_) { }
+        catch { }
     }
     _createSelfExcludingSnapshotActor(child) {
         try {
@@ -338,7 +335,7 @@ export class UILayerSampler {
             try {
                 afterPaintId = stage.connect('after-paint', applyContent);
             }
-            catch (e) {
+            catch {
             }
             applyContent();
             this._delayedCaptureOwners.set(actor, { source: child, hideActor: selfRoot });
@@ -348,7 +345,7 @@ export class UILayerSampler {
                     try {
                         stage.disconnect(afterPaintId);
                     }
-                    catch (_) { }
+                    catch { }
                 }
                 const owner = this._delayedCaptureOwners.get(actor);
                 if (owner) {
@@ -358,7 +355,7 @@ export class UILayerSampler {
             });
             return actor;
         }
-        catch (e) {
+        catch {
             return null;
         }
     }
@@ -387,7 +384,7 @@ export class UILayerSampler {
                 for (const c of children)
                     stack.push(c);
             }
-            catch (_) { }
+            catch { }
         }
         return null;
     }
@@ -424,7 +421,7 @@ export class UILayerSampler {
                 for (const c of children)
                     stack.push(c);
             }
-            catch (_) { }
+            catch { }
         }
         return false;
     }
@@ -452,7 +449,7 @@ export class UILayerSampler {
                 this._uiClonesContainer.set_child_below_sibling(clone, null);
             }
         }
-        catch (e) {
+        catch {
         }
     }
     refresh() {
@@ -479,7 +476,7 @@ export class UILayerSampler {
                 if (root)
                     dynamicExclusions.add(root);
             }
-            catch (_) { }
+            catch { }
         }
         for (const child of children) {
             try {
@@ -553,7 +550,7 @@ export class UILayerSampler {
                             try {
                                 clone?.destroy();
                             }
-                            catch (_) { }
+                            catch { }
                         }));
                     }
                     this._insertCloneInZOrder(child, sourceClone);
@@ -568,7 +565,7 @@ export class UILayerSampler {
                 try {
                     sourceClone.destroy();
                 }
-                catch (_) { }
+                catch { }
                 this._clones.delete(actor);
             }
         }
@@ -578,7 +575,7 @@ export class UILayerSampler {
             try {
                 actor.disconnect(id);
             }
-            catch (_) { }
+            catch { }
             this._sourceDestroyIds.delete(actor);
             this._bmsStateAtClone.delete(actor);
             this._existingEffectCache.delete(actor);
@@ -593,7 +590,7 @@ export class UILayerSampler {
                 return [res[1], res[2]];
             }
         }
-        catch (_) { }
+        catch { }
         try {
             const [cx, cy] = actor.get_transformed_position();
             return [
@@ -601,7 +598,7 @@ export class UILayerSampler {
                 stageY - (Number.isNaN(cy) ? 0 : cy),
             ];
         }
-        catch (_) {
+        catch {
             return [stageX, stageY];
         }
     }
@@ -659,7 +656,7 @@ export class UILayerSampler {
                 setActorVisible(sourceClone, isVisible);
             }
         }
-        catch (_) { }
+        catch { }
     }
     _checkCloneDrift(source, sourceClone, expectX, expectY) {
         if (!utilsLogEnabled()) {
@@ -687,7 +684,7 @@ export class UILayerSampler {
                 utilsLog(`[Liquid Glass][ui-sampler] RECOVERED clone for name="${source.name ?? '(unnamed)'}"`);
             }
         }
-        catch (_) { }
+        catch { }
     }
     sync(cX, cY, cW, cH) {
         this._bmsScreenRects = [];
@@ -706,7 +703,7 @@ export class UILayerSampler {
                 contAbsX = Number.isNaN(tx) ? 0 : tx;
                 contAbsY = Number.isNaN(ty) ? 0 : ty;
             }
-            catch (_) { }
+            catch { }
         }
         try {
             const parent = this._uiClonesContainer?.get_parent();
@@ -748,7 +745,7 @@ export class UILayerSampler {
                     try {
                         clone.destroy();
                     }
-                    catch (_) { }
+                    catch { }
                 }
                 this._bmsStateAtClone.delete(child);
             }
@@ -769,7 +766,7 @@ export class UILayerSampler {
                     try {
                         clone.destroy();
                     }
-                    catch (_) { }
+                    catch { }
                 }
                 this._bmsStateAtClone.delete(child);
             }
@@ -800,7 +797,7 @@ export class UILayerSampler {
             try {
                 n = actor.name || actor.constructor?.name || '(unnamed)';
             }
-            catch (_) { }
+            catch { }
             names += (names ? ', ' : '') + n;
         }
         if (names === this._clonedNamesLogged)
@@ -816,7 +813,7 @@ export class UILayerSampler {
             try {
                 actor.disconnect(id);
             }
-            catch (_) { }
+            catch { }
         }
         this._sourceDestroyIds.clear();
         releaseClonedWindowActors(this);
@@ -825,7 +822,7 @@ export class UILayerSampler {
             try {
                 this._uiClonesContainer.destroy();
             }
-            catch (_) { }
+            catch { }
         }
         this._clones.clear();
         this._driftingClones.clear();

@@ -519,7 +519,7 @@ export class NotificationManager {
     // @ts-expect-error
     let bannerBin = this.tray._bannerBin;
     for (let sigId of this._signals) {
-      try { bannerBin.disconnect(sigId); } catch (e) { }
+      try { bannerBin.disconnect(sigId); } catch { }
     }
     this._signals = [];
 
@@ -532,7 +532,7 @@ export class NotificationManager {
     } catch (e) {
       try {
         this._logger?.error(`[Liquid Glass] ${this.constructor.name}.${name} failed during cleanup: ${e}`);
-      } catch (_) {
+      } catch {
         console.error(`[Liquid Glass] ${name} failed during cleanup: ${e}`);
       }
     }
@@ -551,7 +551,7 @@ export class NotificationManager {
 
     this._teardownStep('settingsSignals', () => {
       for (let sigId of this._settingsSignals) {
-        try { this._settings.disconnect(sigId); } catch (e) { }
+        try { this._settings.disconnect(sigId); } catch { }
       }
       this._settingsSignals = [];
     });
@@ -690,12 +690,12 @@ export class NotificationManager {
 
     const apply = (r: number, g: number, b: number, a: number) => {
       const rgba = `rgba(${r}, ${g}, ${b}, ${a.toFixed(3)})`;
-      try { actor.set_style(`${stylePrefix}color: ${rgba}; -st-icon-foreground-color: ${rgba};`); } catch (e) { }
+      try { actor.set_style(`${stylePrefix}color: ${rgba}; -st-icon-foreground-color: ${rgba};`); } catch { }
     };
 
     if (skipAnimations) {
       adaptiveColorTweener.cancel(actor);
-      try { actor.set_style(`${stylePrefix}color: ${targetHexColor}; -st-icon-foreground-color: ${targetHexColor};`); } catch (e) { }
+      try { actor.set_style(`${stylePrefix}color: ${targetHexColor}; -st-icon-foreground-color: ${targetHexColor};`); } catch { }
       return;
     }
 

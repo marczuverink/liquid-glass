@@ -50,7 +50,7 @@ export function removeFrameTicker(id) {
     try {
         global.compositor.get_laters().remove(ticker.laterId);
     }
-    catch (_) { }
+    catch { }
     ticker.laterId = 0;
 }
 export function normalizeAnimationIntervalMs(v) {

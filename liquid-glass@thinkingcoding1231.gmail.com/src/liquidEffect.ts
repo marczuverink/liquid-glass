@@ -29,7 +29,7 @@ interface LiquidEffectParams {
 export const LiquidEffect = GObject.registerClass({
   GTypeName: 'LiquidGlassEffect',
 }, class LiquidEffect extends Clutter.OffscreenEffect {
-  static MAX_GLASS_REGIONS = 16;
+  static readonly MAX_GLASS_REGIONS = 16;
 
   static get USE_BLUR_RECT() { return GlassGeometry.USE_BLUR_RECT; }
   static set USE_BLUR_RECT(value) { GlassGeometry.USE_BLUR_RECT = value; }
@@ -179,7 +179,7 @@ export const LiquidEffect = GObject.registerClass({
         try {
           const a = this.get_actor() as any;
           return a?.get_meta_window?.()?.get_title?.() ?? a?.get_name?.() ?? '?';
-        } catch (e) { return '?'; }
+        } catch { return '?'; }
       })();
       if (!this._diagFirstPaintLogged) {
         this._diagFirstPaintLogged = true;
@@ -257,7 +257,7 @@ export const LiquidEffect = GObject.registerClass({
 
     try {
       (actor as any)._lgCaptureOffset = [layout.dest[0], layout.dest[1]];
-    } catch (e) { }
+    } catch { }
 
     const resW = this._uniforms.values.get('resolution_x') ?? 0;
     const resH = this._uniforms.values.get('resolution_y') ?? 0;
@@ -401,7 +401,7 @@ export const LiquidEffect = GObject.registerClass({
       this._diagLastSnapshotAt = diagNow;
       this._diagLast = {
         owner: this._owner,
-        actor: (() => { try { return (this.get_actor() as any)?.get_name?.() ?? '?'; } catch (e) { return '?'; } })(),
+        actor: (() => { try { return (this.get_actor() as any)?.get_name?.() ?? '?'; } catch { return '?'; } })(),
         src: `${srcW}x${srcH}`,
         alloc: `${allocW}x${allocH}`,
         uv: layout.uv.map(v => +v.toFixed(5)),
@@ -451,7 +451,7 @@ export const LiquidEffect = GObject.registerClass({
 
   declare _lgCaptureClip: number[] | null;
 
-  static USE_CROP_PASS = true;
+  static readonly USE_CROP_PASS = true;
 
   private _queueRepaintIfDirty(): void {
     if (!this._uniforms.takeDirty()) return;
@@ -609,7 +609,7 @@ export const LiquidEffect = GObject.registerClass({
     this._queueRepaintIfDirty();
   }
 
-  static DRAG_PERF_MODE_ENABLED = true;
+  static readonly DRAG_PERF_MODE_ENABLED = true;
 
   private declare _batchDepth: number;
   private declare _batchDirty: boolean;

@@ -19,11 +19,11 @@ function _withOverride(origStyle: string): string {
 
 function _releaseEntry(pod: Clutter.Actor, entry: ToggleEntry): void {
   if (entry.destroyId) {
-    try { pod.disconnect(entry.destroyId); } catch (_) { }
+    try { pod.disconnect(entry.destroyId); } catch { }
   }
   for (const { actor, origStyle } of entry.styledSubs) {
     if (!(actor instanceof St.Widget) || typeof actor.set_style !== 'function') continue;
-    try { actor.set_style(origStyle || null); } catch (e) { }
+    try { actor.set_style(origStyle || null); } catch { }
   }
 }
 
@@ -164,7 +164,7 @@ export class ToggleStyles {
           };
         }
       }
-    } catch (e) {
+    } catch {
     }
 
     if (!bg) return null;
@@ -247,12 +247,12 @@ export class ToggleStyles {
     return entry;
   }
 
-  private _hasOverride(actor: Clutter.Actor): boolean {
-    const style = typeof (actor as any).get_style === 'function' ? (actor as any).get_style() : null;
+  private _hasOverride(actor: St.Widget): boolean {
+    const style = typeof actor.get_style === 'function' ? actor.get_style() : null;
     return !!style && style.includes(TRANSPARENT_OVERRIDE);
   }
 
-  private _updateBaseColor(entry: ToggleEntry, pod: Clutter.Actor, primary: Clutter.Actor) {
+  private _updateBaseColor(entry: ToggleEntry, pod: Clutter.Actor, primary: St.Widget) {
     const sampled = this._samplePodColor(pod, primary);
     if (sampled.a > 0.02) {
       entry.baseColor = [sampled.r, sampled.g, sampled.b];
@@ -309,15 +309,17 @@ export class ToggleStyles {
       `[Liquid Glass][toggle-color] releasing .quick-slider pod — theme no longer paints a pill ` +
       `(bg=${JSON.stringify(pill)})`
     );
-    if (entry.destroyId) pod.disconnect(entry.destroyId);
+    if (entry.destroyId) {
+      try { pod.disconnect(entry.destroyId); } catch { }
+    }
     this._toggleRegions.delete(pod);
     return true;
   }
 
-  private _logPodColor(pod: Clutter.Actor, primary: Clutter.Actor, entry: ToggleEntry, sampled: { a: number }) {
+  private _logPodColor(pod: Clutter.Actor, primary: St.Widget, entry: ToggleEntry, sampled: { a: number }) {
     let isHasMenu = pod instanceof St.Widget && pod.has_style_class_name('quick-toggle-has-menu');
     let podCls = pod instanceof St.Widget && typeof pod.get_style_class_name === 'function' ? (pod.get_style_class_name() || '') : '';
-    let primaryCls = typeof (primary as any).get_style_class_name === 'function' ? ((primary as any).get_style_class_name() || '') : '';
+    let primaryCls = typeof primary.get_style_class_name === 'function' ? (primary.get_style_class_name() || '') : '';
     let checked = typeof (primary as any).has_style_pseudo_class === 'function' ? (primary as any).has_style_pseudo_class('checked') : 'n/a';
     let wrapperBg = isHasMenu ? this._readThemeBg(pod) : null;
     let iconBgs = this._getToggleIconActors(pod !== primary ? primary : pod)

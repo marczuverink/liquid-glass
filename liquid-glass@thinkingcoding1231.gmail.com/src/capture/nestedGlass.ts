@@ -26,6 +26,6 @@ export function innerGlassEffectOf(windowActor: any): any | null {
       const fx = c.get_effects()[0];
       if (fx && typeof fx._recaptureSerial === 'number') return fx;
     }
-  } catch (_) { }
+  } catch { }
   return null;
 }

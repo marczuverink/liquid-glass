@@ -36,7 +36,7 @@ export class WindowListService {
             try {
                 this._displaySignals.push({ obj: global.display, id: global.display.connect(signal, callback) });
             }
-            catch (e) { }
+            catch { }
         };
         connectDisplay('window-created', (_display, metaWindow) => {
             this._trackWindow(metaWindow);
@@ -56,7 +56,7 @@ export class WindowListService {
             try {
                 sig.obj.disconnect(sig.id);
             }
-            catch (e) { }
+            catch { }
         }
         this._displaySignals = [];
         for (const [metaWindow, ids] of this._windowSignals) {
@@ -64,7 +64,7 @@ export class WindowListService {
                 try {
                     metaWindow.disconnect(id);
                 }
-                catch (e) { }
+                catch { }
             }
         }
         this._windowSignals.clear();
@@ -72,7 +72,7 @@ export class WindowListService {
             try {
                 this._dbusImpl.unexport();
             }
-            catch (e) { }
+            catch { }
             this._dbusImpl = null;
         }
     }
@@ -93,7 +93,7 @@ export class WindowListService {
             try {
                 ids.push(metaWindow.connect(signal, () => this._queueChanged()));
             }
-            catch (e) { }
+            catch { }
         }
         try {
             ids.push(metaWindow.connect('unmanaged', () => {
@@ -101,7 +101,7 @@ export class WindowListService {
                 this._queueChanged();
             }));
         }
-        catch (e) { }
+        catch { }
         this._windowSignals.set(metaWindow, ids);
     }
     _untrackWindow(metaWindow) {
@@ -112,7 +112,7 @@ export class WindowListService {
             try {
                 metaWindow.disconnect(id);
             }
-            catch (e) { }
+            catch { }
         }
         this._windowSignals.delete(metaWindow);
     }
@@ -132,7 +132,7 @@ export class WindowListService {
                 try {
                     tracker = Shell.WindowTracker.get_default();
                 }
-                catch (e) {
+                catch {
                     tracker = null;
                 }
             }
@@ -148,7 +148,7 @@ export class WindowListService {
                 windowType = metaWindow.get_window_type();
                 title = metaWindow.get_title() ?? '';
             }
-            catch (e) {
+            catch {
                 continue;
             }
             if (!wmClass)
@@ -181,7 +181,7 @@ export class WindowListService {
                             entry.iconName = icon.to_string() ?? '';
                     }
                 }
-                catch (e) { }
+                catch { }
             }
         }
         const entries = [...byClass.values()];

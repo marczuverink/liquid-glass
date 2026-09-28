@@ -352,14 +352,14 @@ export class OsdManager {
                 try {
                     state.effect.cleanup();
                 }
-                catch (e) { }
+                catch { }
                 state.effect = null;
             }
             if (state.bgActor) {
                 try {
                     state.bgActor.destroy();
                 }
-                catch (e) { }
+                catch { }
                 state.bgActor = null;
             }
             state._uiSampler?.destroy();
@@ -490,7 +490,7 @@ export class OsdManager {
             try {
                 state.osdWindow.disconnect(state._destroyId);
             }
-            catch (e) { }
+            catch { }
             state._destroyId = 0;
         }
         if (state.targetBox) {
@@ -498,24 +498,24 @@ export class OsdManager {
                 state.targetBox.remove_style_class_name('liquid-glass-transparent');
                 state.targetBox.translation_y = 0;
             }
-            catch (e) { }
+            catch { }
         }
         if (state.effect) {
             try {
                 state.effect.cleanup();
             }
-            catch (e) { }
+            catch { }
             state.effect = null;
         }
         if (state.bgActor) {
             try {
                 state.bgActor.hide();
             }
-            catch (e) { }
+            catch { }
             try {
                 state.bgActor.destroy();
             }
-            catch (e) { }
+            catch { }
             state.bgActor = null;
         }
         state.liquidBox = null;
@@ -523,12 +523,12 @@ export class OsdManager {
         try {
             state._uiSampler?.destroy();
         }
-        catch (e) { }
+        catch { }
         state._uiSampler = null;
         try {
             state._windowCloneManager?.destroy();
         }
-        catch (e) { }
+        catch { }
         state._windowCloneManager = null;
     }
     _teardownStep(name, fn) {
@@ -539,7 +539,7 @@ export class OsdManager {
             try {
                 this._logger?.error(`[Liquid Glass] ${this.constructor.name}.${name} failed during cleanup: ${e}`);
             }
-            catch (_) {
+            catch {
                 console.error(`[Liquid Glass] ${name} failed during cleanup: ${e}`);
             }
         }
@@ -552,7 +552,7 @@ export class OsdManager {
                 try {
                     this._settings.disconnect(sigId);
                 }
-                catch (e) { }
+                catch { }
             }
             this._settingsSignals = [];
         });
@@ -700,14 +700,14 @@ export class OsdManager {
                     actor.set_style(`${stylePrefix}-barlevel-active-background-color: ${this._rgbToHex(r, g, b)}; ` +
                         `-barlevel-background-color: ${this._rgbToHex(bgR, bgG, bgB)};`);
                 }
-                catch (e2) { }
+                catch { }
                 return;
             }
             const rgba = `rgba(${r}, ${g}, ${b}, ${a.toFixed(3)})`;
             try {
                 actor.set_style(`${stylePrefix}color: ${rgba}; -st-icon-foreground-color: ${rgba};`);
             }
-            catch (e2) { }
+            catch { }
         };
         if (skipAnimations) {
             adaptiveColorTweener.cancel(actor);
@@ -735,7 +735,7 @@ export class OsdManager {
             try {
                 global.stage.disconnect(signalId);
             }
-            catch (e) { }
+            catch { }
         }
         if (this._frameSyncId !== 0) {
             if (global.compositor?.get_laters)

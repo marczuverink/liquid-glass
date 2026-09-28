@@ -113,14 +113,14 @@ class AdaptiveColorTweener {
         Meta.LaterType.BEFORE_REDRAW,
         () => { this._tick(); return false; }
       );
-    } catch (_) {
+    } catch {
       this._laterId = 0;
     }
   }
 
   private _unschedule(): void {
     if (this._laterId === 0) return;
-    try { (global as any).compositor.get_laters().remove(this._laterId); } catch (_) { }
+    try { (global as any).compositor.get_laters().remove(this._laterId); } catch { }
     this._laterId = 0;
   }
 
@@ -143,7 +143,7 @@ class AdaptiveColorTweener {
         Math.abs(e.last.a - a) < 0.002;
       if (!same) {
         e.last = { r: c.r, g: c.g, b: c.b, a };
-        try { e.apply(c.r, c.g, c.b, a, progress); } catch (_) { }
+        try { e.apply(c.r, c.g, c.b, a, progress); } catch { }
       }
 
       if (progress >= 1) this._entries.delete(actor);

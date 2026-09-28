@@ -238,7 +238,7 @@ export class UIManager {
             if (allocated > 1)
                 return allocated;
         }
-        catch (e) { }
+        catch { }
         return 0;
     }
     _firstHeight(actors, measure) {
@@ -264,7 +264,7 @@ export class UIManager {
             try {
                 height = this._firstHeight([actor, menu.box], a => this._allocatedHeightOf(a));
             }
-            catch (e) { }
+            catch { }
             repeats = height > 0 && height === tallest ? repeats + 1 : 0;
             if (height > tallest)
                 tallest = height;
@@ -327,17 +327,17 @@ export class UIManager {
             try {
                 menu.close(0);
             }
-            catch (e) { }
+            catch { }
             try {
                 actor.opacity = opacity;
             }
-            catch (e) { }
+            catch { }
         };
         try {
             menu.open(0);
             actor.opacity = 0;
         }
-        catch (e) {
+        catch {
             restore();
             settle(0);
             return;
@@ -402,7 +402,7 @@ export class UIManager {
         try {
             this._settings.set_double(this._key('settled-height-scale'), ratio);
         }
-        catch (e) { }
+        catch { }
     }
     _applyMenuScale() {
         if (!this.targetActor || !isActorValid(this.targetActor))
@@ -888,7 +888,7 @@ export class UIManager {
                     actor.remove_style_class_name('adaptive-color-dark');
                     actor.set_style(originalStyle || null);
                 }
-                catch (e) { }
+                catch { }
             }
         }
         this._styledActors.clear();
@@ -907,7 +907,7 @@ export class UIManager {
                 if (isActorValid(actor))
                     actor.disconnect(id);
             }
-            catch (e) { }
+            catch { }
         }
         this._hoverSignals.clear();
     }
@@ -926,7 +926,7 @@ export class UIManager {
                     this._queueBackdropRefresh(holder);
                 }));
             }
-            catch (e) { }
+            catch { }
         }
         for (const [actor, id] of [...this._hoverSignals.entries()]) {
             if (isActorValid(actor))
@@ -935,7 +935,7 @@ export class UIManager {
             try {
                 actor.disconnect(id);
             }
-            catch (e) { }
+            catch { }
         }
     }
     _queueBackdropRefresh(root) {
@@ -1066,7 +1066,7 @@ export class UIManager {
             try {
                 actor.set_style(`${stylePrefix}color: ${rgba}; -st-icon-foreground-color: ${rgba};`);
             }
-            catch (e) { }
+            catch { }
         };
         if (skipAnimations) {
             adaptiveColorTweener.cancel(actor);
@@ -1138,7 +1138,7 @@ export class UIManager {
                 if (sig && sig.id)
                     sig.target.disconnect(sig.id);
             }
-            catch (e) { }
+            catch { }
         }
         this._signals = [];
         if (this._tickId && this._tickId !== 0) {
@@ -1208,7 +1208,7 @@ export class UIManager {
             try {
                 this._logger?.error(`[Liquid Glass] ${this.constructor.name}.${name} failed during cleanup: ${e}`);
             }
-            catch (_) {
+            catch {
                 console.error(`[Liquid Glass] ${name} failed during cleanup: ${e}`);
             }
         }
@@ -1228,7 +1228,7 @@ export class UIManager {
                 try {
                     this._settings.disconnect(sigId);
                 }
-                catch (e) { }
+                catch { }
             }
             this._settingsSignals = [];
         });

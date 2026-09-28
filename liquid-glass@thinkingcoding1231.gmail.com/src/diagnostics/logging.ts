@@ -8,7 +8,7 @@ export function utilsLogEnabled(): boolean {
   return !!_utilsLogger && _utilsLogger.enabled !== false;
 }
 export function utilsLog(msg: string): void {
-  try { _utilsLogger?.log(msg); } catch (_) { }
+  try { _utilsLogger?.log(msg); } catch { }
 }
 
 const _frameLoopErrorLastLogged: Map<string, number> = new Map();
@@ -22,5 +22,5 @@ export function reportFrameLoopError(tag: string, e: unknown): void {
     console.error(`[Liquid Glass] exception in ${tag} frame sync (loop kept alive): ${e}`);
     const stack = (e as any)?.stack;
     if (stack) console.error(`[Liquid Glass] ${stack}`);
-  } catch (_) { }
+  } catch { }
 }

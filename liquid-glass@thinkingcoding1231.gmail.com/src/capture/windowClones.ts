@@ -92,7 +92,7 @@ export class WindowCloneManager {
       setClipIfChanged(bg, rect[0], rect[1], rect[2], rect[3]);
     } else if ((bg as any)._lgClipW !== undefined) {
       (bg as any)._lgClipW = undefined;
-      try { bg.remove_clip(); } catch (_) { }
+      try { bg.remove_clip(); } catch { }
     }
   }
 
@@ -112,13 +112,13 @@ export class WindowCloneManager {
             container.queue_redraw();
         });
         this._damageHooks.set(src, id);
-      } catch (_) { }
+      } catch { }
     }
 
     if (this._damageHooks.size > this._windowClones.size) {
       for (const [src, id] of [...this._damageHooks]) {
         if (this._windowClones.has(src)) continue;
-        try { if (isActorValid(src)) (src as any).disconnect(id); } catch (_) { }
+        try { if (isActorValid(src)) (src as any).disconnect(id); } catch { }
         this._damageHooks.delete(src);
       }
     }
@@ -127,7 +127,7 @@ export class WindowCloneManager {
   private _releaseDamageHooks(): void {
     if (this._damageHooks.size === 0) return;
     for (const [src, id] of this._damageHooks) {
-      try { if (isActorValid(src)) (src as any).disconnect(id); } catch (_) { }
+      try { if (isActorValid(src)) (src as any).disconnect(id); } catch { }
     }
     this._damageHooks.clear();
   }
@@ -168,7 +168,7 @@ export class WindowCloneManager {
       if (!clone) {
         clone = new UnpickableClone({ source: w });
         const wTitle = (() => {
-          try { return metaWindow.get_title() || '(untitled)'; } catch (_) { return '(?)'; }
+          try { return metaWindow.get_title() || '(untitled)'; } catch { return '(?)'; }
         })();
         clone.set_name(`${this.label}-winclone:${wTitle}`);
         clone.connect('destroy', () => { this._windowClones.delete(w); });
@@ -225,11 +225,11 @@ export class WindowCloneManager {
     releaseClonedWindowActors(this);
 
     if (isActorValid(this.windowClonesContainer)) {
-      try { this.windowClonesContainer!.destroy(); } catch (_) { }
+      try { this.windowClonesContainer!.destroy(); } catch { }
     }
     this._windowClones.clear();
     if (isActorValid(this.bgClone)) {
-      try { this.bgClone!.destroy(); } catch (_) { }
+      try { this.bgClone!.destroy(); } catch { }
     }
     this.container = null;
   }

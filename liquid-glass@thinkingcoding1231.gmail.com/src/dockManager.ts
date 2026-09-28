@@ -721,7 +721,7 @@ export class DashManager {
     } catch (e) {
       try {
         this._logger?.error(`[Liquid Glass] ${this.constructor.name}.${name} failed during cleanup: ${e}`);
-      } catch (_) {
+      } catch {
         console.error(`[Liquid Glass] ${name} failed during cleanup: ${e}`);
       }
     }
@@ -737,7 +737,7 @@ export class DashManager {
     this._teardownStep('settingsSignals', () => {
       if (this._settings) {
         for (let id of this._settingsSignals) {
-          try { this._settings.disconnect(id); } catch (e) { }
+          try { this._settings.disconnect(id); } catch { }
         }
         this._settingsSignals = [];
       }

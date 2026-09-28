@@ -25,7 +25,7 @@ export const TextureBlitActor = GObject.registerClass({
             const backend = Clutter.get_default_backend();
             return backend.get_cogl_context();
         }
-        catch (e) {
+        catch {
             return null;
         }
     }
@@ -67,7 +67,7 @@ export const TextureBlitActor = GObject.registerClass({
             const fb = paintContext.get_framebuffer();
             fb.draw_textured_rectangle(this._pipeline, 0, 0, w, h, uMin, vMin, uMax, vMax);
         }
-        catch (e) {
+        catch {
         }
     }
 });

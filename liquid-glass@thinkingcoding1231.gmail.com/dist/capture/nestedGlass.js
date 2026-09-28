@@ -22,6 +22,6 @@ export function innerGlassEffectOf(windowActor) {
                 return fx;
         }
     }
-    catch (_) { }
+    catch { }
     return null;
 }

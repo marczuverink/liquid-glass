@@ -443,7 +443,7 @@ export class NotificationManager {
             try {
                 bannerBin.disconnect(sigId);
             }
-            catch (e) { }
+            catch { }
         }
         this._signals = [];
         this._cleanupCurrentBanner();
@@ -456,7 +456,7 @@ export class NotificationManager {
             try {
                 this._logger?.error(`[Liquid Glass] ${this.constructor.name}.${name} failed during cleanup: ${e}`);
             }
-            catch (_) {
+            catch {
                 console.error(`[Liquid Glass] ${name} failed during cleanup: ${e}`);
             }
         }
@@ -475,7 +475,7 @@ export class NotificationManager {
                 try {
                     this._settings.disconnect(sigId);
                 }
-                catch (e) { }
+                catch { }
             }
             this._settingsSignals = [];
         });
@@ -602,14 +602,14 @@ export class NotificationManager {
             try {
                 actor.set_style(`${stylePrefix}color: ${rgba}; -st-icon-foreground-color: ${rgba};`);
             }
-            catch (e) { }
+            catch { }
         };
         if (skipAnimations) {
             adaptiveColorTweener.cancel(actor);
             try {
                 actor.set_style(`${stylePrefix}color: ${targetHexColor}; -st-icon-foreground-color: ${targetHexColor};`);
             }
-            catch (e) { }
+            catch { }
             return;
         }
         const startRgb = { r: startColor.red, g: startColor.green, b: startColor.blue };

@@ -46,7 +46,7 @@ export function removeFrameTicker(id: number): void {
   if (!ticker) return;
   _tickers.delete(id);
   if (!ticker.laterId) return;
-  try { global.compositor.get_laters().remove(ticker.laterId); } catch (_) { }
+  try { global.compositor.get_laters().remove(ticker.laterId); } catch { }
   ticker.laterId = 0;
 }
 

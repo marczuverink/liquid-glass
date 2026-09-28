@@ -8,7 +8,7 @@ export function isActorValid(actor: any): boolean {
   let desc: string;
   try {
     desc = _gobjectToString.call(actor);
-  } catch (e) {
+  } catch {
     return false;
   }
   if (desc.indexOf('(DISPOSED)') >= 0 || desc.indexOf('(FINALIZED)') >= 0)
@@ -16,7 +16,7 @@ export function isActorValid(actor: any): boolean {
 
   try {
     return typeof actor.visible === 'boolean';
-  } catch (e) {
+  } catch {
     return false;
   }
 }

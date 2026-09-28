@@ -9,7 +9,7 @@ function _releaseEntry(pod, entry) {
         try {
             pod.disconnect(entry.destroyId);
         }
-        catch (_) { }
+        catch { }
     }
     for (const { actor, origStyle } of entry.styledSubs) {
         if (!(actor instanceof St.Widget) || typeof actor.set_style !== 'function')
@@ -17,7 +17,7 @@ function _releaseEntry(pod, entry) {
         try {
             actor.set_style(origStyle || null);
         }
-        catch (e) { }
+        catch { }
     }
 }
 export class ToggleStyles {
@@ -157,7 +157,7 @@ export class ToggleStyles {
                 }
             }
         }
-        catch (e) {
+        catch {
         }
         if (!bg)
             return null;
@@ -295,8 +295,12 @@ export class ToggleStyles {
             return false;
         this._logger.log(`[Liquid Glass][toggle-color] releasing .quick-slider pod — theme no longer paints a pill ` +
             `(bg=${JSON.stringify(pill)})`);
-        if (entry.destroyId)
-            pod.disconnect(entry.destroyId);
+        if (entry.destroyId) {
+            try {
+                pod.disconnect(entry.destroyId);
+            }
+            catch { }
+        }
         this._toggleRegions.delete(pod);
         return true;
     }

@@ -73,7 +73,7 @@ class AdaptiveColorTweener {
         try {
             this._laterId = global.compositor.get_laters().add(Meta.LaterType.BEFORE_REDRAW, () => { this._tick(); return false; });
         }
-        catch (_) {
+        catch {
             this._laterId = 0;
         }
     }
@@ -83,7 +83,7 @@ class AdaptiveColorTweener {
         try {
             global.compositor.get_laters().remove(this._laterId);
         }
-        catch (_) { }
+        catch { }
         this._laterId = 0;
     }
     _tick() {
@@ -108,7 +108,7 @@ class AdaptiveColorTweener {
                 try {
                     e.apply(c.r, c.g, c.b, a, progress);
                 }
-                catch (_) { }
+                catch { }
             }
             if (progress >= 1)
                 this._entries.delete(actor);

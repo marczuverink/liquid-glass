@@ -518,7 +518,7 @@ export class QuickSettingsManager {
         }
     }
     _laterAdd(callback) {
-        return global.compositor?.get_laters?.().add(Meta.LaterType.BEFORE_REDRAW, callback);
+        return global.compositor?.get_laters?.().add(Meta.LaterType.BEFORE_REDRAW, callback) ?? 0;
     }
     _buildClones() {
         if (!this.bgActor)
@@ -623,7 +623,7 @@ export class QuickSettingsManager {
                 try {
                     this._panelContentClone.destroy();
                 }
-                catch (e) { }
+                catch { }
             }
             let material = new UnpickableStyledWidget();
             material.set_name('liquid-glass-panel-material');
@@ -653,7 +653,7 @@ export class QuickSettingsManager {
             try {
                 this._panelContentClone.destroy();
             }
-            catch (e) { }
+            catch { }
         }
         this._panelContentClone = null;
     }
@@ -1077,7 +1077,7 @@ export class QuickSettingsManager {
                 try {
                     actor.disconnect(id);
                 }
-                catch (_) { }
+                catch { }
             }
         }
         this._backdropSignals?.clear();
@@ -1316,7 +1316,7 @@ export class QuickSettingsManager {
                         try {
                             button.disconnect(id);
                         }
-                        catch (e) { }
+                        catch { }
                     }
                 }
             }
@@ -1468,7 +1468,7 @@ export class QuickSettingsManager {
             try {
                 submenu.translation_x = 0;
             }
-            catch (e) { }
+            catch { }
         }
         this._cachedSubmenus = null;
     }
@@ -1487,14 +1487,14 @@ export class QuickSettingsManager {
                 if (sig && sig.id)
                     sig.target.disconnect(sig.id);
             }
-            catch (e) { }
+            catch { }
         }
         this._signals = [];
         if (this._animSignalId) {
             try {
                 this.menu.disconnect(this._animSignalId);
             }
-            catch (e) { }
+            catch { }
             this._animSignalId = 0;
         }
         if (this._tickId !== 0) {
@@ -1539,7 +1539,7 @@ export class QuickSettingsManager {
                 try {
                     this._toggleGlassHost.destroy();
                 }
-                catch (e) { }
+                catch { }
             }
             this._toggleGlassHost = null;
         }
@@ -1567,7 +1567,7 @@ export class QuickSettingsManager {
             try {
                 this._logger?.error(`[Liquid Glass] ${this.constructor.name}.${name} failed during cleanup: ${e}`);
             }
-            catch (_) {
+            catch {
                 console.error(`[Liquid Glass] ${name} failed during cleanup: ${e}`);
             }
         }
@@ -1586,7 +1586,7 @@ export class QuickSettingsManager {
                 try {
                     this._settings.disconnect(sigId);
                 }
-                catch (e) { }
+                catch { }
             }
             this._settingsSignals = [];
         });

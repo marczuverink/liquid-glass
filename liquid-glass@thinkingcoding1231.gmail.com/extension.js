@@ -189,7 +189,7 @@ export default class LiquidGlassExtension extends Extension {
     if (entry.destroyId !== 0) {
       try {
         entry.container.disconnect(entry.destroyId);
-      } catch (e) { }
+      } catch { }
       entry.destroyId = 0;
     }
 
@@ -275,22 +275,22 @@ export default class LiquidGlassExtension extends Extension {
   _removeDumpLoopKeybinding() {
     stopGlassRingSampler();
     if (this._dumpLoopId) {
-      try { GLib.source_remove(this._dumpLoopId); } catch (e) { }
+      try { GLib.source_remove(this._dumpLoopId); } catch { }
       this._dumpLoopId = 0;
     }
-    try { Main.wm.removeKeybinding('dump-loop-keybinding'); } catch (e) { }
+    try { Main.wm.removeKeybinding('dump-loop-keybinding'); } catch { }
   }
 
   disable() {
     this._active = false;
 
-    try { this._removeDumpLoopKeybinding(); } catch (e) { }
+    try { this._removeDumpLoopKeybinding(); } catch { }
 
     this._logger?.log(`[Liquid Glass] Disabling...`);
 
-    try { adaptiveColorTweener.stopAll(); } catch (e) { }
-    try { destroySharedBackgroundSource(); } catch (e) { }
-    try { releaseAllClonedWindowActors(); } catch (e) { }
+    try { adaptiveColorTweener.stopAll(); } catch { }
+    try { destroySharedBackgroundSource(); } catch { }
+    try { releaseAllClonedWindowActors(); } catch { }
 
     if (this._quickSettingsTimeoutId && this._quickSettingsTimeoutId !== 0) {
       GLib.Source.remove(this._quickSettingsTimeoutId);
@@ -318,7 +318,7 @@ export default class LiquidGlassExtension extends Extension {
       } catch (e) {
         try {
           this._logger?.error(`[Liquid Glass] ${name} cleanup failed during disable(): ${e}`);
-        } catch (_) {
+        } catch {
           console.error(`[Liquid Glass] ${name} cleanup failed during disable(): ${e}`);
         }
       }

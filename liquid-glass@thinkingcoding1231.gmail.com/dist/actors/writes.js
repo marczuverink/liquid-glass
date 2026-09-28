@@ -83,7 +83,7 @@ export function setCloneCulled(actor, culled, why) {
         try {
             name = actor.get_name?.() || '(unnamed)';
         }
-        catch (_) { }
+        catch { }
         const text = typeof why === 'function' ? why() : why;
         utilsLog(`[Liquid Glass][cull] ${culled ? 'CULL ' : 'SHOW '} "${name}" ${text}`);
     }
@@ -96,7 +96,7 @@ export function setCloneCulled(actor, culled, why) {
     try {
         actor.get_parent?.()?.queue_redraw();
     }
-    catch (_) { }
+    catch { }
 }
 export function isCloneCulled(actor) {
     return !!(actor && actor._lgCulled);

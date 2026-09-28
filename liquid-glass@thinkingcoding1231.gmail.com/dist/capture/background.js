@@ -92,7 +92,7 @@ export const BackgroundMirror = GObject.registerClass(class BackgroundMirror ext
             try {
                 hasBackground = !!(mirror.content && mirror.content.background);
             }
-            catch (_) { }
+            catch { }
             const wanted = hasBackground && isActorValid(child) && child.visible;
             if (mirror.visible !== wanted)
                 mirror.visible = wanted;
@@ -112,7 +112,7 @@ export const BackgroundMirror = GObject.registerClass(class BackgroundMirror ext
                 try {
                     obj.disconnect(id);
                 }
-                catch (_) { }
+                catch { }
             }
             watchers.length = 0;
         });
@@ -170,7 +170,7 @@ export const BackgroundMirror = GObject.registerClass(class BackgroundMirror ext
                 try {
                     this._sourceGroup.disconnect(id);
                 }
-                catch (_) { }
+                catch { }
             }
         }
         this._groupHandlers = [];
@@ -229,7 +229,7 @@ export function destroySharedBackgroundSource() {
         try {
             source.destroy();
         }
-        catch (_) { }
+        catch { }
     }
 }
 export function createBackgroundMirror(name) {

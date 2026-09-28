@@ -143,13 +143,13 @@ function _captureViaScreenshot(screenshot: Shell.Screenshot,
               channels: pixbuf.get_n_channels(),
               step: Math.max(1, Math.floor(Math.min(width, height) / SAMPLE_MAX_EDGE)),
             });
-          } catch (e) {
-            try { stream.close(null); } catch (_) { }
+          } catch {
+            try { stream.close(null); } catch { }
             resolve(null);
           }
         }
       );
-    } catch (e) {
+    } catch {
       resolve(null);
     }
   });
@@ -168,7 +168,7 @@ export function backdropLuminance(actor: Clutter.Actor, root: Clutter.Actor | nu
           alpha: color.alpha,
         };
       }
-    } catch (e) {
+    } catch {
       return null;
     }
 
@@ -193,12 +193,17 @@ function _visibleTargets(actors: Clutter.Actor[]): { targets: Clutter.Actor[], r
   return { targets, rects };
 }
 
+function _rootOrMergedRect(root: Clutter.Actor | null, rects: SampleRect[]): SampleRect | null {
+  const rootRect = root ? _getActorRect(root) : null;
+  return rootRect ?? _mergeRects(rects);
+}
+
 function _readSignature(paintSignature?: () => number): number | null {
   if (!paintSignature) return null;
   try {
     const v = paintSignature();
     return Number.isFinite(v) ? v : null;
-  } catch (_) { return null; }
+  } catch { return null; }
 }
 
 function _skipKey(rects: SampleRect[], config: typeof AdaptiveContrastConfig): string {
@@ -268,7 +273,7 @@ export class StageContrastSampler {
       }
 
       return _trimmedMean(values, 0.10);
-    } catch (e) {
+    } catch {
       return null;
     }
   }
@@ -333,8 +338,9 @@ export class StageContrastSampler {
     if (targets.length === 0)
       return new Map();
 
-    const merged = config.samplePerElement ? null : (root ? _getActorRect(root) : null) ?? _mergeRects(rects);
-    const sampledRects = config.samplePerElement ? rects : (merged ? [merged] : []);
+    const merged = config.samplePerElement ? null : _rootOrMergedRect(root, rects);
+    const mergedRects = merged ? [merged] : [];
+    const sampledRects = config.samplePerElement ? rects : mergedRects;
     const key = _skipKey(config.samplePerElement ? rects : [...sampledRects, ...rects], config);
     const before = _readSignature(paintSignature);
     if (before !== null && before === this._unchangedSignature && key === this._unchangedKey)

@@ -21,12 +21,12 @@ export function getAllocatedSize(actor) {
             return [w, h];
         }
     }
-    catch (_) { }
+    catch { }
     try {
         const [w, h] = actor.get_size();
         return [w, h];
     }
-    catch (_) {
+    catch {
         return [0, 0];
     }
 }
@@ -40,13 +40,13 @@ export function getTransformedRect(actor) {
             return [x, y, w, h];
         }
     }
-    catch (_) { }
+    catch { }
     try {
         const [x, y] = actor.get_transformed_position();
         const [w, h] = getAllocatedSize(actor);
         return [x, y, w, h];
     }
-    catch (_) {
+    catch {
         return [0, 0, 0, 0];
     }
 }
@@ -80,7 +80,7 @@ export function computeCaptureLayout(actor, srcW, srcH, allocW, allocH) {
             rawY2 = rawY1 + pv.get_height();
         }
     }
-    catch (e) {
+    catch {
     }
     if (!Number.isFinite(rawX1) || !Number.isFinite(rawY1) ||
         !Number.isFinite(rawX2) || !Number.isFinite(rawY2)) {

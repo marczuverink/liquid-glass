@@ -418,11 +418,11 @@ export class OsdManager {
     state._destroyId = osdWindow.connect('destroy', () => {
       this._osdStates = this._osdStates.filter(s => s !== state);
       if (state.effect) {
-        try { state.effect.cleanup(); } catch (e) { }
+        try { state.effect.cleanup(); } catch { }
         state.effect = null;
       }
       if (state.bgActor) {
-        try { state.bgActor.destroy(); } catch (e) { }
+        try { state.bgActor.destroy(); } catch { }
         state.bgActor = null;
       }
       state._uiSampler?.destroy();
@@ -572,7 +572,7 @@ export class OsdManager {
 
   _cleanupOsdState(state: OsdState) {
     if (state.osdWindow && state._destroyId) {
-      try { state.osdWindow.disconnect(state._destroyId); } catch (e) { }
+      try { state.osdWindow.disconnect(state._destroyId); } catch { }
       state._destroyId = 0;
     }
 
@@ -580,25 +580,25 @@ export class OsdManager {
       try {
         state.targetBox.remove_style_class_name('liquid-glass-transparent');
         state.targetBox.translation_y = 0;
-      } catch (e) { }
+      } catch { }
     }
 
     if (state.effect) {
-      try { state.effect.cleanup(); } catch (e) { }
+      try { state.effect.cleanup(); } catch { }
       state.effect = null;
     }
 
     if (state.bgActor) {
-      try { state.bgActor.hide(); } catch (e) { }
-      try { state.bgActor.destroy(); } catch (e) { }
+      try { state.bgActor.hide(); } catch { }
+      try { state.bgActor.destroy(); } catch { }
       state.bgActor = null;
     }
     state.liquidBox = null;
     state._cloneContainer = null;
 
-    try { state._uiSampler?.destroy(); } catch (e) { }
+    try { state._uiSampler?.destroy(); } catch { }
     state._uiSampler = null;
-    try { state._windowCloneManager?.destroy(); } catch (e) { }
+    try { state._windowCloneManager?.destroy(); } catch { }
     state._windowCloneManager = null;
   }
 
@@ -608,7 +608,7 @@ export class OsdManager {
     } catch (e) {
       try {
         this._logger?.error(`[Liquid Glass] ${this.constructor.name}.${name} failed during cleanup: ${e}`);
-      } catch (_) {
+      } catch {
         console.error(`[Liquid Glass] ${name} failed during cleanup: ${e}`);
       }
     }
@@ -621,7 +621,7 @@ export class OsdManager {
 
     this._teardownStep('settingsSignals', () => {
       for (let sigId of this._settingsSignals) {
-        try { this._settings.disconnect(sigId); } catch (e) { }
+        try { this._settings.disconnect(sigId); } catch { }
       }
       this._settingsSignals = [];
     });
@@ -784,11 +784,11 @@ export class OsdManager {
         try {
           actor.set_style(`${stylePrefix}-barlevel-active-background-color: ${this._rgbToHex(r, g, b)}; ` +
             `-barlevel-background-color: ${this._rgbToHex(bgR, bgG, bgB)};`);
-        } catch (e2) { }
+        } catch { }
         return;
       }
       const rgba = `rgba(${r}, ${g}, ${b}, ${a.toFixed(3)})`;
-      try { actor.set_style(`${stylePrefix}color: ${rgba}; -st-icon-foreground-color: ${rgba};`); } catch (e2) { }
+      try { actor.set_style(`${stylePrefix}color: ${rgba}; -st-icon-foreground-color: ${rgba};`); } catch { }
     };
 
     if (skipAnimations) {
@@ -818,7 +818,7 @@ export class OsdManager {
     const signalId = this._frameSignalId;
     this._frameSignalId = 0;
     if (signalId) {
-      try { global.stage.disconnect(signalId); } catch (e) { }
+      try { global.stage.disconnect(signalId); } catch { }
     }
     if (this._frameSyncId !== 0) {
       if (global.compositor?.get_laters)

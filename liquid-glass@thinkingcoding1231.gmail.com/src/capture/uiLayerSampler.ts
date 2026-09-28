@@ -26,12 +26,9 @@ export function setBmsMode(mode: number): string {
   _bmsMode = mode;
   let n = 0;
   for (const sampler of _liveSamplers) {
-    try { sampler.rebuildBmsClones(); n++; } catch (_) { }
+    try { sampler.rebuildBmsClones(); n++; } catch { }
   }
-  const name = mode === BMS_MODE.SNAPSHOT ? 'SNAPSHOT'
-    : mode === BMS_MODE.CLONE ? 'CLONE'
-      : mode === BMS_MODE.SKIP ? 'SKIP'
-        : mode === BMS_MODE.REPLICATE ? 'REPLICATE' : `? (${mode})`;
+  const name = Object.keys(BMS_MODE).find(k => BMS_MODE[k as keyof typeof BMS_MODE] === mode) ?? `? (${mode})`;
   const msg = `[Liquid Glass] BMS mode = ${name} on ${n} sampler(s)`;
   console.log(msg);
   return msg;
@@ -142,7 +139,7 @@ export class UILayerSampler {
       const ext = (Main as any).extensionManager?.lookup?.('blur-my-shell@aunetx');
       const actor = ext?.stateObj?._panel_blur?.actors_list?.[0]?.bg_manager?.backgroundActor;
       return (actor as Clutter.Actor) ?? null;
-    } catch (_) {
+    } catch {
       return null;
     }
   }
@@ -155,7 +152,7 @@ export class UILayerSampler {
       if (typeof (child as any).contains === 'function' && (child as any).contains(target)) {
         return target;
       }
-    } catch (_) { }
+    } catch { }
     return null;
   }
 
@@ -208,7 +205,7 @@ export class UILayerSampler {
       const off = (this._container as any)?._lgCaptureOffset;
       if (Array.isArray(off) && Number.isFinite(off[0]) && Number.isFinite(off[1]))
         return [off[0], off[1]];
-    } catch (_) { }
+    } catch { }
     return [0, 0];
   }
 
@@ -288,7 +285,7 @@ export class UILayerSampler {
                 blurWidget.remove_effect(ours);
                 blurWidget.add_effect(this._buildReplicaBlurEffect(src));
                 ours = blurWidget.get_effects()[0] as any;
-              } catch (_) { }
+              } catch { }
             }
 
             if (ours.radius !== theirs.radius) ours.radius = theirs.radius;
@@ -331,7 +328,7 @@ export class UILayerSampler {
       if (line === replica.lastGeomLine) return;
       replica.lastGeomLine = line;
       utilsLog(`[Liquid Glass][ui-sampler:${this._label}] replica geom ${line}`);
-    } catch (_) { }
+    } catch { }
   }
 
   private _createSelfExcludingSnapshotActor(child: Clutter.Actor): Clutter.Actor | null {
@@ -366,14 +363,14 @@ export class UILayerSampler {
       let afterPaintId = 0;
       try {
         afterPaintId = (stage as any).connect('after-paint', applyContent);
-      } catch (e) {
+      } catch {
       }
       applyContent();
 
       this._delayedCaptureOwners.set(actor, { source: child, hideActor: selfRoot });
       actor.connect('destroy', () => {
         (actor as any)._isDisposed = true;
-        if (afterPaintId) { try { (stage as any).disconnect(afterPaintId); } catch (_) { } }
+        if (afterPaintId) { try { (stage as any).disconnect(afterPaintId); } catch { } }
         const owner = this._delayedCaptureOwners.get(actor);
         if (owner) {
           releaseSelfExcludingSnapshot(owner.source, owner.hideActor);
@@ -382,7 +379,7 @@ export class UILayerSampler {
       });
 
       return actor;
-    } catch (e) {
+    } catch {
       return null;
     }
   }
@@ -413,7 +410,7 @@ export class UILayerSampler {
 
         const children: Clutter.Actor[] = (actor as any).get_children?.() ?? [];
         for (const c of children) stack.push(c);
-      } catch (_) { }
+      } catch { }
     }
     return null;
   }
@@ -449,7 +446,7 @@ export class UILayerSampler {
         if (name === 'liquid-glass-bg-actor' || name === 'liquid-box') return true;
         const children: Clutter.Actor[] = (actor as any).get_children?.() ?? [];
         for (const c of children) stack.push(c);
-      } catch (_) { }
+      } catch { }
     }
     return false;
   }
@@ -475,7 +472,7 @@ export class UILayerSampler {
       } else {
         this._uiClonesContainer.set_child_below_sibling(clone, null);
       }
-    } catch (e) {
+    } catch {
     }
   }
 
@@ -500,7 +497,7 @@ export class UILayerSampler {
         if (!isActorValid(src)) continue;
         const root = this._findUiGroupAncestor(src);
         if (root) dynamicExclusions.add(root);
-      } catch (_) { }
+      } catch { }
     }
 
     for (const child of children) {
@@ -569,7 +566,7 @@ export class UILayerSampler {
               this._existingEffectCache.delete(child);
               const clone = this._clones.get(child);
               this._clones.delete(child);
-              try { clone?.destroy(); } catch (_) { }
+              try { clone?.destroy(); } catch { }
             }));
           }
           this._insertCloneInZOrder(child, sourceClone);
@@ -581,13 +578,13 @@ export class UILayerSampler {
 
     for (const [actor, sourceClone] of this._clones) {
       if (!seen.has(actor)) {
-        try { sourceClone.destroy(); } catch (_) { }
+        try { sourceClone.destroy(); } catch { }
         this._clones.delete(actor);
       }
     }
     for (const [actor, id] of this._sourceDestroyIds) {
       if (this._clones.has(actor)) continue;
-      try { actor.disconnect(id); } catch (_) { }
+      try { actor.disconnect(id); } catch { }
       this._sourceDestroyIds.delete(actor);
       this._bmsStateAtClone.delete(actor);
       this._existingEffectCache.delete(actor);
@@ -607,7 +604,7 @@ export class UILayerSampler {
       if (Array.isArray(res) && res[0] === true) {
         return [res[1] as number, res[2] as number];
       }
-    } catch (_) { }
+    } catch { }
 
     try {
       const [cx, cy] = actor.get_transformed_position();
@@ -615,7 +612,7 @@ export class UILayerSampler {
         stageX - (Number.isNaN(cx) ? 0 : cx),
         stageY - (Number.isNaN(cy) ? 0 : cy),
       ];
-    } catch (_) {
+    } catch {
       return [stageX, stageY];
     }
   }
@@ -692,7 +689,7 @@ export class UILayerSampler {
       } else {
         setActorVisible(sourceClone, isVisible);
       }
-    } catch (_) { }
+    } catch { }
   }
 
   private _checkCloneDrift(
@@ -726,7 +723,7 @@ export class UILayerSampler {
         this._driftingClones.delete(sourceClone);
         utilsLog(`[Liquid Glass][ui-sampler] RECOVERED clone for name="${(source as any).name ?? '(unnamed)'}"`);
       }
-    } catch (_) { }
+    } catch { }
   }
 
   sync(cX?: number, cY?: number, cW?: number, cH?: number) {
@@ -746,7 +743,7 @@ export class UILayerSampler {
         const [tx, ty] = this._container.get_transformed_position();
         contAbsX = Number.isNaN(tx) ? 0 : tx;
         contAbsY = Number.isNaN(ty) ? 0 : ty;
-      } catch (_) { }
+      } catch { }
     }
     try {
       const parent = this._uiClonesContainer?.get_parent();
@@ -788,7 +785,7 @@ export class UILayerSampler {
         const clone = this._clones.get(child);
         if (clone) {
           this._clones.delete(child);
-          try { clone.destroy(); } catch (_) { }
+          try { clone.destroy(); } catch { }
         }
         this._bmsStateAtClone.delete(child);
       } catch (e) {
@@ -805,7 +802,7 @@ export class UILayerSampler {
         const clone = this._clones.get(child);
         if (clone) {
           this._clones.delete(child);
-          try { clone.destroy(); } catch (_) { }
+          try { clone.destroy(); } catch { }
         }
         this._bmsStateAtClone.delete(child);
       } catch (e) {
@@ -831,7 +828,7 @@ export class UILayerSampler {
     let names = '';
     for (const actor of this._clones.keys()) {
       let n = '(unnamed)';
-      try { n = (actor as any).name || actor.constructor?.name || '(unnamed)'; } catch (_) { }
+      try { n = (actor as any).name || actor.constructor?.name || '(unnamed)'; } catch { }
       names += (names ? ', ' : '') + n;
     }
     if (names === this._clonedNamesLogged) return;
@@ -844,13 +841,13 @@ export class UILayerSampler {
     DND.removeDragMonitor(this._dragMonitor);
     this._dragActor = null;
     for (const [actor, id] of this._sourceDestroyIds) {
-      try { actor.disconnect(id); } catch (_) { }
+      try { actor.disconnect(id); } catch { }
     }
     this._sourceDestroyIds.clear();
     releaseClonedWindowActors(this);
     this._bmsStateAtClone.clear();
     if (this._uiClonesContainer) {
-      try { this._uiClonesContainer.destroy(); } catch (_) { }
+      try { this._uiClonesContainer.destroy(); } catch { }
     }
     this._clones.clear();
     this._driftingClones.clear();

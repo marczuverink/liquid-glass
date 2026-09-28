@@ -98,7 +98,7 @@ export class ApplicationManager {
                     id: global.display.connect(sig, () => this._armFocusDebug(sig)),
                 });
             }
-            catch (e) { }
+            catch { }
         }
         this._logger.log("[Liquid Glass] checking if effect enabled in setup: " + this._isEffectEnabled());
         if (this._isEffectEnabled())
@@ -112,7 +112,7 @@ export class ApplicationManager {
             try {
                 this._logger?.error(`[Liquid Glass] ${this.constructor.name}.${name} failed during cleanup: ${e}`);
             }
-            catch (_) {
+            catch {
                 console.error(`[Liquid Glass] ${name} failed during cleanup: ${e}`);
             }
         }
@@ -134,7 +134,7 @@ export class ApplicationManager {
                 try {
                     sig.obj.disconnect(sig.id);
                 }
-                catch (e) { }
+                catch { }
             }
             this._debugArmSignals = [];
             this._displacedContainers.clear();
@@ -145,7 +145,7 @@ export class ApplicationManager {
                 try {
                     this._settings.disconnect(id);
                 }
-                catch (e) { }
+                catch { }
             });
             this._settingsSignals = [];
         });
@@ -248,7 +248,7 @@ export class ApplicationManager {
         try {
             parent = metaWindow.get_transient_for();
         }
-        catch (e) {
+        catch {
             return false;
         }
         for (let depth = 0; parent && depth < MAX_TRANSIENT_DEPTH; depth++) {
@@ -259,7 +259,7 @@ export class ApplicationManager {
             try {
                 parent = parent.get_transient_for();
             }
-            catch (e) {
+            catch {
                 return false;
             }
         }
@@ -341,7 +341,7 @@ export class ApplicationManager {
             radius = this._settings.get_double('shadow-radius');
             intensity = this._settings.get_double('shadow-intensity');
         }
-        catch (e) {
+        catch {
             return GLASS_MIN_MARGIN;
         }
         if (!(radius > 0) || !(intensity > 0))
@@ -405,7 +405,7 @@ export class ApplicationManager {
             try {
                 global.stage.disconnect(signalId);
             }
-            catch (e) { }
+            catch { }
         }
     }
     _rebuildAllClones() {
@@ -674,7 +674,7 @@ export class ApplicationManager {
                     const mw = actor.get_meta_window();
                     return (mw && mw.get_title()) || '(untitled)';
                 }
-                catch (_) {
+                catch {
                     return '(?)';
                 }
             })();
@@ -950,7 +950,7 @@ export class ApplicationManager {
                 });
                 hooks.set(src, id);
             }
-            catch (_) { }
+            catch { }
         }
         if (hooks.size > state.clones.size) {
             for (const [src, id] of [...hooks]) {
@@ -960,7 +960,7 @@ export class ApplicationManager {
                     if (isActorValid(src))
                         src.disconnect(id);
                 }
-                catch (_) { }
+                catch { }
                 hooks.delete(src);
             }
         }
@@ -973,7 +973,7 @@ export class ApplicationManager {
                 if (isActorValid(src))
                     src.disconnect(id);
             }
-            catch (_) { }
+            catch { }
         }
         state.damageHooks.clear();
         state.damageHooks = undefined;
@@ -1041,11 +1041,11 @@ export class ApplicationManager {
         try {
             mapped = clone.mapped;
         }
-        catch (e) { }
+        catch { }
         try {
             [w, h] = clone.get_size();
         }
-        catch (e) { }
+        catch { }
         const degenerate = !Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0;
         const anomalous = !mapped || degenerate;
         if (anomalous && !this._anomalousClones.has(clone)) {
@@ -1102,7 +1102,7 @@ export class ApplicationManager {
                     if (state.effect._diagOwnerLabel !== label)
                         state.effect._diagOwnerLabel = label;
                 }
-                catch (_) { }
+                catch { }
                 const rescue = ensureWindowActorAllocated(state.windowActor, WINDOW_ACTOR_RELAYOUT_FRAMES, WINDOW_ACTOR_STRANDED_FRAMES);
                 if (rescue) {
                     const title = metaWin.get_title() || '(untitled)';
@@ -1195,7 +1195,7 @@ export class ApplicationManager {
             try {
                 stranded = !container.has_allocation();
             }
-            catch (_) {
+            catch {
                 stranded = false;
             }
         }
@@ -1223,7 +1223,7 @@ export class ApplicationManager {
         try {
             [x, y] = container.get_transformed_position();
         }
-        catch (e) {
+        catch {
             return 0;
         }
         const offBy = (!Number.isFinite(x) || !Number.isFinite(y))
@@ -1264,7 +1264,7 @@ export class ApplicationManager {
         try {
             [ancX, ancY] = state.windowsContainer.get_transformed_position();
         }
-        catch (e) { }
+        catch { }
         this._logger.log(`[Liquid Glass][focus-debug] window="${title}" ` +
             `windowActor.(x,y)=(${actorX},${actorY}) ` +
             `transformedPos=(${Math.round(tX)},${Math.round(tY)}) ` +
@@ -1288,7 +1288,7 @@ export class ApplicationManager {
             try {
                 [cloneScreenX, cloneScreenY] = clone.get_transformed_position();
             }
-            catch (e) { }
+            catch { }
             this._logger.log(`[Liquid Glass][focus-debug]   behind-clone src="${srcTitle}" ` +
                 `src.(x,y)=(${srcX},${srcY}) src.transformedPos=(${Math.round(srcTX)},${Math.round(srcTY)}) ` +
                 `diff=(${Math.round(srcTX - srcX)},${Math.round(srcTY - srcY)}) ` +
@@ -1307,7 +1307,7 @@ export class ApplicationManager {
             try {
                 global.compositor.get_laters().remove(state.remapReallocLaterId);
             }
-            catch (_) { }
+            catch { }
             state.remapReallocLaterId = 0;
         }
         if (state.surfaceActor) {
@@ -1316,7 +1316,7 @@ export class ApplicationManager {
                     state.surfaceActor.opacity = state.originalOpacity;
                 }
             }
-            catch (e) {
+            catch {
             }
         }
         if (state.signals) {
@@ -1324,7 +1324,7 @@ export class ApplicationManager {
                 try {
                     sig.obj.disconnect(sig.id);
                 }
-                catch (e) { }
+                catch { }
             });
             state.signals = [];
         }
@@ -1352,7 +1352,7 @@ export class ApplicationManager {
             try {
                 state.effect.cleanup();
             }
-            catch (e) { }
+            catch { }
         }
         if (isActorValid(state.bgActor))
             state.bgActor.destroy();

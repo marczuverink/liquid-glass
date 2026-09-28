@@ -32,7 +32,7 @@ export class SelfExcludingSnapshotCapture {
                 this._captureOnce();
             });
         }
-        catch (e) {
+        catch {
         }
     }
     retain() { this._refCount++; }
@@ -65,7 +65,7 @@ export class SelfExcludingSnapshotCapture {
                 if (!this._activeCheck())
                     return;
             }
-            catch (e) {
+            catch {
                 return;
             }
         }
@@ -83,7 +83,7 @@ export class SelfExcludingSnapshotCapture {
                         hidden.push(actor);
                     }
                 }
-                catch (_) { }
+                catch { }
             }
             const rect = new Mtk.Rectangle({ x: Math.round(x), y: Math.round(y), width: Math.round(w), height: Math.round(h) });
             const scale = 1;
@@ -107,7 +107,7 @@ export class SelfExcludingSnapshotCapture {
                 try {
                     actor.show();
                 }
-                catch (_) { }
+                catch { }
             }
         }
     }
@@ -120,7 +120,7 @@ export class SelfExcludingSnapshotCapture {
             try {
                 this._stage.disconnect(this._afterPaintId);
             }
-            catch (_) { }
+            catch { }
             this._afterPaintId = 0;
         }
     }

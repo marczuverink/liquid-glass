@@ -163,7 +163,7 @@ export class ApplicationManager {
           obj: global.display,
           id: global.display.connect(sig as any, () => this._armFocusDebug(sig)),
         });
-      } catch (e) { }
+      } catch { }
     }
 
     this._logger.log("[Liquid Glass] checking if effect enabled in setup: " + this._isEffectEnabled());
@@ -177,7 +177,7 @@ export class ApplicationManager {
     } catch (e) {
       try {
         this._logger?.error(`[Liquid Glass] ${this.constructor.name}.${name} failed during cleanup: ${e}`);
-      } catch (_) {
+      } catch {
         console.error(`[Liquid Glass] ${name} failed during cleanup: ${e}`);
       }
     }
@@ -200,7 +200,7 @@ export class ApplicationManager {
 
     this._teardownStep('debugArmSignals', () => {
       for (const sig of this._debugArmSignals) {
-        try { sig.obj.disconnect(sig.id); } catch (e) { }
+        try { sig.obj.disconnect(sig.id); } catch { }
       }
       this._debugArmSignals = [];
       this._displacedContainers.clear();
@@ -209,7 +209,7 @@ export class ApplicationManager {
 
     this._teardownStep('settingsSignals', () => {
       this._settingsSignals.forEach(id => {
-        try { this._settings.disconnect(id); } catch (e) { }
+        try { this._settings.disconnect(id); } catch { }
       });
       this._settingsSignals = [];
     });
@@ -332,7 +332,7 @@ export class ApplicationManager {
     let parent: Meta.Window | null = null;
     try {
       parent = metaWindow.get_transient_for();
-    } catch (e) {
+    } catch {
       return false;
     }
 
@@ -343,7 +343,7 @@ export class ApplicationManager {
         return false;
       try {
         parent = parent.get_transient_for();
-      } catch (e) {
+      } catch {
         return false;
       }
     }
@@ -439,7 +439,7 @@ export class ApplicationManager {
     try {
       radius = this._settings.get_double('shadow-radius');
       intensity = this._settings.get_double('shadow-intensity');
-    } catch (e) {
+    } catch {
       return GLASS_MIN_MARGIN;
     }
 
@@ -508,7 +508,7 @@ export class ApplicationManager {
     const signalId = this._frameSignalId;
     this._frameSignalId = 0;
     if (signalId) {
-      try { global.stage.disconnect(signalId); } catch (e) { }
+      try { global.stage.disconnect(signalId); } catch { }
     }
   }
 
@@ -815,7 +815,7 @@ export class ApplicationManager {
         try {
           const mw = actor.get_meta_window();
           return (mw && mw.get_title()) || '(untitled)';
-        } catch (_) { return '(?)'; }
+        } catch { return '(?)'; }
       })();
       clone.set_name(`lgw-behind:${behindTitle}`);
       clone.set_position(0, 0);
@@ -1127,13 +1127,13 @@ export class ApplicationManager {
           if (bg && isActorValid(bg) && bg.mapped && bg.visible) bg.queue_redraw();
         });
         hooks.set(src, id);
-      } catch (_) { }
+      } catch { }
     }
 
     if (hooks.size > state.clones.size) {
       for (const [src, id] of [...hooks]) {
         if (state.clones.has(src)) continue;
-        try { if (isActorValid(src)) src.disconnect(id); } catch (_) { }
+        try { if (isActorValid(src)) src.disconnect(id); } catch { }
         hooks.delete(src);
       }
     }
@@ -1142,7 +1142,7 @@ export class ApplicationManager {
   _releaseDamageHooks(state: WindowState): void {
     if (!state.damageHooks) return;
     for (const [src, id] of state.damageHooks) {
-      try { if (isActorValid(src)) src.disconnect(id); } catch (_) { }
+      try { if (isActorValid(src)) src.disconnect(id); } catch { }
     }
     state.damageHooks.clear();
     state.damageHooks = undefined;
@@ -1214,8 +1214,8 @@ export class ApplicationManager {
 
   _checkCloneAnomaly(clone: Clutter.Actor, src: Meta.WindowActor, kind: string): void {
     let mapped = true, w = -1, h = -1;
-    try { mapped = clone.mapped; } catch (e) { }
-    try { [w, h] = clone.get_size(); } catch (e) { }
+    try { mapped = clone.mapped; } catch { }
+    try { [w, h] = clone.get_size(); } catch { }
 
     const degenerate = !Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0;
     const anomalous = !mapped || degenerate;
@@ -1283,7 +1283,7 @@ export class ApplicationManager {
           const label = metaWin.get_title() || '(untitled)';
           if ((state.effect as any)._diagOwnerLabel !== label)
             (state.effect as any)._diagOwnerLabel = label;
-        } catch (_) { }
+        } catch { }
 
         const rescue = ensureWindowActorAllocated(
           state.windowActor, WINDOW_ACTOR_RELAYOUT_FRAMES, WINDOW_ACTOR_STRANDED_FRAMES);
@@ -1376,7 +1376,7 @@ export class ApplicationManager {
 
     let stranded = false;
     if (counterScale > MAX_STRANDED_COUNTER_SCALE) {
-      try { stranded = !container.has_allocation(); } catch (_) { stranded = false; }
+      try { stranded = !container.has_allocation(); } catch { stranded = false; }
     }
 
     const known = this._strandedScaleWindows.has(container);
@@ -1403,7 +1403,7 @@ export class ApplicationManager {
     if (!isActorValid(container)) return 0;
 
     let x: number, y: number;
-    try { [x, y] = container.get_transformed_position(); } catch (e) { return 0; }
+    try { [x, y] = container.get_transformed_position(); } catch { return 0; }
 
     const offBy = (!Number.isFinite(x) || !Number.isFinite(y))
       ? Infinity
@@ -1445,7 +1445,7 @@ export class ApplicationManager {
 
     const [asx, asy] = this._animationScale(actor);
     let ancX = NaN, ancY = NaN;
-    try { [ancX, ancY] = state.windowsContainer.get_transformed_position(); } catch (e) { }
+    try { [ancX, ancY] = state.windowsContainer.get_transformed_position(); } catch { }
 
     this._logger.log(
       `[Liquid Glass][focus-debug] window="${title}" ` +
@@ -1469,7 +1469,7 @@ export class ApplicationManager {
       const [srcX, srcY] = [src.x, src.y];
       const [srcTX, srcTY] = src.get_transformed_position();
       let cloneScreenX = NaN, cloneScreenY = NaN;
-      try { [cloneScreenX, cloneScreenY] = clone.get_transformed_position(); } catch (e) { }
+      try { [cloneScreenX, cloneScreenY] = clone.get_transformed_position(); } catch { }
       this._logger.log(
         `[Liquid Glass][focus-debug]   behind-clone src="${srcTitle}" ` +
         `src.(x,y)=(${srcX},${srcY}) src.transformedPos=(${Math.round(srcTX)},${Math.round(srcTY)}) ` +
@@ -1488,7 +1488,7 @@ export class ApplicationManager {
     this._releaseDamageHooks(state);
     releaseClonedWindowActors(state);
     if (state.remapReallocLaterId) {
-      try { global.compositor.get_laters().remove(state.remapReallocLaterId); } catch (_) { }
+      try { global.compositor.get_laters().remove(state.remapReallocLaterId); } catch { }
       state.remapReallocLaterId = 0;
     }
 
@@ -1497,7 +1497,7 @@ export class ApplicationManager {
         if (isActorValid(state.surfaceActor)) {
           state.surfaceActor.opacity = state.originalOpacity;
         }
-      } catch (e) {
+      } catch {
       }
     }
 
@@ -1505,7 +1505,7 @@ export class ApplicationManager {
       state.signals.forEach(sig => {
         try {
           sig.obj.disconnect(sig.id);
-        } catch (e) { }
+        } catch { }
       });
       state.signals = [];
     }
@@ -1534,7 +1534,7 @@ export class ApplicationManager {
     if (state.effect) {
       try {
         state.effect.cleanup();
-      } catch (e) { }
+      } catch { }
     }
 
     if (isActorValid(state.bgActor))

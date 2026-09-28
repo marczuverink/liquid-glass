@@ -24,7 +24,7 @@ export function syncGlassCaptureClip(opts: {
       (cloneContainer as any)._lgClipY = undefined;
       (cloneContainer as any)._lgClipW = undefined;
       (cloneContainer as any)._lgClipH = undefined;
-      try { cloneContainer.remove_clip(); } catch (_) { }
+      try { cloneContainer.remove_clip(); } catch { }
     }
     uiSampler?.setCullRect(null);
     windowCloneManager?.setCullRect(null);
@@ -39,7 +39,7 @@ export function syncGlassCaptureClip(opts: {
   try {
     const r = effect.getCaptureClipRect();
     if (r) rect = [r[0], r[1], r[2], r[3]];
-  } catch (_) {
+  } catch {
     clear();
     return;
   }
@@ -69,7 +69,7 @@ export function syncGlassCaptureClip(opts: {
   } else if (cloneContainer && isActorValid(cloneContainer) &&
              (cloneContainer as any)._lgClipW !== undefined) {
     (cloneContainer as any)._lgClipW = undefined;
-    try { cloneContainer.remove_clip(); } catch (_) { }
+    try { cloneContainer.remove_clip(); } catch { }
   }
 
   effect._lgCaptureClip = rect.slice();

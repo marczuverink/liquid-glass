@@ -38,7 +38,7 @@ export function ensureWindowActorAllocated(
     }
 
     return '';
-  } catch (_) {
+  } catch {
     return '';
   }
 }
@@ -80,7 +80,7 @@ export function ensureGlassAllocated(
     actor.hide();
     actor.show();
     return true;
-  } catch (_) {
+  } catch {
     return false;
   }
 }
@@ -94,5 +94,5 @@ export function setActorVisible(actor: Clutter.Actor, visible: boolean): void {
       actor.queue_relayout();
       actor.get_parent()?.queue_relayout();
     }
-  } catch (_) { }
+  } catch { }
 }

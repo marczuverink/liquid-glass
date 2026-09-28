@@ -118,16 +118,16 @@ function _captureViaScreenshot(screenshot, rect) {
                         step: Math.max(1, Math.floor(Math.min(width, height) / SAMPLE_MAX_EDGE)),
                     });
                 }
-                catch (e) {
+                catch {
                     try {
                         stream.close(null);
                     }
-                    catch (_) { }
+                    catch { }
                     resolve(null);
                 }
             });
         }
-        catch (e) {
+        catch {
             resolve(null);
         }
     });
@@ -145,7 +145,7 @@ export function backdropLuminance(actor, root = null) {
                 };
             }
         }
-        catch (e) {
+        catch {
             return null;
         }
         if (root && node === root)
@@ -166,6 +166,10 @@ function _visibleTargets(actors) {
     }
     return { targets, rects };
 }
+function _rootOrMergedRect(root, rects) {
+    const rootRect = root ? _getActorRect(root) : null;
+    return rootRect ?? _mergeRects(rects);
+}
 function _readSignature(paintSignature) {
     if (!paintSignature)
         return null;
@@ -173,7 +177,7 @@ function _readSignature(paintSignature) {
         const v = paintSignature();
         return Number.isFinite(v) ? v : null;
     }
-    catch (_) {
+    catch {
         return null;
     }
 }
@@ -239,7 +243,7 @@ export class StageContrastSampler {
             }
             return _trimmedMean(values, 0.10);
         }
-        catch (e) {
+        catch {
             return null;
         }
     }
@@ -293,8 +297,9 @@ export class StageContrastSampler {
         const { targets, rects } = _visibleTargets(actors);
         if (targets.length === 0)
             return new Map();
-        const merged = config.samplePerElement ? null : (root ? _getActorRect(root) : null) ?? _mergeRects(rects);
-        const sampledRects = config.samplePerElement ? rects : (merged ? [merged] : []);
+        const merged = config.samplePerElement ? null : _rootOrMergedRect(root, rects);
+        const mergedRects = merged ? [merged] : [];
+        const sampledRects = config.samplePerElement ? rects : mergedRects;
         const key = _skipKey(config.samplePerElement ? rects : [...sampledRects, ...rects], config);
         const before = _readSignature(paintSignature);
         if (before !== null && before === this._unchangedSignature && key === this._unchangedKey)

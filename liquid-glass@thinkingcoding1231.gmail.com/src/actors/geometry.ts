@@ -27,12 +27,12 @@ export function getAllocatedSize(actor: Clutter.Actor): [number, number] {
     if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
       return [w, h];
     }
-  } catch (_) { }
+  } catch { }
 
   try {
     const [w, h] = actor.get_size();
     return [w, h];
-  } catch (_) {
+  } catch {
     return [0, 0];
   }
 }
@@ -46,13 +46,13 @@ export function getTransformedRect(actor: Clutter.Actor): [number, number, numbe
       Number.isFinite(w) && Number.isFinite(h)) {
       return [x, y, w, h];
     }
-  } catch (_) { }
+  } catch { }
 
   try {
     const [x, y] = actor.get_transformed_position();
     const [w, h] = getAllocatedSize(actor);
     return [x, y, w, h];
-  } catch (_) {
+  } catch {
     return [0, 0, 0, 0];
   }
 }
@@ -90,7 +90,7 @@ export function computeCaptureLayout(
       rawX2 = rawX1 + pv.get_width();
       rawY2 = rawY1 + pv.get_height();
     }
-  } catch (e) {
+  } catch {
   }
   if (!Number.isFinite(rawX1) || !Number.isFinite(rawY1) ||
     !Number.isFinite(rawX2) || !Number.isFinite(rawY2)) {

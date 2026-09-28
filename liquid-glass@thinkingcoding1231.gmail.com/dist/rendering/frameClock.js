@@ -11,7 +11,7 @@ export function ensureFrameSerialHook() {
         _frameSerialStage = stage;
         _frameSerialHandler = stage.connect('after-paint', () => { frameSerial++; });
     }
-    catch (e) {
+    catch {
         _frameSerialStage = null;
         _frameSerialHandler = 0;
     }
@@ -26,7 +26,7 @@ export function releaseFrameSerialHook() {
     try {
         _frameSerialStage?.disconnect(_frameSerialHandler);
     }
-    catch (e) { }
+    catch { }
     _frameSerialStage = null;
     _frameSerialHandler = 0;
 }

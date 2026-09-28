@@ -636,7 +636,7 @@ export class QuickSettingsManager {
   }
 
   private _laterAdd(callback: GLib.SourceFunc): number {
-    return global.compositor?.get_laters?.().add(Meta.LaterType.BEFORE_REDRAW, callback);
+    return global.compositor?.get_laters?.().add(Meta.LaterType.BEFORE_REDRAW, callback) ?? 0;
   }
 
   private _buildClones(): void {
@@ -732,7 +732,7 @@ export class QuickSettingsManager {
     if (!this._panelContentClone || !isActorValid(this._panelContentClone) ||
       !this._panelContentClone.get_stage || !this._panelContentClone.get_stage()) {
       if (isActorValid(this._panelContentClone)) {
-        try { this._panelContentClone.destroy(); } catch (e) { }
+        try { this._panelContentClone.destroy(); } catch { }
       }
       let material = new UnpickableStyledWidget();
       material.set_name('liquid-glass-panel-material');
@@ -763,7 +763,7 @@ export class QuickSettingsManager {
 
   _destroyPanelContentClone(): void {
     if (isActorValid(this._panelContentClone)) {
-      try { this._panelContentClone.destroy(); } catch (e) { }
+      try { this._panelContentClone.destroy(); } catch { }
     }
     this._panelContentClone = null;
   }
@@ -1224,7 +1224,7 @@ export class QuickSettingsManager {
     if (this._backdropRefreshId) global.compositor.get_laters().remove(this._backdropRefreshId);
     this._backdropRefreshId = 0;
     for (const [actor, ids] of this._backdropSignals ?? []) {
-      for (const id of ids) { try { actor.disconnect(id); } catch (_) { } }
+      for (const id of ids) { try { actor.disconnect(id); } catch { } }
     }
     this._backdropSignals?.clear();
     this._backdropColors?.clear();
@@ -1478,7 +1478,7 @@ export class QuickSettingsManager {
       for (const [button, signalIds] of this._buttonSignalIds.entries()) {
         if (button) {
           for (const id of signalIds) {
-            try { button.disconnect(id); } catch (e) { }
+            try { button.disconnect(id); } catch { }
           }
         }
       }
@@ -1631,7 +1631,7 @@ export class QuickSettingsManager {
     }
 
     for (let submenu of foundMenus) {
-      try { submenu.translation_x = 0; } catch (e) { }
+      try { submenu.translation_x = 0; } catch { }
     }
 
     this._cachedSubmenus = null;
@@ -1649,12 +1649,12 @@ export class QuickSettingsManager {
     this._destroyPanelContentClone();
 
     for (let sig of this._signals) {
-      try { if (sig && sig.id) sig.target.disconnect(sig.id); } catch (e) { }
+      try { if (sig && sig.id) sig.target.disconnect(sig.id); } catch { }
     }
     this._signals = [];
 
     if (this._animSignalId) {
-      try { this.menu.disconnect(this._animSignalId); } catch (e) { }
+      try { this.menu.disconnect(this._animSignalId); } catch { }
       this._animSignalId = 0;
     }
 
@@ -1702,7 +1702,7 @@ export class QuickSettingsManager {
     }
     if (this._toggleGlassHost) {
       if (isActorValid(this._toggleGlassHost)) {
-        try { this._toggleGlassHost.destroy(); } catch (e) { }
+        try { this._toggleGlassHost.destroy(); } catch { }
       }
       this._toggleGlassHost = null;
     }
@@ -1732,7 +1732,7 @@ export class QuickSettingsManager {
     } catch (e) {
       try {
         this._logger?.error(`[Liquid Glass] ${this.constructor.name}.${name} failed during cleanup: ${e}`);
-      } catch (_) {
+      } catch {
         console.error(`[Liquid Glass] ${name} failed during cleanup: ${e}`);
       }
     }
@@ -1751,7 +1751,7 @@ export class QuickSettingsManager {
 
     this._teardownStep('settingsSignals', () => {
       for (let sigId of this._settingsSignals) {
-        try { this._settings.disconnect(sigId); } catch (e) { }
+        try { this._settings.disconnect(sigId); } catch { }
       }
       this._settingsSignals = [];
     });

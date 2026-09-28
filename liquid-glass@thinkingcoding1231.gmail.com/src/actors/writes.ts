@@ -86,7 +86,7 @@ export function setCloneCulled(actor: any, culled: boolean, why?: string | (() =
 
   if (why && utilsLogEnabled()) {
     let name = '(?)';
-    try { name = actor.get_name?.() || '(unnamed)'; } catch (_) { }
+    try { name = actor.get_name?.() || '(unnamed)'; } catch { }
     const text = typeof why === 'function' ? why() : why;
     utilsLog(`[Liquid Glass][cull] ${culled ? 'CULL ' : 'SHOW '} "${name}" ${text}`);
   }
@@ -96,7 +96,7 @@ export function setCloneCulled(actor: any, culled: boolean, why?: string | (() =
     actor._lgOpacity = undefined;
   }
 
-  try { actor.get_parent?.()?.queue_redraw(); } catch (_) { }
+  try { actor.get_parent?.()?.queue_redraw(); } catch { }
 }
 
 export function isCloneCulled(actor: any): boolean {

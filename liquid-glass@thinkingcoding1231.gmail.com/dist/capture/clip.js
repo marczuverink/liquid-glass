@@ -16,7 +16,7 @@ export function syncGlassCaptureClip(opts) {
             try {
                 cloneContainer.remove_clip();
             }
-            catch (_) { }
+            catch { }
         }
         uiSampler?.setCullRect(null);
         windowCloneManager?.setCullRect(null);
@@ -38,7 +38,7 @@ export function syncGlassCaptureClip(opts) {
         if (r)
             rect = [r[0], r[1], r[2], r[3]];
     }
-    catch (_) {
+    catch {
         clear();
         return;
     }
@@ -77,7 +77,7 @@ export function syncGlassCaptureClip(opts) {
         try {
             cloneContainer.remove_clip();
         }
-        catch (_) { }
+        catch { }
     }
     effect._lgCaptureClip = rect.slice();
     const screenRect = [rect[0] + originX, rect[1] + originY, rect[2], rect[3]];

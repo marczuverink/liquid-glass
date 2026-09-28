@@ -112,7 +112,7 @@ export const LiquidEffect = GObject.registerClass({
                     const a = this.get_actor();
                     return a?.get_meta_window?.()?.get_title?.() ?? a?.get_name?.() ?? '?';
                 }
-                catch (e) {
+                catch {
                     return '?';
                 }
             })();
@@ -191,7 +191,7 @@ export const LiquidEffect = GObject.registerClass({
         try {
             actor._lgCaptureOffset = [layout.dest[0], layout.dest[1]];
         }
-        catch (e) { }
+        catch { }
         const resW = this._uniforms.values.get('resolution_x') ?? 0;
         const resH = this._uniforms.values.get('resolution_y') ?? 0;
         const spacesAgree = Math.abs(resW - effectiveW) <= 1 && Math.abs(resH - effectiveH) <= 1;
@@ -321,7 +321,7 @@ export const LiquidEffect = GObject.registerClass({
                 actor: (() => { try {
                     return this.get_actor()?.get_name?.() ?? '?';
                 }
-                catch (e) {
+                catch {
                     return '?';
                 } })(),
                 src: `${srcW}x${srcH}`,

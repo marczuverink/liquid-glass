@@ -39,7 +39,7 @@ function _reconcileCullOptOut() {
             if (isActorValid(actor))
                 actor.remove_effect(effect);
         }
-        catch (_) { }
+        catch { }
     }
     if (_cullOptOutEffects.size !== before) {
         utilsLog(`[cull-opt-out] holding ${_cullOptOutEffects.size} window actor(s)` +
@@ -47,7 +47,7 @@ function _reconcileCullOptOut() {
                 try {
                     return a.get_meta_window()?.get_title() ?? '?';
                 }
-                catch (_) {
+                catch {
                     return '?';
                 }
             }).join(', ')}]`);
