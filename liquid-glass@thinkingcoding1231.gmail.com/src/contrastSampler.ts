@@ -292,7 +292,7 @@ function _readSignature(paintSignature?: () => number): number | null {
 function _skipKey(rects: SampleRect[], config: typeof AdaptiveContrastConfig): string {
   return rects
     .map(r => `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}`)
-    .join(';') + `|${config.samplePerElement ? 'e' : 'm'}|${config.lightTextColor}|${config.darkTextColor}`;
+    .join(';') + `|${config.samplePerElement ? 'e' : 'm'}|${config.preference ?? 'auto'}|${config.lightTextColor}|${config.darkTextColor}`;
 }
 
 type LuminanceShot = { data: ArrayLike<number>, width: number, height: number, stride: number, channels: number, step: number };
@@ -333,6 +333,8 @@ export class StageContrastSampler {
   private _lastIsBright: boolean | null = null;
   /** Monotonic time of the last polarity change (null: none yet); see SWITCH_SETTLE_MS. */
   private _lastSwitchAt: number | null = null;
+  /** The configuration the hold was started under; see decideTextColor(). */
+  private _holdConfig: string = '';
   private _roundsSinceFlip: number = READABILITY_FLIP_COOLDOWN;
   private _lastRawLuma: number | null = null;
   private _lastRect: { x: number; y: number; width: number; height: number } | null = null;
@@ -427,8 +429,15 @@ export class StageContrastSampler {
     // ~380ms the colour tween runs, every measurement is partly a measurement
     // of our own in-progress change — a feedback loop that can sustain the
     // ping-pong on its own even with the hysteresis below. An unreadable
-    // colour is never held when the other one is readable.
+    // colour is never held when the other one is readable, and a changed
+    // configuration (the preferred colour, the two text colours) ends the
+    // hold: it is not a measurement, and the user expects it to apply at once.
     const now = GLib.get_monotonic_time();
+    const holdConfig = `${preference}|${config.lightTextColor}|${config.darkTextColor}`;
+    if (holdConfig !== this._holdConfig) {
+      this._holdConfig = holdConfig;
+      this._lastSwitchAt = null;
+    }
     if (this._lastIsBright !== null && this._inSettleHold(now)) {
       const heldContrast = this._lastIsBright ? rawDark : rawLight;
       const otherContrast = this._lastIsBright ? rawLight : rawDark;

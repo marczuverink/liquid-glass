@@ -408,6 +408,29 @@ test('an unrepainted glass skips the capture once the decision has settled', asy
   assert.equal(captures, settled + 1);
 });
 
+for (const samplePerElement of [false, true]) {
+  test(`changing preferred text colour resamples idle glass (per element: ${samplePerElement})`, async () => {
+    const sampler = new Sampler();
+    const root = {mapped: true, rect: [0, 0, 300, 400]};
+    const rows = [{mapped: true, rect: [10, 10, 100, 20]}];
+    const settings = {...config, samplePerElement, preference: 'light'};
+    let captures = 0;
+    sampler.sampleLuminance = async () => { captures++; return 0.19; };
+    const choose = () => sampler.chooseColorsForActors(rows, settings, root, () => 7);
+    assert.equal((await choose()).get(rows[0]), config.lightTextColor);
+    for (let i = 0; i < 20; i++) await choose();
+    const settled = captures;
+    assert.equal((await choose()).size, 0);
+    assert.equal(captures, settled);
+
+    settings.preference = 'dark';
+    assert.equal((await choose()).get(rows[0]), config.darkTextColor);
+    assert.equal(captures, settled + 1);
+    settings.preference = 'light';
+    assert.equal((await choose()).get(rows[0]), config.lightTextColor);
+  });
+}
+
 test('the skip baseline is dropped when the region, config or screen changes', async () => {
   const sampler = new Sampler();
   const root = { mapped: true, rect: [0, 0, 300, 400] };
@@ -538,4 +561,22 @@ test('glyphs covering a large minority of the sample do not move the measured ba
   });
   const measured = await new ShotSampler().sampleLuminance({ x: 0, y: 0, width, height });
   assert.ok(Math.abs(measured - linear(20)) < 1e-9, `measured ${measured}, background ${linear(20)}`);
+});
+
+test('changing the preferred colour ends the settle hold at once', () => {
+  let now = 0;
+  const { StageContrastSampler: TimedSampler } = load('contrastSampler.js', 'StageContrastSampler', {
+    Shell: { Screenshot: class {} }, getTransformedRect: actor => actor.rect,
+    GLib: { get_monotonic_time: () => now },
+    global: { stage: { width: 3840, height: 2160 } },
+  });
+  const sampler = new TimedSampler();
+  now = 1e6;
+  const light = { ...config, preference: 'light' }, dark = { ...config, preference: 'dark' };
+  assert.equal(sampler.decideTextColor(0.19, light), config.lightTextColor);
+  assert.equal(sampler.decideTextColor(0.19, dark), config.darkTextColor);
+  now += 50e3;
+  assert.equal(sampler.decideTextColor(0.19, light), config.lightTextColor, 'not held by the flip 50 ms ago');
+  now += 50e3;
+  assert.equal(sampler.decideTextColor(0.2, light), config.lightTextColor);
 });
