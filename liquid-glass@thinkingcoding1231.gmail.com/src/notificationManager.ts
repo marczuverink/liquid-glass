@@ -2,17 +2,16 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import GLib from 'gi://GLib';
-import Meta from 'gi://Meta';
 import { LiquidEffect } from './liquidEffect.js';
 import { StageContrastSampler, AdaptiveContrastConfig } from './contrastSampler.js';
 import Gio from 'gi://Gio';
 import { UnpickableActor } from './actors/unpickable.js';
 import { UILayerSampler } from './capture/uiLayerSampler.js';
 import { WindowCloneManager } from './capture/windowClones.js';
-import { reportFrameLoopError } from './diagnostics/logging.js';
 import { ensureGlassAllocated } from './actors/allocation.js';
 import { getTransformedRect, resolveMonitorGeometry } from './actors/geometry.js';
-import { isFrameSyncFrozen } from './animation/frameSync.js';
+import { startLaterLoop, stopLaterLoop } from './animation/frameLoops.js';
+import { excludeOtherGlass } from './capture/glassExclusions.js';
 import { setClipIfChanged } from './actors/writes.js';
 import { syncGlassCaptureClip } from './capture/clip.js';
 import { resolveCrossFade, adaptiveColorTweener } from './animation/colors.js';
@@ -45,6 +44,9 @@ export class NotificationManager {
   private _signals: number[];
   private _settingsSignals: number[];
   private _frameSyncId: number;
+  private get _frameSlot() {
+    return { get: () => this._frameSyncId, set: (id: number) => { this._frameSyncId = id; } };
+  }
   private _torndown: boolean = false;
   private _isEffectActive: boolean;
 
@@ -330,36 +332,23 @@ export class NotificationManager {
 
     this._buildClones();
 
-    const frameLaterType = Meta.LaterType.BEFORE_REDRAW;
-    const frameTick = () => {
-      this._frameSyncId = 0;
-      if (this._torndown) return GLib.SOURCE_REMOVE;
-      if (!this.bgActor || !this.currentBanner) return GLib.SOURCE_REMOVE;
-
-      if (isFrameSyncFrozen()) {
-        this._frameSyncId = this._laterAdd(frameLaterType, frameTick);
-        return GLib.SOURCE_REMOVE;
-      }
-
-      ensureGlassAllocated(this.bgActor);
-      try {
+    stopLaterLoop(this._frameSlot);
+    startLaterLoop(this._frameSlot, {
+      alive: () => !this._torndown && !!this.bgActor && !!this.currentBanner,
+      honourFreeze: true,
+      errorTag: 'NotificationManager',
+      step: () => {
+        ensureGlassAllocated(this.bgActor);
         this._syncGeometry();
 
-        let isHovered = this.currentBanner.hover;
+        let isHovered = this.currentBanner!.hover;
         let targetTint = isHovered ? (this._baseTint + 0.1) : this._baseTint;
         if (Math.abs(this._currentTint - targetTint) > 0.001) {
           this._currentTint += (targetTint - this._currentTint) * 0.1;
           this.effect?.setTintStrength(this._currentTint);
         }
-      } catch (e) {
-        reportFrameLoopError('NotificationManager', e);
-      }
-
-      this._frameSyncId = this._laterAdd(frameLaterType, frameTick);
-      return GLib.SOURCE_REMOVE;
-    };
-
-    this._frameSyncId = this._laterAdd(frameLaterType, frameTick);
+      },
+    });
     this._isFirstAdaptiveRun = true;
     this._startAdaptiveColorSampling();
   }
@@ -444,16 +433,7 @@ export class NotificationManager {
 
   _buildClones() {
     if (!this.bgActor) return;
-
-    if (this._uiSampler) {
-      for (let child of Main.layoutManager.uiGroup.get_children()) {
-        if (child === this.bgActor) continue;
-        let isLiquidBg = child.get_name?.() === 'liquid-glass-bg-actor' ||
-          (typeof child.get_children === 'function' &&
-            child.get_children().some((c: Clutter.Actor) => c.get_name?.() === 'liquid-box'));
-        if (isLiquidBg) this._uiSampler.addExclusion(child);
-      }
-    }
+    excludeOtherGlass(this._uiSampler, this.bgActor);
 
     this._windowCloneManager?.rebuildClones();
     this._uiSampler?.rebindSelf();
@@ -477,10 +457,7 @@ export class NotificationManager {
       this.currentBanner = null;
     }
 
-    if (this._frameSyncId !== 0) {
-      if (global.compositor?.get_laters) global.compositor.get_laters().remove(this._frameSyncId);
-      this._frameSyncId = 0;
-    }
+    stopLaterLoop(this._frameSlot);
 
     if (this.effect) {
       this.effect.cleanup();
@@ -541,13 +518,7 @@ export class NotificationManager {
   cleanup() {
     this._torndown = true;
 
-    this._teardownStep('frameSync', () => {
-      if (this._frameSyncId !== 0) {
-        if (global.compositor?.get_laters)
-          global.compositor.get_laters().remove(this._frameSyncId);
-        this._frameSyncId = 0;
-      }
-    });
+    this._teardownStep('frameSync', () => stopLaterLoop(this._frameSlot));
 
     this._teardownStep('settingsSignals', () => {
       for (let sigId of this._settingsSignals) {
@@ -714,9 +685,5 @@ export class NotificationManager {
   _hasStyleClass(actor: St.Widget, className: string) {
     return typeof actor?.has_style_class_name === 'function' &&
       actor.has_style_class_name(className);
-  }
-
-  _laterAdd(laterType: Meta.LaterType, callback: GLib.SourceFunc) {
-    return global.compositor?.get_laters?.().add(laterType, callback);
   }
 }

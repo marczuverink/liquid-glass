@@ -232,3 +232,16 @@ for (const honourFreeze of [true, false]) test(`quick-settings frame sync keeps 
   assert.equal(pending.size, 0);
   assert.equal(manager._frameSyncId, 0);
 });
+
+test('equal numbers in the other coordinate space still move the quick-settings glass', () => {
+  const { manager } = fixture();
+  const positions = [];
+  const bgActor = { remove_transition() {}, set_size() {}, set_clip() {}, set_position(x, y) { positions.push([x, y]); } };
+  Object.assign(manager, { bgActor, liquidBox: null, effect: null });
+  manager._applyPanelBounds(bgActor, 10, 20, 300, 200, 0, 0, 1920, 1080);
+  manager._applyPanelBounds(bgActor, 10, 20, 300, 200, 0, 0, 1920, 1080);
+  assert.equal(positions.length, 1, 'unchanged panel bounds are skipped');
+  manager._applyToggleBounds(bgActor, 10, 20, 300, 200, -5, -5, 1920, 1080);
+  assert.equal(positions.length, 2, 'the toggle path does not reuse the panel path cache');
+  assert.deepEqual(positions[1], [-5, -5]);
+});

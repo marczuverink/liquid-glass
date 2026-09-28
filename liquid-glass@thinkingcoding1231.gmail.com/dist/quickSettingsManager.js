@@ -1,5 +1,5 @@
 import { ToggleStyles } from './quickSettings/toggleStyles.js';
-import { stepMenuSprings, applyMenuFrame, showMenuAtRest } from './animation/menuSpring.js';
+import { stepMenuSpring, applyMenuFrame, showMenuAtRest } from './animation/menuSpring.js';
 import { addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs } from './animation/frameTicker.js';
 import { Spring } from './animation/spring.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -12,12 +12,12 @@ import { StageContrastSampler, AdaptiveContrastConfig } from './contrastSampler.
 import { UnpickableActor, LayoutOpaqueActor, UnpickableStyledWidget } from './actors/unpickable.js';
 import { UILayerSampler } from './capture/uiLayerSampler.js';
 import { WindowCloneManager } from './capture/windowClones.js';
-import { reportFrameLoopError } from './diagnostics/logging.js';
 import { ensureGlassAllocated } from './actors/allocation.js';
 import { isActorValid } from './actors/lifecycle.js';
 import { resolveMonitorGeometry, getAllocatedSize, getTransformedRect } from './actors/geometry.js';
-import { isFrameSyncFrozen } from './animation/frameSync.js';
-import { setClipIfChanged } from './actors/writes.js';
+import { startLaterLoop, stopLaterLoop } from './animation/frameLoops.js';
+import { excludeOtherGlass } from './capture/glassExclusions.js';
+import { placeScreenGlass, resolveGlassOrigin, applyGlassScale, GLASS_SHADOW_MAX_RADIUS } from './actors/glassBounds.js';
 import { syncGlassCaptureClip } from './capture/clip.js';
 import { resolveCrossFade, adaptiveColorTweener } from './animation/colors.js';
 const SHADER_PADDING = 20;
@@ -87,12 +87,14 @@ export class QuickSettingsManager {
     _signals;
     _animSignalId = 0;
     _frameSyncId;
+    get _frameSlot() {
+        return { get: () => this._frameSyncId, set: (id) => { this._frameSyncId = id; } };
+    }
     _torndown = false;
     _glassExpand;
     _menuXoffset;
     _menuYoffset;
     _springScale;
-    _springPos;
     _springStiffness;
     _springDamping;
     _springMass;
@@ -117,6 +119,9 @@ export class QuickSettingsManager {
     _lastValidAnimAbsX;
     _lastValidAnimAbsY;
     _lastBgW;
+    _lastBoundsSpace;
+    _lastHostX;
+    _lastHostY;
     _lastBgH;
     _lastBgX;
     _lastBgY;
@@ -149,7 +154,6 @@ export class QuickSettingsManager {
         this._menuXoffset = 0;
         this._menuYoffset = 0;
         this._springScale = new Spring(120, 8, 1.0);
-        this._springPos = new Spring(300, 12, 1.0);
         this._springStiffness = 120;
         this._springDamping = 8;
         this._springMass = 1.0;
@@ -175,7 +179,6 @@ export class QuickSettingsManager {
         this._springDamping = this._settings.get_double('quick-settings-spring-damping');
         this._springMass = this._settings.get_double('quick-settings-spring-mass');
         this._springScale.updateParams(this._springStiffness, this._springDamping, this._springMass);
-        this._springPos.updateParams(this._springStiffness, this._springDamping, this._springMass);
         this._applyTo = this._settings.get_int('quick-settings-apply-to') === 1 ? 'toggles' : 'background';
         this._toggleBaseStrength = this._settings.get_double('quick-settings-toggle-tint-strength');
         this._toggleCornerRadius = this._settings.get_double('quick-settings-toggle-corner-radius');
@@ -554,23 +557,10 @@ export class QuickSettingsManager {
             startFrameSync();
         }
     }
-    _laterAdd(callback) {
-        return global.compositor?.get_laters?.().add(Meta.LaterType.BEFORE_REDRAW, callback) ?? 0;
-    }
     _buildClones() {
         if (!this.bgActor)
             return;
-        if (this._uiSampler) {
-            for (let child of Main.layoutManager.uiGroup.get_children()) {
-                if (child === this.bgActor)
-                    continue;
-                let isLiquidBg = child.get_name?.() === 'liquid-glass-bg-actor' ||
-                    (typeof child.get_children === 'function' &&
-                        child.get_children().some((c) => c.get_name?.() === 'liquid-box'));
-                if (isLiquidBg)
-                    this._uiSampler.addExclusion(child);
-            }
-        }
+        excludeOtherGlass(this._uiSampler, this.bgActor);
         this._windowCloneManager?.rebuildClones();
         this._uiSampler?.rebindSelf();
         this._uiSampler?.refresh();
@@ -579,34 +569,18 @@ export class QuickSettingsManager {
         if (this._frameSyncId !== 0)
             return;
         this._buildClones();
-        const tick = () => {
-            this._frameSyncId = 0;
-            if (this._torndown)
-                return GLib.SOURCE_REMOVE;
-            if (!this.bgActor || !this.targetActor.mapped)
-                return GLib.SOURCE_REMOVE;
-            if (honourFreeze && isFrameSyncFrozen()) {
-                this._frameSyncId = this._laterAdd(tick);
-                return GLib.SOURCE_REMOVE;
-            }
-            ensureGlassAllocated(this.bgActor);
-            try {
+        startLaterLoop(this._frameSlot, {
+            alive: () => !this._torndown && !!this.bgActor && this.targetActor.mapped,
+            honourFreeze,
+            errorTag,
+            step: () => {
+                ensureGlassAllocated(this.bgActor);
                 sync();
-            }
-            catch (e) {
-                reportFrameLoopError(errorTag, e);
-            }
-            this._frameSyncId = this._laterAdd(tick);
-            return GLib.SOURCE_REMOVE;
-        };
-        this._frameSyncId = this._laterAdd(tick);
+            },
+        });
     }
     _stopFrameSync() {
-        if (this._frameSyncId === 0)
-            return;
-        if (global.compositor?.get_laters)
-            global.compositor.get_laters().remove(this._frameSyncId);
-        this._frameSyncId = 0;
+        stopLaterLoop(this._frameSlot);
     }
     _panelActorWarned = false;
     _resolvePanelActor() {
@@ -805,22 +779,16 @@ export class QuickSettingsManager {
         return this._takeLastRegions();
     }
     _applyToggleBounds(bgActor, localBgX, localBgY, bgW, bgH, bgPosX, bgPosY, screenW, screenH) {
-        if (this._lastBgW === bgW && this._lastBgH === bgH &&
+        if (this._lastBoundsSpace === 'toggles' && this._lastBgW === bgW && this._lastBgH === bgH &&
             this._lastBgX === localBgX && this._lastBgY === localBgY &&
+            this._lastHostX === bgPosX && this._lastHostY === bgPosY &&
             this._lastScreenW === screenW && this._lastScreenH === screenH)
             return;
-        bgActor.remove_transition('size');
-        bgActor.remove_transition('position');
-        bgActor.set_position(bgPosX, bgPosY);
-        bgActor.set_size(screenW, screenH);
-        bgActor.remove_transition('size');
-        bgActor.remove_transition('position');
-        this.liquidBox?.set_position(0, 0);
-        this.liquidBox?.set_size(screenW, screenH);
-        const CLIP_PADDING = 200;
-        this.liquidBox?.remove_clip();
-        setClipIfChanged(bgActor, localBgX - CLIP_PADDING, localBgY - CLIP_PADDING, bgW + CLIP_PADDING * 2, bgH + CLIP_PADDING * 2);
+        placeScreenGlass(bgActor, this.liquidBox, bgPosX, bgPosY, screenW, screenH, { x: localBgX, y: localBgY, w: bgW, h: bgH }, true);
         this.effect?.setResolution(screenW, screenH);
+        this._lastBoundsSpace = 'toggles';
+        this._lastHostX = bgPosX;
+        this._lastHostY = bgPosY;
         this._lastBgW = bgW;
         this._lastBgH = bgH;
         this._lastBgX = localBgX;
@@ -917,41 +885,25 @@ export class QuickSettingsManager {
         };
     }
     _resolvePanelOrigin(w) {
-        const [animAbsX, animAbsY] = this.animActor.get_transformed_position();
-        if (!Number.isNaN(animAbsX) && !Number.isNaN(animAbsY)) {
-            this._lastValidAnimAbsX = animAbsX;
-            this._lastValidAnimAbsY = animAbsY;
-            return [animAbsX, animAbsY];
-        }
-        if (this._lastValidAnimAbsX !== undefined && this._lastValidAnimAbsY !== undefined)
-            return [this._lastValidAnimAbsX, this._lastValidAnimAbsY];
-        const monitor = Main.layoutManager.primaryMonitor;
-        if (!monitor)
-            return [0, 0];
-        return [(monitor.width / 2) - (w / 2), (Main.panel.height || 27) + (this._menuYoffset ?? 0)];
+        return resolveGlassOrigin(this.animActor, this, () => {
+            const monitor = Main.layoutManager.primaryMonitor;
+            if (!monitor)
+                return [0, 0];
+            return [(monitor.width / 2) - (w / 2), (Main.panel.height || 27) + (this._menuYoffset ?? 0)];
+        });
     }
     _applyPanelBounds(bgActor, bgX, bgY, bgW, bgH, monitorX, monitorY, screenW, screenH) {
-        if (this._lastBgW === bgW && this._lastBgH === bgH &&
+        if (this._lastBoundsSpace === 'panel' && this._lastBgW === bgW && this._lastBgH === bgH &&
             this._lastBgX === bgX && this._lastBgY === bgY &&
             this._lastScreenW === screenW && this._lastScreenH === screenH)
             return;
         let localBgX = bgX - monitorX;
         let localBgY = bgY - monitorY;
-        bgActor.remove_transition('size');
-        bgActor.remove_transition('position');
-        bgActor.set_position(monitorX, monitorY);
-        bgActor.set_size(screenW, screenH);
-        bgActor.remove_transition('size');
-        bgActor.remove_transition('position');
-        this.liquidBox?.set_position(0, 0);
-        this.liquidBox?.set_size(screenW, screenH);
-        const CLIP_PADDING = 200;
-        this.liquidBox?.remove_clip();
-        setClipIfChanged(bgActor, localBgX - CLIP_PADDING, localBgY - CLIP_PADDING, bgW + CLIP_PADDING * 2, bgH + CLIP_PADDING * 2);
-        const SHADOW_MAX_RADIUS = CLIP_PADDING - 20;
-        this.effect?.setShadowMaxRadius(SHADOW_MAX_RADIUS);
+        placeScreenGlass(bgActor, this.liquidBox, monitorX, monitorY, screenW, screenH, { x: localBgX, y: localBgY, w: bgW, h: bgH }, true);
+        this.effect?.setShadowMaxRadius(GLASS_SHADOW_MAX_RADIUS);
         this.effect?.setResolution(screenW, screenH);
         this.effect?.setGlassGeometry(localBgX, localBgY, bgW, bgH);
+        this._lastBoundsSpace = 'panel';
         this._lastBgW = bgW;
         this._lastBgH = bgH;
         this._lastBgX = bgX;
@@ -960,13 +912,7 @@ export class QuickSettingsManager {
         this._lastScreenH = screenH;
     }
     _applyGlassScale(scaleX, scaleY) {
-        if (!this.effect || typeof this.effect.setCornerRadius !== 'function')
-            return;
-        let currentScale = Math.min(scaleX, scaleY);
-        this.effect.setCornerRadius(this._cornerRadius * currentScale);
-        if (typeof this.effect.setAnimationScale === 'function') {
-            this.effect.setAnimationScale(currentScale);
-        }
+        applyGlassScale(this.effect, this._cornerRadius, scaleX, scaleY);
     }
     _updateResolution() {
         if (!this.bgActor || !this.effect)
@@ -1374,7 +1320,6 @@ export class QuickSettingsManager {
         if (this.bgActor)
             this.bgActor.remove_all_transitions();
         this._springScale.target = targetValue;
-        this._springPos.target = targetValue;
         if (this._tickId === 0) {
             let lastTime = GLib.get_monotonic_time();
             this._tickId = addFrameTicker(() => {
@@ -1385,7 +1330,7 @@ export class QuickSettingsManager {
                 let currentTime = GLib.get_monotonic_time();
                 let elapsedMs = (currentTime - lastTime) / 1000;
                 lastTime = currentTime;
-                const frame = stepMenuSprings(this._springScale, this._springPos, elapsedMs);
+                const frame = stepMenuSpring(this._springScale, elapsedMs);
                 if (frame.stopped)
                     this._tickId = 0;
                 applyMenuFrame(frame, this.animActor, this.bgActor, this.menu.actor, () => this._syncGeometry());
@@ -1491,6 +1436,7 @@ export class QuickSettingsManager {
         this._lastScreenW = undefined;
         this._lastScreenH = undefined;
         this._lastBgW = undefined;
+        this._lastBoundsSpace = undefined;
         this._lastBgH = undefined;
         this._lastBgX = undefined;
         this._lastBgY = undefined;
@@ -1516,11 +1462,7 @@ export class QuickSettingsManager {
             removeFrameTicker(this._tickId);
             this._tickId = 0;
         }
-        if (this._frameSyncId !== 0) {
-            if (global.compositor?.get_laters)
-                global.compositor.get_laters().remove(this._frameSyncId);
-            this._frameSyncId = 0;
-        }
+        this._stopFrameSync();
     }
     _restoreMenuActors() {
         this.targetActor.remove_style_class_name('liquid-glass-transparent');
@@ -1560,11 +1502,7 @@ export class QuickSettingsManager {
     cleanup() {
         this._torndown = true;
         this._teardownStep('frameSync', () => {
-            if (this._frameSyncId !== 0) {
-                if (global.compositor?.get_laters)
-                    global.compositor.get_laters().remove(this._frameSyncId);
-                this._frameSyncId = 0;
-            }
+            this._stopFrameSync();
         });
         this._teardownStep('settingsSignals', () => {
             for (let sigId of this._settingsSignals) {

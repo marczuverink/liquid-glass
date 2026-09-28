@@ -64,9 +64,7 @@ class WindowListClient {
       try {
         const [json] = source.call_finish(result).deep_unpack();
         windows = JSON.parse(json);
-      } catch (e) {
-        // The usual cause is the extension being disabled: the object is only
-        // exported while it is running, so the call fails with UnknownMethod.
+      } catch {
         error = 'The window list is only available while the extension is enabled.';
       }
       callback(windows, error);
@@ -74,6 +72,68 @@ class WindowListClient {
   }
 }
 
+function windowRowSubtitle(info, rowTitle) {
+  const details = [];
+  if (rowTitle !== info.wmClass)
+    details.push(info.wmClass);
+  if (info.count > 1)
+    details.push(`${info.count} windows`);
+  if (!info.normal)
+    details.push('not a normal window — the effect cannot apply');
+  return details.join(' · ');
+}
+
+function windowIcon(info) {
+  const image = new Gtk.Image({ pixel_size: 32, valign: Gtk.Align.CENTER });
+  let icon = null;
+  try {
+    if (info.iconName)
+      icon = Gio.Icon.new_for_string(info.iconName);
+  } catch {
+    icon = null;
+  }
+  if (icon)
+    image.set_from_gicon(icon);
+  else
+    image.set_from_icon_name('application-x-executable-symbolic');
+  return image;
+}
+
+function addWindowRowSuffix(row, alreadyAdded, onAdd) {
+  if (alreadyAdded) {
+    const added = new Gtk.Image({
+      icon_name: 'object-select-symbolic',
+      valign: Gtk.Align.CENTER,
+      tooltip_text: 'Already in the list',
+    });
+    added.add_css_class('success');
+    row.add_suffix(added);
+    row.set_sensitive(false);
+    return;
+  }
+  const button = new Gtk.Button({
+    icon_name: 'list-add-symbolic',
+    valign: Gtk.Align.CENTER,
+    css_classes: ['flat'],
+    tooltip_text: 'Add',
+  });
+  button.connect('clicked', onAdd);
+  row.add_suffix(button);
+  row.activatable_widget = button;
+}
+
+function windowRow(info, alreadyAdded, onAdd) {
+  const rowTitle = info.appName || info.wmClass;
+  const row = new Adw.ActionRow({
+    title: rowTitle,
+    subtitle: windowRowSubtitle(info, rowTitle),
+    use_markup: false,
+    tooltip_text: (info.titles && info.titles.length) ? info.titles.join('\n') : null,
+  });
+  row.add_prefix(windowIcon(info));
+  addWindowRowSuffix(row, alreadyAdded, onAdd);
+  return row;
+}
 
 export class WindowRules {
   constructor(settings, controls) {
@@ -112,7 +172,6 @@ export class WindowRules {
     const listGroup = new Adw.PreferencesGroup({ title, description });
     page.add(listGroup);
 
-    // Only the currently relevant application list is shown.
     this.controls.watch([activeKey, 'enable-application-glass'], () => {
       listGroup.visible = settings.get_boolean('enable-application-glass') && settings.get_boolean(activeKey) === activeWhen;
     });
@@ -165,8 +224,6 @@ export class WindowRules {
 
     this.controls.watch([key], refreshList);
 
-    // Manual entry is kept for windows that are not currently open (or that the
-    // shell cannot report), but it is folded away so the picker is the default.
     const manualExpander = new Adw.ExpanderRow({
       title: 'Add by application ID',
     });
@@ -257,61 +314,9 @@ export class WindowRules {
       const current = settings.get_strv(key).map((v) => v.toLowerCase());
 
       for (const info of windows) {
-        const wmClass = info.wmClass;
-        if (!wmClass) continue;
-
-        const rowTitle = info.appName || wmClass;
-        const details = [];
-        if (rowTitle !== wmClass)
-          details.push(wmClass);
-        if (info.count > 1)
-          details.push(`${info.count} windows`);
-        if (!info.normal)
-          details.push('not a normal window — the effect cannot apply');
-
-        const row = new Adw.ActionRow({
-          title: rowTitle,
-          subtitle: details.join(' · '),
-          use_markup: false,
-          tooltip_text: (info.titles && info.titles.length) ? info.titles.join('\n') : null,
-        });
-
-        const image = new Gtk.Image({ pixel_size: 32, valign: Gtk.Align.CENTER });
-        let icon = null;
-        try {
-          if (info.iconName)
-            icon = Gio.Icon.new_for_string(info.iconName);
-        } catch (e) {
-          icon = null;
-        }
-        if (icon)
-          image.set_from_gicon(icon);
-        else
-          image.set_from_icon_name('application-x-executable-symbolic');
-        row.add_prefix(image);
-
-        if (current.includes(wmClass.toLowerCase())) {
-          const added = new Gtk.Image({
-            icon_name: 'object-select-symbolic',
-            valign: Gtk.Align.CENTER,
-            tooltip_text: 'Already in the list',
-          });
-          added.add_css_class('success');
-          row.add_suffix(added);
-          row.set_sensitive(false);
-        } else {
-          const button = new Gtk.Button({
-            icon_name: 'list-add-symbolic',
-            valign: Gtk.Align.CENTER,
-            css_classes: ['flat'],
-            tooltip_text: 'Add',
-          });
-          button.connect('clicked', () => this._addWindowClass(settings, key, wmClass));
-          row.add_suffix(button);
-          row.activatable_widget = button;
-        }
-
-        listBox.append(row);
+        if (!info.wmClass) continue;
+        listBox.append(windowRow(info, current.includes(info.wmClass.toLowerCase()),
+          () => this._addWindowClass(settings, key, info.wmClass)));
       }
     };
 
@@ -345,6 +350,5 @@ export class WindowRules {
 
     dialog.present(parentWidget);
   }
-
 
 }

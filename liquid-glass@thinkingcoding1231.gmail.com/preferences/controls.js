@@ -5,7 +5,6 @@ import Gdk from 'gi://Gdk';
 import GLib from 'gi://GLib';
 import {commonValue, matches, uniformPatch} from './model.js';
 
-// Owns multi-key editing and subscriptions. Opening a control never writes settings.
 export class PreferenceControls {
   constructor(settings, window) {
     this.settings = settings;
@@ -27,8 +26,6 @@ export class PreferenceControls {
   }
 
   write(patch) {
-    // A separate delayed instance batches shared edits without changing the
-    // apply semantics of ordinary bindings or the window picker.
     const transaction = new Gio.Settings({settings_schema: this.settings.settings_schema, path: this.settings.path});
     const changes = Object.entries(patch).map(([key, value]) => [key,
       new GLib.Variant(this.settings.get_value(key).get_type_string(), value)]);
@@ -67,7 +64,8 @@ export class PreferenceControls {
     const refresh = () => {
       syncing = true;
       const index = choices.findIndex(choice => matches(this.settings, choice.patch));
-      row.selected = index < 0 ? (custom ? choices.length : 0) : index;
+      const fallback = custom ? choices.length : 0;
+      row.selected = index < 0 ? fallback : index;
       syncing = false;
     };
     row.connect('notify::selected', () => {

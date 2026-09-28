@@ -2,7 +2,6 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import GLib from 'gi://GLib';
-import Meta from 'gi://Meta';
 import { LiquidEffect } from './liquidEffect.js';
 import Gio from 'gi://Gio';
 import { UnpickableActor } from './actors/unpickable.js';
@@ -11,6 +10,8 @@ import { WindowCloneManager } from './capture/windowClones.js';
 import { reportFrameLoopError } from './diagnostics/logging.js';
 import { ensureGlassAllocated } from './actors/allocation.js';
 import { isFrameSyncFrozen, SAME_FRAME_WINDOW_US } from './animation/frameSync.js';
+import { startStageLoop, stopStageLoop } from './animation/frameLoops.js';
+import { excludeOtherGlass } from './capture/glassExclusions.js';
 import { setClipIfChanged } from './actors/writes.js';
 import { syncGlassCaptureClip } from './capture/clip.js';
 import { isActorValid } from './actors/lifecycle.js';
@@ -312,29 +313,9 @@ export class DashManager {
 
     this.bgActor.show();
 
-    const laterAdd = (laterType: Meta.LaterType, callback: GLib.SourceFunc) => {
-      return global.compositor.get_laters().add(laterType, callback);
-    };
-
-    const frameLaterType = Meta.LaterType.BEFORE_REDRAW;
-
     let buildClones = () => {
       if (!this.bgActor) return;
-
-      if (this._uiSampler) {
-        for (let child of Main.layoutManager.uiGroup.get_children()) {
-          if (child === this.bgActor) continue;
-
-          let isLiquidBg = child.name === 'liquid-glass-bg-actor' ||
-            (typeof child.get_children === 'function' &&
-              child.get_children().some(c => c.name === 'liquid-box'));
-
-          if (isLiquidBg) {
-            this._uiSampler.addExclusion(child);
-          }
-        }
-      }
-
+      excludeOtherGlass(this._uiSampler, this.bgActor);
       this._windowCloneManager?.rebuildClones();
       this._uiSampler?.rebindSelf();
       this._uiSampler?.refresh();
@@ -356,15 +337,9 @@ export class DashManager {
     };
 
     let startFrameSync = () => {
-      if (this._frameSignalId === 0) {
-        buildClones();
-        this._frameSignalId = global.stage.connect('before-update', frameTick);
-        this._frameSyncId = laterAdd(frameLaterType, () => {
-          this._frameSyncId = 0;
-          frameTick();
-          return GLib.SOURCE_REMOVE;
-        });
-      }
+      if (this._frameSignalId !== 0) return;
+      buildClones();
+      startStageLoop(this._frameSignalSlot, this._frameSlot, frameTick);
     };
 
     let mapSignalId = this.targetActor.connect('notify::mapped', () => {
@@ -573,17 +548,16 @@ export class DashManager {
     this._windowCloneManager?.sync();
   }
 
+  private get _frameSlot() {
+    return { get: () => this._frameSyncId, set: (id: number) => { this._frameSyncId = id; } };
+  }
+
+  private get _frameSignalSlot() {
+    return { get: () => this._frameSignalId, set: (id: number) => { this._frameSignalId = id; } };
+  }
+
   private _stopFrameSync(): void {
-    this._teardownStep('frameSignal', () => {
-      const id = this._frameSignalId;
-      this._frameSignalId = 0;
-      if (id) global.stage.disconnect(id);
-    });
-    this._teardownStep('initialFrame', () => {
-      const id = this._frameSyncId;
-      this._frameSyncId = 0;
-      if (id) global.compositor?.get_laters().remove(id);
-    });
+    this._teardownStep('frameSync', () => stopStageLoop(this._frameSignalSlot, this._frameSlot));
   }
 
   _removeEffect() {

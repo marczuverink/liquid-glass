@@ -14,6 +14,7 @@ function fixture() {
     St: { Side: { LEFT: 0, RIGHT: 1, TOP: 2, BOTTOM: 3 } },
     Main: { layoutManager: { primaryMonitor: monitor }, panel: { height: 28 } },
     getAllocatedSize, setClipIfChanged() {}, syncGlassCaptureClip() {},
+    ...loadModule(path.join(dist, 'actors/glassBounds.js'), { setClipIfChanged() {} }),
   };
   const code = fs.readFileSync(path.join(dist, 'uiManager.js'), 'utf8')
     .replace(/^import[\s\S]*?;\n/gm, '').replace(/^export /gm, '');

@@ -2,7 +2,6 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import GLib from 'gi://GLib';
-import Meta from 'gi://Meta';
 import { LiquidEffect } from './liquidEffect.js';
 import { StageContrastSampler, AdaptiveContrastConfig } from './contrastSampler.js';
 import { UnpickableActor } from './actors/unpickable.js';
@@ -11,6 +10,8 @@ import { WindowCloneManager } from './capture/windowClones.js';
 import { reportFrameLoopError } from './diagnostics/logging.js';
 import { ensureGlassAllocated } from './actors/allocation.js';
 import { isFrameSyncFrozen, SAME_FRAME_WINDOW_US } from './animation/frameSync.js';
+import { startStageLoop, stopStageLoop } from './animation/frameLoops.js';
+import { excludeOtherGlass } from './capture/glassExclusions.js';
 import { setClipIfChanged } from './actors/writes.js';
 import { syncGlassCaptureClip } from './capture/clip.js';
 import { resolveCrossFade, adaptiveColorTweener } from './animation/colors.js';
@@ -197,7 +198,6 @@ export class OsdManager {
         }
         for (const state of this._osdStates)
             this._excludeOtherGlass(state);
-        const frameLaterType = Meta.LaterType.BEFORE_REDRAW;
         const frameTick = () => {
             if (this._torndown)
                 return;
@@ -219,12 +219,7 @@ export class OsdManager {
                 }
             }
         };
-        this._frameSignalId = global.stage.connect('before-update', frameTick);
-        this._frameSyncId = this._laterAdd(frameLaterType, () => {
-            this._frameSyncId = 0;
-            frameTick();
-            return GLib.SOURCE_REMOVE;
-        });
+        startStageLoop(this._frameSignalSlot, this._frameSlot, frameTick);
         this._startAdaptiveColorSampling();
         this._monitorsChangedId = Main.layoutManager.connect('monitors-changed', () => {
             this._removeEffect();
@@ -234,22 +229,7 @@ export class OsdManager {
         });
     }
     _excludeOtherGlass(state) {
-        if (!state._uiSampler)
-            return;
-        for (let other of this._osdStates) {
-            if (other !== state && other.bgActor) {
-                state._uiSampler.addExclusion(other.bgActor);
-            }
-        }
-        for (let child of Main.layoutManager.uiGroup.get_children()) {
-            if (child === state.bgActor)
-                continue;
-            let isLiquidBg = child.get_name?.() === 'liquid-glass-bg-actor' ||
-                (typeof child.get_children === 'function' &&
-                    child.get_children().some((c) => c.get_name?.() === 'liquid-box'));
-            if (isLiquidBg)
-                state._uiSampler.addExclusion(child);
-        }
+        excludeOtherGlass(state._uiSampler, state.bgActor);
     }
     _findOsdTarget(osdWindow) {
         let targetBox = null;
@@ -738,22 +718,13 @@ export class OsdManager {
             coalesce: !isProgressBar,
         }, batchStart);
     }
-    _laterAdd(laterType, callback) {
-        return global.compositor?.get_laters?.().add(laterType, callback);
+    get _frameSlot() {
+        return { get: () => this._frameSyncId, set: (id) => { this._frameSyncId = id; } };
+    }
+    get _frameSignalSlot() {
+        return { get: () => this._frameSignalId, set: (id) => { this._frameSignalId = id; } };
     }
     _stopFrameSync() {
-        const signalId = this._frameSignalId;
-        this._frameSignalId = 0;
-        if (signalId) {
-            try {
-                global.stage.disconnect(signalId);
-            }
-            catch { }
-        }
-        if (this._frameSyncId !== 0) {
-            if (global.compositor?.get_laters)
-                global.compositor.get_laters().remove(this._frameSyncId);
-            this._frameSyncId = 0;
-        }
+        stopStageLoop(this._frameSignalSlot, this._frameSlot);
     }
 }
