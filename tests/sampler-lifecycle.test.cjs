@@ -114,7 +114,7 @@ test('disabled diagnostic recorder has no timer and re-arming cannot multiply ti
   const pending = new Map(); let next = 1;
   const GLib = { PRIORITY_DEFAULT_IDLE: 0, SOURCE_CONTINUE: true,
     timeout_add(_, __, fn) { const id = next++; pending.set(id, fn); return id; },
-    Source: { remove(id) { assert.ok(pending.delete(id)); } } };
+    Source: { remove(id) { assert.ok(pending.delete(id)); } }, source_remove(id) { assert.ok(pending.delete(id)); } };
   const code = fs.readFileSync(path.join(dist, 'liquidEffect.js'), 'utf8');
   const section = code.slice(code.indexOf('let _ringArmed = false;'),
     code.indexOf('/** Writes the ring buffer out and clears it. */')).replace(/^export /gm, '');
