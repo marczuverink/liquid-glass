@@ -662,18 +662,7 @@ export class UILayerSampler {
       const scaledW = w * scaleX;
       const scaledH = h * scaleY;
 
-      const cull = this._cullRect;
-      const cullable = !!cull && isCullSiteEnabled('ui') &&
-        !(sourceClone as any)._lgBmsReplica &&
-        scaledW > 0 && scaledH > 0 &&
-        Number.isFinite(absX) && Number.isFinite(absY);
-      if (cullable && !rectsIntersect(absX, absY, scaledW, scaledH, cull!)) {
-        setCloneCulled(sourceClone, true, () =>
-          `src=(${Math.round(absX)},${Math.round(absY)},${Math.round(scaledW)}x${Math.round(scaledH)}) ` +
-          `cullRect=[${cull!.map(Math.round)}] label=${this._label}`);
-        return;
-      }
-      setCloneCulled(sourceClone, false, () => `label=${this._label}`);
+      if (this._cullSourceClone(sourceClone, absX, absY, scaledW, scaledH)) return;
 
       if (sourceClone.x !== 0 || sourceClone.y !== 0) sourceClone.set_position(0, 0);
       setTranslationIfChanged(sourceClone, absX, absY);
@@ -711,6 +700,24 @@ export class UILayerSampler {
         setActorVisible(sourceClone, isVisible);
       }
     } catch { }
+  }
+
+  private _cullSourceClone(sourceClone: Clutter.Actor, absX: number, absY: number,
+    scaledW: number, scaledH: number): boolean {
+    const cull = this._cullRect;
+    const cullable = !!cull && isCullSiteEnabled('ui') &&
+      !(sourceClone as any)._lgBmsReplica &&
+      scaledW > 0 && scaledH > 0 &&
+      Number.isFinite(absX) && Number.isFinite(absY);
+    if (cullable && !rectsIntersect(absX, absY, scaledW, scaledH, cull!)) {
+      setCloneCulled(sourceClone, true, () =>
+        `src=(${Math.round(absX)},${Math.round(absY)},${Math.round(scaledW)}x${Math.round(scaledH)}) ` +
+        `cullRect=[${cull!.map(Math.round)}] label=${this._label}`);
+      return true;
+    }
+    setCloneCulled(sourceClone, false, () => `label=${this._label}`);
+
+    return false;
   }
 
   private _checkCloneDrift(
@@ -766,6 +773,14 @@ export class UILayerSampler {
         contAbsY = Number.isNaN(ty) ? 0 : ty;
       } catch { }
     }
+    this._syncCloneContainer(contAbsX, contAbsY);
+
+    for (const [actor, sourceClone] of this._clones) {
+      this.syncProperties(actor, sourceClone, contW, contH, contAbsX, contAbsY);
+    }
+  }
+
+  private _syncCloneContainer(contAbsX: number, contAbsY: number): void {
     try {
       const parent = this._uiClonesContainer?.get_parent();
       if (parent && this._uiClonesContainer) {
@@ -781,10 +796,6 @@ export class UILayerSampler {
       if (this._uiClonesContainer.x !== 0 || this._uiClonesContainer.y !== 0)
         this._uiClonesContainer.set_position(0, 0);
       setTranslationIfChanged(this._uiClonesContainer, -contAbsX, -contAbsY);
-    }
-
-    for (const [actor, sourceClone] of this._clones) {
-      this.syncProperties(actor, sourceClone, contW, contH, contAbsX, contAbsY);
     }
   }
 

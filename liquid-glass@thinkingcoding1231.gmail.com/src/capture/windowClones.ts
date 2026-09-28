@@ -1,5 +1,6 @@
 import { GlassRect, isCullSiteEnabled } from './options.js';
 import Clutter from 'gi://Clutter';
+import type Meta from 'gi://Meta';
 import { createBackgroundMirror } from './background.js';
 import { UnpickableActor, UnpickableClone } from '../actors/unpickable.js';
 import { isActorValid } from '../actors/lifecycle.js';
@@ -140,61 +141,7 @@ export class WindowCloneManager {
       const wY = w.y + w.translation_y;
 
       activeWindows.add(w);
-      const sxSafe = Number.isFinite(w.scale_x) && w.scale_x > 0 ? w.scale_x : 1;
-      const sySafe = Number.isFinite(w.scale_y) && w.scale_y > 0 ? w.scale_y : 1;
-
-      const culled = !!this._cullRect && isCullSiteEnabled('windows') &&
-        !rectsIntersect(wX, wY, width * sxSafe, height * sySafe, this._cullRect);
-
-      let clone = this._windowClones.get(w);
-      if (clone && !isActorValid(clone)) {
-        this._windowClones.delete(w);
-        clone = undefined;
-      }
-      if (!clone) {
-        clone = new UnpickableClone({ source: w });
-        const wTitle = (() => {
-          try { return metaWindow.get_title() || '(untitled)'; } catch { return '(?)'; }
-        })();
-        clone.set_name(`${this.label}-winclone:${wTitle}`);
-        clone.connect('destroy', () => { this._windowClones.delete(w); });
-        this.windowClonesContainer?.add_child(clone);
-        this._windowClones.set(w, clone);
-      }
-
-      setActorVisible(clone, true);
-      setCloneCulled(clone, culled, () => culled
-        ? `src=(${Math.round(wX)},${Math.round(wY)},${Math.round(width * sxSafe)}x${Math.round(height * sySafe)}) ` +
-          `cullRect=[${this._cullRect!.map(Math.round)}] label=${this.label}`
-        : `label=${this.label}`);
-
-      const tX = wX;
-      const tY = wY;
-      const pX = w.pivot_point ? w.pivot_point.x : 0;
-      const pY = w.pivot_point ? w.pivot_point.y : 0;
-
-      clone.remove_transition('position');
-      clone.remove_transition('size');
-      clone.remove_transition('translation-x');
-      clone.remove_transition('translation-y');
-
-      if (clone.x !== 0 || clone.y !== 0) clone.set_position(0, 0);
-      setTranslationIfChanged(clone, tX, tY);
-
-      setSizeIfChanged(clone, width, height);
-
-      clone.remove_transition('scale-x');
-      clone.remove_transition('scale-y');
-      setScaleIfChanged(clone, w.scale_x, w.scale_y);
-
-      setPivotIfChanged(clone, pX, pY);
-
-      setOpacityIfChanged(clone, w.opacity);
-
-      if (!isDiffWritesEnabled() || (clone as any)._lgZIndex !== zIndex) {
-        (clone as any)._lgZIndex = zIndex;
-        this.windowClonesContainer?.set_child_at_index(clone, zIndex);
-      }
+      this._syncWindowClone(w, metaWindow, width, height, wX, wY, zIndex);
       zIndex++;
     }
 
@@ -203,6 +150,70 @@ export class WindowCloneManager {
         if (isActorValid(clone)) clone.destroy();
         this._windowClones.delete(w);
       }
+    }
+  }
+
+  private _ensureWindowClone(w: Clutter.Actor, metaWindow: Meta.Window): Clutter.Clone {
+    let clone = this._windowClones.get(w);
+    if (clone && !isActorValid(clone)) {
+      this._windowClones.delete(w);
+      clone = undefined;
+    }
+    if (!clone) {
+      clone = new UnpickableClone({ source: w });
+      const wTitle = (() => {
+        try { return metaWindow.get_title() || '(untitled)'; } catch { return '(?)'; }
+      })();
+      clone.set_name(`${this.label}-winclone:${wTitle}`);
+      clone.connect('destroy', () => { this._windowClones.delete(w); });
+      this.windowClonesContainer?.add_child(clone);
+      this._windowClones.set(w, clone);
+    }
+    return clone;
+  }
+
+  private _syncWindowClone(w: Clutter.Actor, metaWindow: Meta.Window,
+    width: number, height: number, wX: number, wY: number, zIndex: number): void {
+    const sxSafe = Number.isFinite(w.scale_x) && w.scale_x > 0 ? w.scale_x : 1;
+    const sySafe = Number.isFinite(w.scale_y) && w.scale_y > 0 ? w.scale_y : 1;
+
+    const culled = !!this._cullRect && isCullSiteEnabled('windows') &&
+      !rectsIntersect(wX, wY, width * sxSafe, height * sySafe, this._cullRect);
+
+    const clone = this._ensureWindowClone(w, metaWindow);
+
+    setActorVisible(clone, true);
+    setCloneCulled(clone, culled, () => culled
+      ? `src=(${Math.round(wX)},${Math.round(wY)},${Math.round(width * sxSafe)}x${Math.round(height * sySafe)}) ` +
+        `cullRect=[${this._cullRect!.map(Math.round)}] label=${this.label}`
+      : `label=${this.label}`);
+
+    const tX = wX;
+    const tY = wY;
+    const pX = w.pivot_point ? w.pivot_point.x : 0;
+    const pY = w.pivot_point ? w.pivot_point.y : 0;
+
+    clone.remove_transition('position');
+    clone.remove_transition('size');
+    clone.remove_transition('translation-x');
+    clone.remove_transition('translation-y');
+
+    if (clone.x !== 0 || clone.y !== 0) clone.set_position(0, 0);
+    setTranslationIfChanged(clone, tX, tY);
+
+    setSizeIfChanged(clone, width, height);
+
+    clone.remove_transition('scale-x');
+    clone.remove_transition('scale-y');
+    setScaleIfChanged(clone, w.scale_x, w.scale_y);
+
+    setPivotIfChanged(clone, pX, pY);
+
+    setOpacityIfChanged(clone, w.opacity);
+
+    if (!isDiffWritesEnabled() || (clone as any)._lgZIndex !== zIndex) {
+      (clone as any)._lgZIndex = zIndex;
+      this.windowClonesContainer?.set_child_at_index(clone, zIndex);
     }
   }
 

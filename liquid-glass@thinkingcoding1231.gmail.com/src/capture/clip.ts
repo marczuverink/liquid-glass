@@ -64,13 +64,7 @@ export function syncGlassCaptureClip(opts: {
     if (!(rect[2] >= 2) || !(rect[3] >= 2)) { clear(); return; }
   }
 
-  if (isCaptureClipEnabled() && cloneContainer && isActorValid(cloneContainer)) {
-    setClipIfChanged(cloneContainer, rect[0], rect[1], rect[2], rect[3]);
-  } else if (cloneContainer && isActorValid(cloneContainer) &&
-             (cloneContainer as any)._lgClipW !== undefined) {
-    (cloneContainer as any)._lgClipW = undefined;
-    try { cloneContainer.remove_clip(); } catch { }
-  }
+  applyCaptureClip(cloneContainer, rect);
 
   effect._lgCaptureClip = rect.slice();
 
@@ -80,4 +74,14 @@ export function syncGlassCaptureClip(opts: {
 
   uiSampler?.setCullRect(screenRect);
   windowCloneManager?.setCullRect(screenRect);
+}
+
+function applyCaptureClip(cloneContainer: Clutter.Actor | null, rect: GlassRect): void {
+  if (isCaptureClipEnabled() && cloneContainer && isActorValid(cloneContainer)) {
+    setClipIfChanged(cloneContainer, rect[0], rect[1], rect[2], rect[3]);
+  } else if (cloneContainer && isActorValid(cloneContainer) &&
+             (cloneContainer as any)._lgClipW !== undefined) {
+    (cloneContainer as any)._lgClipW = undefined;
+    try { cloneContainer.remove_clip(); } catch { }
+  }
 }

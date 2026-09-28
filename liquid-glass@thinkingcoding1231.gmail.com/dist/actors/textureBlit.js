@@ -29,6 +29,25 @@ export const TextureBlitActor = GObject.registerClass({
             return null;
         }
     }
+    _textureUV(tex) {
+        const texW = tex.get_width();
+        const texH = tex.get_height();
+        let uMin = 0, vMin = 0, uMax = 1, vMax = 1;
+        const src = this._sourceActor;
+        if (src) {
+            const [rawW, rawH] = getAllocatedSize(src);
+            const allocW = Number.isFinite(rawW) && rawW > 0 ? Math.round(rawW) : texW;
+            const allocH = Number.isFinite(rawH) && rawH > 0 ? Math.round(rawH) : texH;
+            if ((allocW !== texW || allocH !== texH) && texW > 0 && texH > 0) {
+                const uv = computeCaptureLayout(src, texW, texH, allocW, allocH).uv;
+                uMin = uv[0];
+                vMin = uv[1];
+                uMax = uv[2];
+                vMax = uv[3];
+            }
+        }
+        return [uMin, vMin, uMax, vMax];
+    }
     vfunc_paint(paintContext) {
         if (!this._getTexture)
             return;
@@ -44,22 +63,7 @@ export const TextureBlitActor = GObject.registerClass({
                 this._pipeline.set_layer_wrap_mode(0, Cogl.PipelineWrapMode.CLAMP_TO_EDGE);
                 this._pipeline.set_layer_filters(0, Cogl.PipelineFilter.LINEAR, Cogl.PipelineFilter.LINEAR);
             }
-            const texW = tex.get_width();
-            const texH = tex.get_height();
-            let uMin = 0, vMin = 0, uMax = 1, vMax = 1;
-            const src = this._sourceActor;
-            if (src) {
-                const [rawW, rawH] = getAllocatedSize(src);
-                const allocW = Number.isFinite(rawW) && rawW > 0 ? Math.round(rawW) : texW;
-                const allocH = Number.isFinite(rawH) && rawH > 0 ? Math.round(rawH) : texH;
-                if ((allocW !== texW || allocH !== texH) && texW > 0 && texH > 0) {
-                    const uv = computeCaptureLayout(src, texW, texH, allocW, allocH).uv;
-                    uMin = uv[0];
-                    vMin = uv[1];
-                    uMax = uv[2];
-                    vMax = uv[3];
-                }
-            }
+            const [uMin, vMin, uMax, vMax] = this._textureUV(tex);
             this._pipeline.set_layer_texture(0, tex);
             const [w, h] = this.get_size();
             if (!(w > 0) || !(h > 0))

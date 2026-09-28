@@ -84,14 +84,7 @@ export class SelfExcludingSnapshotCapture {
 
     const hidden: Clutter.Actor[] = [];
     try {
-      for (const actor of this._hideActors) {
-        try {
-          if (actor && actor.visible) {
-            actor.hide();
-            hidden.push(actor);
-          }
-        } catch { }
-      }
+      this._hideCaptureActors(hidden);
 
       const rect = new Mtk.Rectangle({ x: Math.round(x), y: Math.round(y), width: Math.round(w), height: Math.round(h) });
       const scale = 1;
@@ -113,6 +106,17 @@ export class SelfExcludingSnapshotCapture {
       for (const actor of hidden) {
         try { actor.show(); } catch { }
       }
+    }
+  }
+
+  private _hideCaptureActors(hidden: Clutter.Actor[]): void {
+    for (const actor of this._hideActors) {
+      try {
+        if (actor && actor.visible) {
+          actor.hide();
+          hidden.push(actor);
+        }
+      } catch { }
     }
   }
 

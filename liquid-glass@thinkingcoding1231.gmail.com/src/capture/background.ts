@@ -75,21 +75,7 @@ export const BackgroundMirror = GObject.registerClass(
       mirror.visible = false;
 
       const dstContent = mirror.content;
-      if (dstContent) {
-        for (const prop of this._contentProps()) {
-          try {
-            srcContent.bind_property(prop, dstContent, prop, GObject.BindingFlags.SYNC_CREATE);
-          } catch (e) {
-            utilsLog(`[bg-mirror] skipped content prop '${prop}': ${e}`);
-          }
-        }
-        try {
-          if (!dstContent.background && srcContent.background)
-            dstContent.set_background(srcContent.background);
-        } catch (e) {
-          utilsLog(`[bg-mirror] set_background failed: ${e}`);
-        }
-      }
+      this._bindMirrorContent(srcContent, dstContent);
 
       try {
         child.bind_property('opacity', mirror, 'opacity', GObject.BindingFlags.SYNC_CREATE);
@@ -135,6 +121,25 @@ export const BackgroundMirror = GObject.registerClass(
       this._mirrors.set(child, mirror);
       this.add_child(mirror);
       this._restack();
+    }
+
+    _bindMirrorContent(srcContent: any, dstContent: any): void {
+      if (dstContent) {
+        for (const prop of this._contentProps()) {
+          try {
+            srcContent.bind_property(prop, dstContent, prop, GObject.BindingFlags.SYNC_CREATE);
+          } catch (e) {
+            utilsLog(`[bg-mirror] skipped content prop '${prop}': ${e}`);
+          }
+        }
+        try {
+          if (!dstContent.background && srcContent.background)
+            dstContent.set_background(srcContent.background);
+        } catch (e) {
+          utilsLog(`[bg-mirror] set_background failed: ${e}`);
+        }
+      }
+
     }
 
     _removeMirror(child: any): void {

@@ -86,6 +86,25 @@ class AdaptiveColorTweener {
         catch { }
         this._laterId = 0;
     }
+    _applyEntry(e, now) {
+        const elapsedMs = (now - e.startTime) / 1000;
+        const progress = e.durationMs > 0 ? Math.min(elapsedMs / e.durationMs, 1) : 1;
+        const c = e.crossFade
+            ? crossFadeColorAt(e.startRgb, e.startAlpha, e.targetRgb, e.targetAlpha, progress)
+            : lerpColorAt(e.startRgb, e.startAlpha, e.targetRgb, e.targetAlpha, progress);
+        const a = Math.max(0, Math.min(1, c.a));
+        const same = e.coalesce !== false && e.last &&
+            e.last.r === c.r && e.last.g === c.g && e.last.b === c.b &&
+            Math.abs(e.last.a - a) < 0.002;
+        if (!same) {
+            e.last = { r: c.r, g: c.g, b: c.b, a };
+            try {
+                e.apply(c.r, c.g, c.b, a, progress);
+            }
+            catch { }
+        }
+        return progress;
+    }
     _tick() {
         this._laterId = 0;
         const now = GLib.get_monotonic_time();
@@ -94,22 +113,7 @@ class AdaptiveColorTweener {
                 this._entries.delete(actor);
                 continue;
             }
-            const elapsedMs = (now - e.startTime) / 1000;
-            const progress = e.durationMs > 0 ? Math.min(elapsedMs / e.durationMs, 1) : 1;
-            const c = e.crossFade
-                ? crossFadeColorAt(e.startRgb, e.startAlpha, e.targetRgb, e.targetAlpha, progress)
-                : lerpColorAt(e.startRgb, e.startAlpha, e.targetRgb, e.targetAlpha, progress);
-            const a = Math.max(0, Math.min(1, c.a));
-            const same = e.coalesce !== false && e.last &&
-                e.last.r === c.r && e.last.g === c.g && e.last.b === c.b &&
-                Math.abs(e.last.a - a) < 0.002;
-            if (!same) {
-                e.last = { r: c.r, g: c.g, b: c.b, a };
-                try {
-                    e.apply(c.r, c.g, c.b, a, progress);
-                }
-                catch { }
-            }
+            const progress = this._applyEntry(e, now);
             if (progress >= 1)
                 this._entries.delete(actor);
         }

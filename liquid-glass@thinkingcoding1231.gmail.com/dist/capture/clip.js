@@ -68,6 +68,14 @@ export function syncGlassCaptureClip(opts) {
             return;
         }
     }
+    applyCaptureClip(cloneContainer, rect);
+    effect._lgCaptureClip = rect.slice();
+    const screenRect = [rect[0] + originX, rect[1] + originY, rect[2], rect[3]];
+    windowCloneManager?.applyBgCloneClip(isCaptureClipEnabled() ? screenRect : null);
+    uiSampler?.setCullRect(screenRect);
+    windowCloneManager?.setCullRect(screenRect);
+}
+function applyCaptureClip(cloneContainer, rect) {
     if (isCaptureClipEnabled() && cloneContainer && isActorValid(cloneContainer)) {
         setClipIfChanged(cloneContainer, rect[0], rect[1], rect[2], rect[3]);
     }
@@ -79,9 +87,4 @@ export function syncGlassCaptureClip(opts) {
         }
         catch { }
     }
-    effect._lgCaptureClip = rect.slice();
-    const screenRect = [rect[0] + originX, rect[1] + originY, rect[2], rect[3]];
-    windowCloneManager?.applyBgCloneClip(isCaptureClipEnabled() ? screenRect : null);
-    uiSampler?.setCullRect(screenRect);
-    windowCloneManager?.setCullRect(screenRect);
 }

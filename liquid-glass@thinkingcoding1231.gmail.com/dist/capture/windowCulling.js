@@ -10,15 +10,7 @@ const _cullOptOutEffects = new Map();
 let _cullOptOutEnabled = true;
 function _reconcileCullOptOut() {
     const before = _cullOptOutEffects.size;
-    const wanted = new Set();
-    if (_cullOptOutEnabled) {
-        for (const actors of _cullOptOutOwners.values()) {
-            for (const actor of actors) {
-                if (isActorValid(actor))
-                    wanted.add(actor);
-            }
-        }
-    }
+    const wanted = _wantedCullOptOutActors();
     for (const actor of wanted) {
         if (_cullOptOutEffects.has(actor))
             continue;
@@ -42,16 +34,31 @@ function _reconcileCullOptOut() {
         catch { }
     }
     if (_cullOptOutEffects.size !== before) {
-        utilsLog(`[cull-opt-out] holding ${_cullOptOutEffects.size} window actor(s)` +
-            ` [${[..._cullOptOutEffects.keys()].map(a => {
-                try {
-                    return a.get_meta_window()?.get_title() ?? '?';
-                }
-                catch {
-                    return '?';
-                }
-            }).join(', ')}]`);
+        _reportCullOptOut();
     }
+}
+function _wantedCullOptOutActors() {
+    const wanted = new Set();
+    if (_cullOptOutEnabled) {
+        for (const actors of _cullOptOutOwners.values()) {
+            for (const actor of actors) {
+                if (isActorValid(actor))
+                    wanted.add(actor);
+            }
+        }
+    }
+    return wanted;
+}
+function _reportCullOptOut() {
+    utilsLog(`[cull-opt-out] holding ${_cullOptOutEffects.size} window actor(s)` +
+        ` [${[..._cullOptOutEffects.keys()].map(a => {
+            try {
+                return a.get_meta_window()?.get_title() ?? '?';
+            }
+            catch {
+                return '?';
+            }
+        }).join(', ')}]`);
 }
 function _sameSet(a, b) {
     if (!a)

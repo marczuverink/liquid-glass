@@ -37,6 +37,25 @@ export const TextureBlitActor = GObject.registerClass({
     }
   }
 
+  private _textureUV(tex: Cogl.Texture2D): number[] {
+    const texW = tex.get_width();
+    const texH = tex.get_height();
+
+    let uMin = 0, vMin = 0, uMax = 1, vMax = 1;
+    const src = this._sourceActor;
+    if (src) {
+      const [rawW, rawH] = getAllocatedSize(src);
+      const allocW = Number.isFinite(rawW) && rawW > 0 ? Math.round(rawW) : texW;
+      const allocH = Number.isFinite(rawH) && rawH > 0 ? Math.round(rawH) : texH;
+
+      if ((allocW !== texW || allocH !== texH) && texW > 0 && texH > 0) {
+        const uv = computeCaptureLayout(src, texW, texH, allocW, allocH).uv;
+        uMin = uv[0]; vMin = uv[1]; uMax = uv[2]; vMax = uv[3];
+      }
+    }
+    return [uMin, vMin, uMax, vMax];
+  }
+
   vfunc_paint(paintContext: Clutter.PaintContext): void {
     if (!this._getTexture) return;
     const tex = this._getTexture();
@@ -53,21 +72,7 @@ export const TextureBlitActor = GObject.registerClass({
         );
       }
 
-      const texW = tex.get_width();
-      const texH = tex.get_height();
-
-      let uMin = 0, vMin = 0, uMax = 1, vMax = 1;
-      const src = this._sourceActor;
-      if (src) {
-        const [rawW, rawH] = getAllocatedSize(src);
-        const allocW = Number.isFinite(rawW) && rawW > 0 ? Math.round(rawW) : texW;
-        const allocH = Number.isFinite(rawH) && rawH > 0 ? Math.round(rawH) : texH;
-
-        if ((allocW !== texW || allocH !== texH) && texW > 0 && texH > 0) {
-          const uv = computeCaptureLayout(src, texW, texH, allocW, allocH).uv;
-          uMin = uv[0]; vMin = uv[1]; uMax = uv[2]; vMax = uv[3];
-        }
-      }
+      const [uMin, vMin, uMax, vMax] = this._textureUV(tex);
 
       this._pipeline.set_layer_texture(0, tex);
 

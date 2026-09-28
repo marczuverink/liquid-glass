@@ -1097,6 +1097,10 @@ export class ApplicationManager {
       return;
     }
 
+    if (this._nestedClonesChanged(state)) bg.queue_redraw();
+  }
+
+  private _nestedClonesChanged(state: WindowState): boolean {
     let seen = state.nestedSerials;
     if (!seen) { seen = new Map(); state.nestedSerials = seen; }
 
@@ -1111,8 +1115,7 @@ export class ApplicationManager {
     if (seen.size > state.clones.size) {
       for (const src of [...seen.keys()]) if (!state.clones.has(src)) seen.delete(src);
     }
-
-    if (stale) bg.queue_redraw();
+    return stale;
   }
 
   _syncDamageHooks(state: WindowState): void {
@@ -1139,31 +1142,7 @@ export class ApplicationManager {
     const cullRect = (isCullSiteEnabled('app') && animSx === 1 && animSy === 1)
       ? state.glassScreenRect
       : undefined;
-    for (let [src, clone] of state.clones.entries()) {
-      if (!isActorValid(src) || !src.visible || !src.mapped) {
-        if (isActorValid(clone)) setActorVisible(clone, false);
-        this._clearCloneAnomaly(clone);
-        continue;
-      }
-      if (isActorValid(clone)) {
-        if (this._shouldCullClone(src, cullRect)) {
-          setCloneCulled(clone, true, () => this._cullWhy(src, cullRect!, 'blurred'));
-          this._clearCloneAnomaly(clone);
-          continue;
-        }
-        setCloneCulled(clone, false, 'app/blurred');
-        setActorVisible(clone, true);
-
-        if (clone.x !== 0 || clone.y !== 0) clone.set_position(0, 0);
-        setTranslationIfChanged(clone, src.x, src.y);
-
-        setSizeIfChanged(clone, src.width, src.height);
-        setScaleIfChanged(clone, src.scale_x, src.scale_y);
-        setOpacityIfChanged(clone, src.opacity);
-
-        this._checkCloneAnomaly(clone, src, 'blurred');
-      }
-    }
+    this._syncCloneLayer(state.clones, cullRect, 'blurred');
 
     reportClonedWindowActors(state, state.clones.keys());
 
@@ -1171,7 +1150,12 @@ export class ApplicationManager {
 
     if (!BASE_LAYER_ENABLED) return;
 
-    for (let [src, clone] of state.baseClones.entries()) {
+    this._syncCloneLayer(state.baseClones, cullRect, 'base');
+  }
+
+  private _syncCloneLayer(clones: Map<Meta.WindowActor, Clutter.Actor>,
+    cullRect: [number, number, number, number] | undefined, kind: string): void {
+    for (let [src, clone] of clones.entries()) {
       if (!isActorValid(src) || !src.visible || !src.mapped) {
         if (isActorValid(clone)) setActorVisible(clone, false);
         this._clearCloneAnomaly(clone);
@@ -1179,11 +1163,11 @@ export class ApplicationManager {
       }
       if (isActorValid(clone)) {
         if (this._shouldCullClone(src, cullRect)) {
-          setCloneCulled(clone, true, () => this._cullWhy(src, cullRect!, 'base'));
+          setCloneCulled(clone, true, () => this._cullWhy(src, cullRect!, kind));
           this._clearCloneAnomaly(clone);
           continue;
         }
-        setCloneCulled(clone, false, 'app/base');
+        setCloneCulled(clone, false, `app/${kind}`);
         setActorVisible(clone, true);
 
         if (clone.x !== 0 || clone.y !== 0) clone.set_position(0, 0);
@@ -1193,9 +1177,10 @@ export class ApplicationManager {
         setScaleIfChanged(clone, src.scale_x, src.scale_y);
         setOpacityIfChanged(clone, src.opacity);
 
-        this._checkCloneAnomaly(clone, src, 'base');
+        this._checkCloneAnomaly(clone, src, kind);
       }
     }
+
   }
 
   _checkCloneAnomaly(clone: Clutter.Actor, src: Meta.WindowActor, kind: string): void {
