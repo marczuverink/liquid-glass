@@ -195,24 +195,8 @@ export class OsdManager {
         for (let osdWindow of osdWindows) {
             this._setupOsdEffect(osdWindow);
         }
-        for (let state of this._osdStates) {
-            if (!state._uiSampler)
-                continue;
-            for (let other of this._osdStates) {
-                if (other !== state && other.bgActor) {
-                    state._uiSampler.addExclusion(other.bgActor);
-                }
-            }
-            for (let child of Main.layoutManager.uiGroup.get_children()) {
-                if (child === state.bgActor)
-                    continue;
-                let isLiquidBg = child.get_name?.() === 'liquid-glass-bg-actor' ||
-                    (typeof child.get_children === 'function' &&
-                        child.get_children().some((c) => c.get_name?.() === 'liquid-box'));
-                if (isLiquidBg)
-                    state._uiSampler.addExclusion(child);
-            }
-        }
+        for (const state of this._osdStates)
+            this._excludeOtherGlass(state);
         const frameLaterType = Meta.LaterType.BEFORE_REDRAW;
         const frameTick = () => {
             if (this._torndown)
@@ -249,7 +233,25 @@ export class OsdManager {
             }
         });
     }
-    _setupOsdEffect(osdWindow) {
+    _excludeOtherGlass(state) {
+        if (!state._uiSampler)
+            return;
+        for (let other of this._osdStates) {
+            if (other !== state && other.bgActor) {
+                state._uiSampler.addExclusion(other.bgActor);
+            }
+        }
+        for (let child of Main.layoutManager.uiGroup.get_children()) {
+            if (child === state.bgActor)
+                continue;
+            let isLiquidBg = child.get_name?.() === 'liquid-glass-bg-actor' ||
+                (typeof child.get_children === 'function' &&
+                    child.get_children().some((c) => c.get_name?.() === 'liquid-box'));
+            if (isLiquidBg)
+                state._uiSampler.addExclusion(child);
+        }
+    }
+    _findOsdTarget(osdWindow) {
         let targetBox = null;
         if (osdWindow._icon && osdWindow._icon.get_parent) {
             targetBox = osdWindow._icon.get_parent();
@@ -266,6 +268,10 @@ export class OsdManager {
                 }
             }
         }
+        return targetBox;
+    }
+    _setupOsdEffect(osdWindow) {
+        const targetBox = this._findOsdTarget(osdWindow);
         if (!targetBox || typeof targetBox.add_style_class_name !== 'function') {
             this._logger.warn('[Liquid Glass] OSD UI container not found.');
             return;
@@ -395,26 +401,8 @@ export class OsdManager {
         else if (!state.bgActor.visible) {
             state.bgActor.show();
         }
-        let themeNode = state.targetBox.get_theme_node();
-        let mB = themeNode ? themeNode.get_margin(St.Side.BOTTOM) : 0;
-        if (state._stableBaseH === undefined) {
-            let initH = h;
-            try {
-                let [, naturalH] = state.targetBox.get_preferred_height(-1);
-                if (naturalH > 0) {
-                    initH = naturalH;
-                }
-            }
-            catch (e) {
-                this._logger.warn(`[Liquid Glass] Failed to get preferred height for OSD initialization: ${e}`);
-            }
-            state._stableBaseH = initH;
-        }
-        let isHeightBloated = Math.abs(h - (state._stableBaseH + mB)) <= 1;
-        let visualW = w;
-        let visualH = isHeightBloated ? h - mB : h;
-        if (!isHeightBloated)
-            state._stableBaseH = h;
+        const visualW = w;
+        const visualH = this._osdVisualHeight(state, h);
         let visualX = absX;
         let visualY = absY;
         let bgW = visualW + (this._glassExpand * 2) + (SHADER_PADDING * 2);
@@ -469,6 +457,28 @@ export class OsdManager {
         state._uiSampler?.sync(monitorX, monitorY, screenW, screenH);
         state._windowCloneManager?.sync();
     }
+    _osdVisualHeight(state, h) {
+        let themeNode = state.targetBox.get_theme_node();
+        let mB = themeNode ? themeNode.get_margin(St.Side.BOTTOM) : 0;
+        if (state._stableBaseH === undefined) {
+            let initH = h;
+            try {
+                let [, naturalH] = state.targetBox.get_preferred_height(-1);
+                if (naturalH > 0) {
+                    initH = naturalH;
+                }
+            }
+            catch (e) {
+                this._logger.warn(`[Liquid Glass] Failed to get preferred height for OSD initialization: ${e}`);
+            }
+            state._stableBaseH = initH;
+        }
+        let isHeightBloated = Math.abs(h - (state._stableBaseH + mB)) <= 1;
+        let visualH = isHeightBloated ? h - mB : h;
+        if (!isHeightBloated)
+            state._stableBaseH = h;
+        return visualH;
+    }
     _removeEffect() {
         if (!this._isEffectActive)
             return;
@@ -486,20 +496,7 @@ export class OsdManager {
         this._osdStates = [];
     }
     _cleanupOsdState(state) {
-        if (state.osdWindow && state._destroyId) {
-            try {
-                state.osdWindow.disconnect(state._destroyId);
-            }
-            catch { }
-            state._destroyId = 0;
-        }
-        if (state.targetBox) {
-            try {
-                state.targetBox.remove_style_class_name('liquid-glass-transparent');
-                state.targetBox.translation_y = 0;
-            }
-            catch { }
-        }
+        this._restoreOsdTarget(state);
         if (state.effect) {
             try {
                 state.effect.cleanup();
@@ -530,6 +527,22 @@ export class OsdManager {
         }
         catch { }
         state._windowCloneManager = null;
+    }
+    _restoreOsdTarget(state) {
+        if (state.osdWindow && state._destroyId) {
+            try {
+                state.osdWindow.disconnect(state._destroyId);
+            }
+            catch { }
+            state._destroyId = 0;
+        }
+        if (state.targetBox) {
+            try {
+                state.targetBox.remove_style_class_name('liquid-glass-transparent');
+                state.targetBox.translation_y = 0;
+            }
+            catch { }
+        }
     }
     _teardownStep(name, fn) {
         try {

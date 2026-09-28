@@ -1300,25 +1300,28 @@ export class QuickSettingsManager {
     }
     _clearButtonStyles() {
         this._stopButtonAlphaSampling();
-        if (this._buttonSignalIds) {
-            for (const [button, signalIds] of this._buttonSignalIds.entries()) {
-                if (button) {
-                    for (const id of signalIds) {
-                        try {
-                            button.disconnect(id);
-                        }
-                        catch { }
-                    }
-                }
-            }
-            this._buttonSignalIds.clear();
-        }
+        this._disconnectButtonSignals();
         for (const [button, originalStyle] of this._styledButtons.entries()) {
             if (button && button instanceof St.Widget && typeof button.set_style === 'function') {
                 button.set_style(originalStyle || null);
             }
         }
         this._styledButtons.clear();
+    }
+    _disconnectButtonSignals() {
+        if (!this._buttonSignalIds)
+            return;
+        for (const [button, signalIds] of this._buttonSignalIds.entries()) {
+            if (!button)
+                continue;
+            for (const id of signalIds) {
+                try {
+                    button.disconnect(id);
+                }
+                catch { }
+            }
+        }
+        this._buttonSignalIds.clear();
     }
     _startAnimation(targetValue) {
         if (this._tickId !== 0) {
@@ -1473,50 +1476,8 @@ export class QuickSettingsManager {
         this._clearSubmenuFix();
         this._toggleStyles.clear();
         this._destroyPanelContentClone();
-        for (let sig of this._signals) {
-            try {
-                if (sig && sig.id)
-                    sig.target.disconnect(sig.id);
-            }
-            catch { }
-        }
-        this._signals = [];
-        if (this._animSignalId) {
-            try {
-                this.menu.disconnect(this._animSignalId);
-            }
-            catch { }
-            this._animSignalId = 0;
-        }
-        if (this._tickId !== 0) {
-            removeFrameTicker(this._tickId);
-            this._tickId = 0;
-        }
-        if (this._frameSyncId !== 0) {
-            if (global.compositor?.get_laters)
-                global.compositor.get_laters().remove(this._frameSyncId);
-            this._frameSyncId = 0;
-        }
-        this.targetActor.remove_style_class_name('liquid-glass-transparent');
-        if (this.animActor) {
-            this.animActor.remove_style_class_name('liquid-glass-transparent');
-            this.animActor.remove_style_class_name('liquid-glass-qs-root');
-            this.animActor.translation_x = 0;
-            this.animActor.translation_y = 0;
-            this.animActor.set_scale(1.0, 1.0);
-            this.animActor.opacity = 255;
-        }
-        this.targetActor.translation_y = 0;
-        this.targetActor.translation_x = 0;
-        this.targetActor.set_scale(1.0, 1.0);
-        this.targetActor.opacity = 255;
-        if (this.menu.actor) {
-            this.menu.actor.opacity = 255;
-            this.menu.actor.translation_x = 0;
-            this.menu.actor.translation_y = 0;
-            if (this.menu.isOpen)
-                this.menu.close(false);
-        }
+        this._disconnectEffectSignals();
+        this._restoreMenuActors();
         if (this.effect) {
             this.effect.cleanup();
             this.effect = null;
@@ -1549,6 +1510,54 @@ export class QuickSettingsManager {
         this._lastBgX = undefined;
         this._lastBgY = undefined;
         this._activeMode = null;
+    }
+    _disconnectEffectSignals() {
+        for (let sig of this._signals) {
+            try {
+                if (sig && sig.id)
+                    sig.target.disconnect(sig.id);
+            }
+            catch { }
+        }
+        this._signals = [];
+        if (this._animSignalId) {
+            try {
+                this.menu.disconnect(this._animSignalId);
+            }
+            catch { }
+            this._animSignalId = 0;
+        }
+        if (this._tickId !== 0) {
+            removeFrameTicker(this._tickId);
+            this._tickId = 0;
+        }
+        if (this._frameSyncId !== 0) {
+            if (global.compositor?.get_laters)
+                global.compositor.get_laters().remove(this._frameSyncId);
+            this._frameSyncId = 0;
+        }
+    }
+    _restoreMenuActors() {
+        this.targetActor.remove_style_class_name('liquid-glass-transparent');
+        if (this.animActor) {
+            this.animActor.remove_style_class_name('liquid-glass-transparent');
+            this.animActor.remove_style_class_name('liquid-glass-qs-root');
+            this.animActor.translation_x = 0;
+            this.animActor.translation_y = 0;
+            this.animActor.set_scale(1.0, 1.0);
+            this.animActor.opacity = 255;
+        }
+        this.targetActor.translation_y = 0;
+        this.targetActor.translation_x = 0;
+        this.targetActor.set_scale(1.0, 1.0);
+        this.targetActor.opacity = 255;
+        if (this.menu.actor) {
+            this.menu.actor.opacity = 255;
+            this.menu.actor.translation_x = 0;
+            this.menu.actor.translation_y = 0;
+            if (this.menu.isOpen)
+                this.menu.close(false);
+        }
     }
     _teardownStep(name, fn) {
         try {
