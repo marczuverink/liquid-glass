@@ -223,21 +223,51 @@ export default class LiquidGlassExtension extends Extension {
 
   _installDumpLoopKeybinding() {
     this._dumpLoopId = 0;
+    this._dumpKeybindingInstalled = false;
     startGlassRingSampler(50);
-    Main.wm.addKeybinding(
-      'dump-loop-keybinding',
-      this.getSettings('org.gnome.shell.extensions.liquid-glass@thinkingcoding1231.gmail.com'),
-      Meta.KeyBindingFlags.NONE,
-      Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
-      () => this._toggleDumpLoop()
-    );
+
+    this._dumpSettings = this.getSettings('org.gnome.shell.extensions.liquid-glass@thinkingcoding1231.gmail.com');
+    this._dumpSettingsId = this._dumpSettings.connect('changed::enable-dump-shortcut',
+      () => this._syncDumpLoopKeybinding());
+    this._syncDumpLoopKeybinding();
+  }
+
+  _syncDumpLoopKeybinding() {
+    const wanted = !!this._dumpSettings?.get_boolean('enable-dump-shortcut');
+    if (wanted && !this._dumpKeybindingInstalled) {
+      Main.wm.addKeybinding(
+        'dump-loop-keybinding',
+        this._dumpSettings,
+        Meta.KeyBindingFlags.NONE,
+        Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
+        () => this._toggleDumpLoop()
+      );
+      this._dumpKeybindingInstalled = true;
+    } else if (!wanted && this._dumpKeybindingInstalled) {
+      try { Main.wm.removeKeybinding('dump-loop-keybinding'); } catch { }
+      this._dumpKeybindingInstalled = false;
+      if (this._dumpLoopId) {
+        try { GLib.source_remove(this._dumpLoopId); } catch { }
+        this._dumpLoopId = 0;
+        console.log('[Liquid Glass][dump-loop] STOPPED (shortcut disabled)');
+      }
+    }
+  }
+
+  _dumpShortcutLabel() {
+    try {
+      const accel = this._dumpSettings?.get_strv('dump-loop-keybinding')?.[0];
+      if (accel) return accel.replace(/<Control>/gi, 'Ctrl+').replace(/<Alt>/gi, 'Alt+')
+        .replace(/<Shift>/gi, 'Shift+').replace(/<Super>/gi, 'Super+').replace(/\+([a-z])$/, (_, k) => `+${k.toUpperCase()}`);
+    } catch { }
+    return 'the shortcut';
   }
 
   _toggleDumpLoop() {
     if (this._dumpLoopId) {
       GLib.source_remove(this._dumpLoopId);
       this._dumpLoopId = 0;
-      console.log('[Liquid Glass][dump-loop] STOPPED early by Ctrl+Alt+L');
+      console.log(`[Liquid Glass][dump-loop] STOPPED early by ${this._dumpShortcutLabel()}`);
       Main.notify('Liquid Glass', 'Diagnostic dump stopped');
       return;
     }
@@ -257,7 +287,7 @@ export default class LiquidGlassExtension extends Extension {
       .map(n => String(n).padStart(2, '0')).join(':');
     console.log(`[Liquid Glass][dump-loop] STARTED ${TICKS} ticks @ ${INTERVAL_MS}ms, ends ${hhmmss(endsAt)}`);
     Main.notify('Liquid Glass',
-      `Diagnostic dump running ${seconds}s — ends at ${hhmmss(endsAt)} (Ctrl+Alt+L to stop)`);
+      `Diagnostic dump running ${seconds}s — ends at ${hhmmss(endsAt)} (${this._dumpShortcutLabel()} to stop)`);
 
     this._dumpLoopId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, INTERVAL_MS, () => {
       try {
@@ -273,12 +303,20 @@ export default class LiquidGlassExtension extends Extension {
   }
 
   _removeDumpLoopKeybinding() {
-    stopGlassRingSampler();
+    try { stopGlassRingSampler(); } catch { }
     if (this._dumpLoopId) {
       try { GLib.source_remove(this._dumpLoopId); } catch { }
       this._dumpLoopId = 0;
     }
-    try { Main.wm.removeKeybinding('dump-loop-keybinding'); } catch { }
+    if (this._dumpSettings && this._dumpSettingsId) {
+      try { this._dumpSettings.disconnect(this._dumpSettingsId); } catch { }
+    }
+    this._dumpSettingsId = 0;
+    if (this._dumpKeybindingInstalled) {
+      try { Main.wm.removeKeybinding('dump-loop-keybinding'); } catch { }
+      this._dumpKeybindingInstalled = false;
+    }
+    this._dumpSettings = null;
   }
 
   disable() {
