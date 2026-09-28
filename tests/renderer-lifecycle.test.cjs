@@ -126,6 +126,42 @@ test('Gaussian radius updates recompile only when the kernel shape changes', () 
   assert.equal(blur.ready, false);
 });
 
+for (const method of [0, 1]) test(`blur method ${method} is reused across frames only while its input and configuration are unchanged`, () => {
+  const { blur, context, root, texture } = blurFixture();
+  blur.setBlurMethod(method); blur.setBlurRadius(15);
+  if (blur.needsCompile) blur.compilePending(context);
+  blur.resize(context, 800, 600);
+  const capture = texture(800, 600), uv = [0, 0, 1, 1];
+  const input = serial => [serial, capture, ...uv];
+  assert.equal(blur.canReuse(input(1)), false);
+  blur.render(root(), capture, uv, input(1));
+  assert.equal(blur.canReuse(input(1)), true);
+  assert.equal(blur.canReuse(input(2)), false, 'a re-rendered capture needs a new blur');
+  assert.equal(blur.canReuse([1, texture(800, 600), ...uv]), false, 'a reallocated capture needs a new blur');
+  assert.equal(blur.canReuse([1, capture, 0, 0, 0.5, 1]), false);
+  blur.setBlurRadius(method === 0 ? 14 : 3);
+  if (blur.needsCompile) blur.compilePending(context);
+  if (!blur.ready) blur.resize(context, 800, 600);
+  assert.equal(blur.canReuse(input(1)), false, 'a new radius needs a new blur');
+  blur.render(root(), capture, uv, input(1));
+  assert.equal(blur.canReuse(input(1)), true);
+  blur.resize(context, 800, 600);
+  assert.equal(blur.canReuse(input(1)), false, 'a rebuilt pool holds nothing');
+  blur.render(root(), capture, uv, input(1));
+  blur.reload();
+  if (blur.needsCompile) blur.compilePending(context);
+  assert.equal(blur.canReuse(input(1)), method === 1, 'recompiled Gaussian kernels need a new blur');
+  blur.render(root(), capture, uv, input(1));
+  blur.setBlurMethod(method === 0 ? 1 : 0);
+  assert.equal(blur.canReuse(input(1)), false);
+  if (blur.needsCompile) blur.compilePending(context);
+  blur.resize(context, 800, 600);
+  blur.render(root(), capture, uv);
+  assert.equal(blur.canReuse(input(1)), false, 'a render without an input key is never reused');
+  blur.clear();
+  assert.equal(blur.canReuse(input(1)), false);
+});
+
 test('failed blur allocation drops a partial pool and can recover on the next paint', () => {
   const { blur, context, failAllocation, errors } = blurFixture();
   failAllocation(true); blur.resize(context, 800, 600);
@@ -166,7 +202,7 @@ async function effectFixture() {
 }
 
 test('effect integration preserves same-frame blur reuse, shader reload and faded opacity', async () => {
-  const { effect, paint, layers, actor, stageHandlers, errors } = await effectFixture();
+  const { effect, paint, layers, actor, stageHandlers, errors, root } = await effectFixture();
   assert.ok(actor.redraws > 0, 'async shader readiness damages the actor');
   const first = paint();
   const count = layers.length;
@@ -177,7 +213,11 @@ test('effect integration preserves same-frame blur reuse, shader reload and fade
   assert.equal(layers.length, count, 'repeat paint reuses the same frame’s blur');
   for (const callback of stageHandlers.values()) callback();
   paint();
-  assert.ok(layers.length > count);
+  assert.equal(layers.length, count, 'a later frame reuses the blur of an unchanged capture');
+  effect.vfunc_paint(root(), {}, 1);
+  for (const callback of stageHandlers.values()) callback();
+  paint();
+  assert.ok(layers.length > count, 'a re-rendered capture is blurred again');
   effect.reloadShaders();
   paint();
   assert.equal(effect.fallbacks, 0);

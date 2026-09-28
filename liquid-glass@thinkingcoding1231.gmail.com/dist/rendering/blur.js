@@ -30,8 +30,9 @@ export class BlurRenderer {
         this._gaussianVPipeline = null;
         this._compileGaussianPipelines(ctx, this._pendingGaussianKernel);
     }
-    render(parent, source, uv) {
+    render(parent, source, uv, inputKey) {
         this._blurResultTex = null;
+        this._renderedKey = null;
         if (this.PASS_COUNT <= 0)
             return;
         if (this._blurMethod === 0) {
@@ -40,6 +41,31 @@ export class BlurRenderer {
         }
         else
             this._runDualKawaseBlur(parent, source, uv);
+        if (inputKey && this._blurResultTex !== null)
+            this._renderedKey = [...inputKey, ...this._configKey()];
+    }
+    canReuse(inputKey) {
+        const stored = this._renderedKey;
+        if (stored === null || this._blurResultTex === null || this.PASS_COUNT <= 0)
+            return false;
+        const config = this._configKey();
+        if (stored.length !== inputKey.length + config.length)
+            return false;
+        for (let i = 0; i < inputKey.length; i++)
+            if (stored[i] !== inputKey[i])
+                return false;
+        for (let i = 0; i < config.length; i++)
+            if (stored[inputKey.length + i] !== config[i])
+                return false;
+        return true;
+    }
+    _renderedKey = null;
+    _configKey() {
+        const p = this._pipelines;
+        return [this._blurFbos[0] ?? null, this._blurMethod, this.PASS_COUNT, this._blurDownscale,
+            this._blurRadiusDown, this._blurRadiusUp, this._gaussianScale,
+            this._gaussianHPipeline, this._gaussianVPipeline,
+            p.downsample, p.upsample, p.passthrough, p.boxDown];
     }
     setDownscale(factor) {
         if (factor === this._blurDownscale)
@@ -371,6 +397,7 @@ export class BlurRenderer {
         this._upFbos = [];
         this._upTextures = [];
         this._blurResultTex = null;
+        this._renderedKey = null;
         this._poolWidth = 0;
         this._poolHeight = 0;
     }

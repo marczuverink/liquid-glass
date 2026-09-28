@@ -2,6 +2,9 @@ export let _utilsLogger = null;
 export function setUtilsLogger(logger) {
     _utilsLogger = logger;
 }
+export function utilsLogEnabled() {
+    return !!_utilsLogger && _utilsLogger.enabled !== false;
+}
 export function utilsLog(msg) {
     try {
         _utilsLogger?.log(msg);

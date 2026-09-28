@@ -1,4 +1,5 @@
 import { ToggleStyles } from './quickSettings/toggleStyles.js';
+import { addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs } from './animation/frameTicker.js';
 import { Spring } from './animation/spring.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
@@ -1865,7 +1866,8 @@ export class QuickSettingsManager {
     const generation = this._adaptiveGeneration ?? 0;
 
     this._contrastSampler
-      .chooseColorsForActors(targets, this._adaptiveConfig, this.menu?.actor)
+      .chooseColorsForActors(targets, this._adaptiveConfig, this.menu?.actor,
+        () => this._activeMode === 'background' ? this.effect?.paintCount ?? NaN : NaN)
       .then(colorMap => {
         if (generation !== (this._adaptiveGeneration ?? 0) || this._torndown || !this._adaptiveConfig.enabled) return;
         this._applyAdaptiveColorMap(colorMap, skipAnimations);
@@ -2107,7 +2109,7 @@ export class QuickSettingsManager {
 
   _startAnimation(targetValue: number) {
     if (this._tickId !== 0) {
-      GLib.source_remove(this._tickId);
+      removeFrameTicker(this._tickId);
       this._tickId = 0;
     }
 
@@ -2133,7 +2135,7 @@ export class QuickSettingsManager {
     if (this._tickId === 0) {
       let lastTime = GLib.get_monotonic_time();
 
-      this._tickId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, this._animationInterval, () => {
+      this._tickId = addFrameTicker(() => {
         if (!this.bgActor || !this.targetActor) {
           this._tickId = 0;
           return GLib.SOURCE_REMOVE;
@@ -2207,7 +2209,7 @@ export class QuickSettingsManager {
           return GLib.SOURCE_REMOVE;
         }
         return GLib.SOURCE_CONTINUE;
-      });
+      }, normalizeAnimationIntervalMs(this._animationInterval));
     }
   }
 
@@ -2356,6 +2358,11 @@ export class QuickSettingsManager {
     if (this._animSignalId) {
       try { this.menu.disconnect(this._animSignalId); } catch (e) { }
       this._animSignalId = 0;
+    }
+
+    if (this._tickId !== 0) {
+      removeFrameTicker(this._tickId);
+      this._tickId = 0;
     }
 
     if (this._frameSyncId !== 0) {

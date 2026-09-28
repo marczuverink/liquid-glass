@@ -13,7 +13,7 @@ import Cogl from 'gi://Cogl';
 import GLib from 'gi://GLib';
 import { RenderPasses } from './rendering/passes.js';
 import { computeCaptureLayout } from './actors/geometry.js';
-import { registerGlassEffect, unregisterGlassEffect } from './diagnostics/glass.js';
+import { registerGlassEffect, unregisterGlassEffect, blurCacheDefault } from './diagnostics/glass.js';
 import { frameSerial, ensureFrameSerialHook, frameSerialIsLive } from './rendering/frameClock.js';
 export { noteStrandEntry, setGlassRingArmed, isGlassRingArmed, startGlassRingSampler, stopGlassRingSampler, flushGlassRing } from './diagnostics/glass.js';
 // ─── Main class ───────────────────────────────────────────────────────────────
@@ -66,6 +66,8 @@ export const LiquidEffect = GObject.registerClass({
         this._compositeRect = null;
         this._blurRuns = 0;
         this._blurSkips = 0;
+        this._blurCacheHits = 0;
+        this._blurCacheEnabled = blurCacheDefault;
         this._recaptureSerial = 0;
         ensureFrameSerialHook();
         this._diagFirstPaintLogged = false;
@@ -295,12 +297,18 @@ export const LiquidEffect = GObject.registerClass({
             ? (blurRect === null)
             : (blurRect !== null && a[0] === blurRect[0] && a[1] === blurRect[1] &&
                 a[2] === blurRect[2] && a[3] === blurRect[3]);
-        const reuseBlur = !firstPaintThisFrame &&
-            this._blur.passCount > 0 &&
+        const poolMatches = this._blur.passCount > 0 &&
             this._blur.result !== null &&
             rectUnchanged &&
             this._blur.width === blurW &&
             this._blur.height === blurH;
+        const reuseSameFrame = !firstPaintThisFrame && poolMatches;
+        const keyUV = blurRect ? blurSrcUV : srcUV;
+        const blurInputKey = [this._recaptureSerial, srcTex, keyUV[0], keyUV[1], keyUV[2], keyUV[3],
+            this._cropPassEnabled];
+        const reuseCrossFrame = !reuseSameFrame && poolMatches && this._blurCacheEnabled &&
+            this._blur.canReuse(blurInputKey);
+        const reuseBlur = reuseSameFrame || reuseCrossFrame;
         // [PERF] The crop runs only for a paint that is going to blur — the blur
         // is its only consumer now that both composite layers share one texture.
         // With a sub-rect in play it has nothing left to do: its whole job was to
@@ -360,14 +368,15 @@ export const LiquidEffect = GObject.registerClass({
         // Always takes the raw capture as input, sampled over srcUV.
         // ─────────────────────────────────────────────────────────────────────
         if (reuseBlur) {
-            // _blurResultTex is left exactly as the frame's first paint set it.
             this._blurSkips++;
+            if (reuseCrossFrame)
+                this._blurCacheHits++;
         }
         else {
             this._blurRectUsed = blurRect;
             if (this._blur.passCount > 0)
                 this._blurRuns++;
-            this._blur.render(_paintNode, effectiveTex, blurInputUV);
+            this._blur.render(_paintNode, effectiveTex, blurInputUV, blurInputKey);
         }
         // The final quad is in capture-texel coordinates, not actor-local coordinates.
         // Use layout.dest so OffscreenEffect’s framebuffer offset is not applied twice.
@@ -464,6 +473,7 @@ export const LiquidEffect = GObject.registerClass({
                 cropRan: effectiveTex !== srcTex,
                 blurRuns: this._blurRuns,
                 blurSkips: this._blurSkips,
+                blurCacheHits: this._blurCacheHits,
                 // The uniforms that decide whether a drop shadow can appear at all.
                 // Read straight out of the buffered state, which is by definition
                 // what was last handed to the pipeline — so a value that looks wrong
@@ -557,6 +567,13 @@ export const LiquidEffect = GObject.registerClass({
      */
     setCropPassEnabled(enabled) {
         this._cropPassEnabled = enabled;
+        this.queue_repaint();
+    }
+    get paintCount() {
+        return this._diagPaintCount;
+    }
+    setBlurCacheEnabled(enabled) {
+        this._blurCacheEnabled = !!enabled;
         this.queue_repaint();
     }
     /**

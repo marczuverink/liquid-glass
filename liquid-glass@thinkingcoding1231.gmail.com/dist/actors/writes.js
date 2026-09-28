@@ -1,4 +1,4 @@
-import { utilsLog } from '../diagnostics/logging.js';
+import { utilsLog, utilsLogEnabled } from '../diagnostics/logging.js';
 // ─── [PERF] Idle gating: write a clone property only when it changes ─────────
 //
 // Every manager's BEFORE_REDRAW tick used to re-write translation_x/y,
@@ -140,13 +140,14 @@ export function setCloneCulled(actor, culled, why) {
     // screen at the moment of a wrong cull and then stays there, because with
     // ④ in place nothing damages that region again — so the report taken
     // afterwards shows everything correct. The timeline is what identifies it.
-    if (why) {
+    if (why && utilsLogEnabled()) {
         let name = '(?)';
         try {
             name = actor.get_name?.() || '(unnamed)';
         }
         catch (_) { }
-        utilsLog(`[Liquid Glass][cull] ${culled ? 'CULL ' : 'SHOW '} "${name}" ${why}`);
+        const text = typeof why === 'function' ? why() : why;
+        utilsLog(`[Liquid Glass][cull] ${culled ? 'CULL ' : 'SHOW '} "${name}" ${text}`);
     }
     if (culled) {
         actor.opacity = 0;

@@ -313,7 +313,7 @@ export class WindowCloneManager {
             // damage — then apply this frame's cull decision. setCloneCulled() is
             // a no-op when the state has not changed.
             setActorVisible(clone, true);
-            setCloneCulled(clone, culled, culled
+            setCloneCulled(clone, culled, () => culled
                 ? `src=(${Math.round(wX)},${Math.round(wY)},${Math.round(width * sxSafe)}x${Math.round(height * sySafe)}) ` +
                     `cullRect=[${this._cullRect.map(Math.round)}] label=${this.label}`
                 : `label=${this.label}`);

@@ -385,3 +385,50 @@ test('a style change repaints only the container that changed', () => {
   assert.ok(rows[0].style.includes('color:'));
   assert.equal(rows[1].style.includes('color:'), false, 'untouched rows stay untouched');
 });
+
+test('an unrepainted glass skips the capture once the decision has settled', async () => {
+  const sampler = new Sampler();
+  const root = { mapped: true, rect: [0, 0, 300, 400] };
+  const rows = [{ mapped: true, rect: [10, 10, 100, 20] }];
+  let paints = 0, captures = 0, value = 0.9;
+  sampler.sampleLuminance = async () => { captures++; paints++; return value; };
+  const choose = () => sampler.chooseColorsForActors(rows, config, root, () => paints);
+
+  for (let i = 0; i < 20; i++) await choose();
+  const settled = captures;
+  assert.ok(settled > 1 && settled < 20, `sampled ${settled} times before settling`);
+  const skipped = await choose();
+  assert.equal(captures, settled);
+  assert.equal(skipped.size, 0, 'a skipped round leaves the applied colours alone');
+
+  paints++;
+  value = 0.02;
+  assert.equal((await choose()).get(rows[0]), config.lightTextColor, 'a repaint samples again');
+  assert.equal(captures, settled + 1);
+});
+
+test('the skip baseline is dropped when the region, config or screen changes', async () => {
+  const sampler = new Sampler();
+  const root = { mapped: true, rect: [0, 0, 300, 400] };
+  const rows = [{ mapped: true, rect: [10, 10, 100, 20] }];
+  let paints = 0, captures = 0;
+  sampler.sampleLuminance = async () => { captures++; paints++; return 0.9; };
+  for (let i = 0; i < 20; i++) await sampler.chooseColorsForActors(rows, config, root, () => paints);
+  const settled = captures;
+
+  root.rect = [0, 0, 300, 420];
+  await sampler.chooseColorsForActors(rows, config, root, () => paints);
+  assert.equal(captures, settled + 1, 'a moved region samples');
+  for (let i = 0; i < 20; i++) await sampler.chooseColorsForActors(rows, config, root, () => paints);
+  const again = captures;
+  await sampler.chooseColorsForActors(rows, { ...config, darkTextColor: '#000000' }, root, () => paints);
+  assert.equal(captures, again + 1, 'new text colours sample');
+
+  sampler.sampleLuminance = async () => { captures++; paints += 3; return 0.9; };
+  for (let i = 0; i < 5; i++) await sampler.chooseColorsForActors(rows, config, root, () => paints);
+  assert.equal(captures, again + 6, 'a screen that changed during the capture keeps sampling');
+
+  const plain = captures;
+  for (let i = 0; i < 5; i++) await sampler.chooseColorsForActors(rows, config, root);
+  assert.equal(captures, plain + 5, 'without a paint signature nothing is skipped');
+});

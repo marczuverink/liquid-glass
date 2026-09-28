@@ -239,6 +239,19 @@ export class StageContrastSampler {
   private _roundsSinceFlip: number = READABILITY_FLIP_COOLDOWN;
   private _lastRawLuma: number | null = null;
   private _lastRect: { x: number; y: number; width: number; height: number } | null = null;
+  private _lastDecided: string | null = null;
+  private _unchangedSignature: number | null = null;
+  private _unchangedKey: string = '';
+  private _skippedSamples: number = 0;
+
+  get skippedSamples(): number {
+    return this._skippedSamples;
+  }
+
+  invalidate(): void {
+    this._unchangedSignature = null;
+    this._unchangedKey = '';
+  }
 
   async sampleLuminance(rect: { x: number, y: number, width: number, height: number }): Promise<number | null> {
     if (!rect || rect.width <= 0 || rect.height <= 0)
@@ -351,7 +364,7 @@ export class StageContrastSampler {
   }
 
   async chooseColorsForActors(actors: Clutter.Actor[], config: typeof AdaptiveContrastConfig = AdaptiveContrastConfig,
-    root: Clutter.Actor | null = null): Promise<Map<Clutter.Actor, string>> {
+    root: Clutter.Actor | null = null, paintSignature?: () => number): Promise<Map<Clutter.Actor, string>> {
     const rects: { x: number, y: number, width: number, height: number }[] = [];
     const targets: Clutter.Actor[] = [];
 
@@ -368,8 +381,34 @@ export class StageContrastSampler {
     if (targets.length === 0)
       return result;
 
+    const readSignature = (): number | null => {
+      if (!paintSignature) return null;
+      try {
+        const v = paintSignature();
+        return Number.isFinite(v) ? v : null;
+      } catch (_) { return null; }
+    };
+    const merged = config.samplePerElement ? null : (root ? _getActorRect(root) : null) ?? _mergeRects(rects);
+    const sampledRects = config.samplePerElement ? rects : (merged ? [merged] : []);
+    const key = sampledRects
+      .map(r => `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}`)
+      .join(';') + `|${config.samplePerElement ? 'e' : 'm'}|${config.lightTextColor}|${config.darkTextColor}`;
+    const before = readSignature();
+    if (before !== null && before === this._unchangedSignature && key === this._unchangedKey) {
+      this._skippedSamples++;
+      return result;
+    }
+    const settle = (stable: boolean) => {
+      const after = readSignature();
+      if (stable && before !== null && after !== null && after - before <= sampledRects.length) {
+        this._unchangedSignature = after;
+        this._unchangedKey = key;
+      } else {
+        this.invalidate();
+      }
+    };
+
     if (!config.samplePerElement) {
-      const merged = (root ? _getActorRect(root) : null) ?? _mergeRects(rects);
       if (!merged)
         return result;
 
@@ -382,9 +421,15 @@ export class StageContrastSampler {
       }
       this._lastRect = merged;
       const luma = await this.sampleLuminance(merged);
-      if (luma === null)
+      if (luma === null) {
+        this.invalidate();
         return result;
+      }
       const color = this.decideTextColor(luma, config);
+      const converged = this._lastLuma !== null && Math.abs(this._lastLuma - _clamp(luma, 0, 1)) < 0.01;
+      settle(color !== null && color === this._lastDecided && converged &&
+        this._roundsSinceFlip >= READABILITY_FLIP_COOLDOWN);
+      this._lastDecided = color;
       if (!color)
         return result;
 
@@ -395,12 +440,15 @@ export class StageContrastSampler {
 
     for (let i = 0; i < targets.length; i++) {
       const luma = await this.sampleLuminance(rects[i]);
-      if (luma === null)
+      if (luma === null) {
+        this.invalidate();
         return result;
+      }
       const color = this.decideTextColor(luma, config);
       if (color)
         result.set(targets[i], color);
     }
+    settle(true);
 
     return result;
   }

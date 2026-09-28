@@ -747,7 +747,8 @@ export class NotificationManager {
     const generation = this._bannerGeneration;
 
     this._contrastSampler
-      .chooseColorsForActors(targets, this._adaptiveConfig, this.currentBanner)
+      .chooseColorsForActors(targets, this._adaptiveConfig, this.currentBanner,
+        () => this.effect?.paintCount ?? NaN)
       .then(colorMap => {
         if (generation !== this._bannerGeneration || !this.currentBanner) return;
         this._applyAdaptiveColorMap(colorMap, this._isFirstAdaptiveRun);

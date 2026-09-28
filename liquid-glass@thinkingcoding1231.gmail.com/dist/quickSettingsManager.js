@@ -1,4 +1,5 @@
 import { ToggleStyles } from './quickSettings/toggleStyles.js';
+import { addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs } from './animation/frameTicker.js';
 import { Spring } from './animation/spring.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
@@ -1705,7 +1706,7 @@ export class QuickSettingsManager {
         this._adaptiveInFlight = true;
         const generation = this._adaptiveGeneration ?? 0;
         this._contrastSampler
-            .chooseColorsForActors(targets, this._adaptiveConfig, this.menu?.actor)
+            .chooseColorsForActors(targets, this._adaptiveConfig, this.menu?.actor, () => this._activeMode === 'background' ? this.effect?.paintCount ?? NaN : NaN)
             .then(colorMap => {
             if (generation !== (this._adaptiveGeneration ?? 0) || this._torndown || !this._adaptiveConfig.enabled)
                 return;
@@ -1934,7 +1935,7 @@ export class QuickSettingsManager {
     // ── Spring animation (QuickSettings-specific) ──────────────────────────────
     _startAnimation(targetValue) {
         if (this._tickId !== 0) {
-            GLib.source_remove(this._tickId);
+            removeFrameTicker(this._tickId);
             this._tickId = 0;
         }
         if (!this._enableAnimation) {
@@ -1957,7 +1958,7 @@ export class QuickSettingsManager {
         this._springPos.target = targetValue;
         if (this._tickId === 0) {
             let lastTime = GLib.get_monotonic_time();
-            this._tickId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, this._animationInterval, () => {
+            this._tickId = addFrameTicker(() => {
                 if (!this.bgActor || !this.targetActor) {
                     this._tickId = 0;
                     return GLib.SOURCE_REMOVE;
@@ -2029,7 +2030,7 @@ export class QuickSettingsManager {
                     return GLib.SOURCE_REMOVE;
                 }
                 return GLib.SOURCE_CONTINUE;
-            });
+            }, normalizeAnimationIntervalMs(this._animationInterval));
         }
     }
     // ── Submenu position fix (QuickSettings-specific) ──────────────────────────
@@ -2184,6 +2185,10 @@ export class QuickSettingsManager {
             }
             catch (e) { }
             this._animSignalId = 0;
+        }
+        if (this._tickId !== 0) {
+            removeFrameTicker(this._tickId);
+            this._tickId = 0;
         }
         if (this._frameSyncId !== 0) {
             if (global.compositor?.get_laters)

@@ -4,7 +4,7 @@ import { GlassRect, isCullSiteEnabled } from './options.js';
 import { UnpickableActor, UnpickableClone } from '../actors/unpickable.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import St from 'gi://St';
-import { utilsLog, reportFrameLoopError, _utilsLogger } from '../diagnostics/logging.js';
+import { utilsLog, utilsLogEnabled, reportFrameLoopError } from '../diagnostics/logging.js';
 import Shell from 'gi://Shell';
 import { isActorValid } from '../actors/lifecycle.js';
 import { getAllocatedSize, rectsIntersect } from '../actors/geometry.js';
@@ -563,7 +563,7 @@ export class UILayerSampler {
    * the outside. Reported on change only, so a stable panel costs one line.
    */
   private _reportReplicaGeometry(source: Clutter.Actor, replica: any): void {
-    if (!_utilsLogger) return;
+    if (!utilsLogEnabled()) return;
     try {
       const blurWidget: Clutter.Actor = replica.blurWidget;
       const [srcAbsX, srcAbsY] = source.get_transformed_position();
@@ -1034,12 +1034,12 @@ export class UILayerSampler {
         scaledW > 0 && scaledH > 0 &&
         Number.isFinite(absX) && Number.isFinite(absY);
       if (cullable && !rectsIntersect(absX, absY, scaledW, scaledH, cull!)) {
-        setCloneCulled(sourceClone, true,
+        setCloneCulled(sourceClone, true, () =>
           `src=(${Math.round(absX)},${Math.round(absY)},${Math.round(scaledW)}x${Math.round(scaledH)}) ` +
           `cullRect=[${cull!.map(Math.round)}] label=${this._label}`);
         return;
       }
-      setCloneCulled(sourceClone, false, `label=${this._label}`);
+      setCloneCulled(sourceClone, false, () => `label=${this._label}`);
 
       // [PERF] Compare-then-write: see setTranslationIfChanged(). The UI
       // sampler runs this for every uiGroup child of every open glass, on
@@ -1102,7 +1102,7 @@ export class UILayerSampler {
     expectX: number,
     expectY: number
   ): void {
-    if (!_utilsLogger) return;
+    if (!utilsLogEnabled()) return;
     try {
       const [gotX, gotY] = sourceClone.get_transformed_position();
       const drifted = !Number.isFinite(gotX) || !Number.isFinite(gotY) ||
@@ -1300,6 +1300,7 @@ export class UILayerSampler {
   }
 
   private _reportClonedSet(): void {
+    if (!utilsLogEnabled()) { this._clonedNamesLogged = ''; return; }
     let names = '';
     for (const actor of this._clones.keys()) {
       let n = '(unnamed)';

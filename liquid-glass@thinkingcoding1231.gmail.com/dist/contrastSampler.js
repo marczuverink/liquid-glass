@@ -211,6 +211,17 @@ export class StageContrastSampler {
     _roundsSinceFlip = READABILITY_FLIP_COOLDOWN;
     _lastRawLuma = null;
     _lastRect = null;
+    _lastDecided = null;
+    _unchangedSignature = null;
+    _unchangedKey = '';
+    _skippedSamples = 0;
+    get skippedSamples() {
+        return this._skippedSamples;
+    }
+    invalidate() {
+        this._unchangedSignature = null;
+        this._unchangedKey = '';
+    }
     async sampleLuminance(rect) {
         if (!rect || rect.width <= 0 || rect.height <= 0)
             return null;
@@ -307,7 +318,7 @@ export class StageContrastSampler {
             return null;
         return this.decideTextColor(backdrop.luminance, { ...config, samplePerElement: true });
     }
-    async chooseColorsForActors(actors, config = AdaptiveContrastConfig, root = null) {
+    async chooseColorsForActors(actors, config = AdaptiveContrastConfig, root = null, paintSignature) {
         const rects = [];
         const targets = [];
         for (const actor of actors) {
@@ -320,8 +331,38 @@ export class StageContrastSampler {
         const result = new Map();
         if (targets.length === 0)
             return result;
+        const readSignature = () => {
+            if (!paintSignature)
+                return null;
+            try {
+                const v = paintSignature();
+                return Number.isFinite(v) ? v : null;
+            }
+            catch (_) {
+                return null;
+            }
+        };
+        const merged = config.samplePerElement ? null : (root ? _getActorRect(root) : null) ?? _mergeRects(rects);
+        const sampledRects = config.samplePerElement ? rects : (merged ? [merged] : []);
+        const key = sampledRects
+            .map(r => `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}`)
+            .join(';') + `|${config.samplePerElement ? 'e' : 'm'}|${config.lightTextColor}|${config.darkTextColor}`;
+        const before = readSignature();
+        if (before !== null && before === this._unchangedSignature && key === this._unchangedKey) {
+            this._skippedSamples++;
+            return result;
+        }
+        const settle = (stable) => {
+            const after = readSignature();
+            if (stable && before !== null && after !== null && after - before <= sampledRects.length) {
+                this._unchangedSignature = after;
+                this._unchangedKey = key;
+            }
+            else {
+                this.invalidate();
+            }
+        };
         if (!config.samplePerElement) {
-            const merged = (root ? _getActorRect(root) : null) ?? _mergeRects(rects);
             if (!merged)
                 return result;
             if (!this._lastRect || ['x', 'y', 'width', 'height'].some(key => Math.abs(merged[key] - this._lastRect[key]) > 2)) {
@@ -332,9 +373,15 @@ export class StageContrastSampler {
             }
             this._lastRect = merged;
             const luma = await this.sampleLuminance(merged);
-            if (luma === null)
+            if (luma === null) {
+                this.invalidate();
                 return result;
+            }
             const color = this.decideTextColor(luma, config);
+            const converged = this._lastLuma !== null && Math.abs(this._lastLuma - _clamp(luma, 0, 1)) < 0.01;
+            settle(color !== null && color === this._lastDecided && converged &&
+                this._roundsSinceFlip >= READABILITY_FLIP_COOLDOWN);
+            this._lastDecided = color;
             if (!color)
                 return result;
             for (const actor of targets)
@@ -343,12 +390,15 @@ export class StageContrastSampler {
         }
         for (let i = 0; i < targets.length; i++) {
             const luma = await this.sampleLuminance(rects[i]);
-            if (luma === null)
+            if (luma === null) {
+                this.invalidate();
                 return result;
+            }
             const color = this.decideTextColor(luma, config);
             if (color)
                 result.set(targets[i], color);
         }
+        settle(true);
         return result;
     }
 }

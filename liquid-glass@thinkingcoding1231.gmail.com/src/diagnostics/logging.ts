@@ -5,10 +5,13 @@
  * everything else — so extension.js hands the shared Logger in once, and
  * everything here stays a no-op until it does.
  */
-type UtilsLogger = { log: (...args: any[]) => void };
+type UtilsLogger = { log: (...args: any[]) => void, readonly enabled?: boolean };
 export let _utilsLogger: UtilsLogger | null = null;
 export function setUtilsLogger(logger: UtilsLogger | null): void {
   _utilsLogger = logger;
+}
+export function utilsLogEnabled(): boolean {
+  return !!_utilsLogger && _utilsLogger.enabled !== false;
 }
 export function utilsLog(msg: string): void {
   try { _utilsLogger?.log(msg); } catch (_) { /* noop */ }

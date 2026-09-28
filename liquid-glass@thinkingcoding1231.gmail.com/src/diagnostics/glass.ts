@@ -23,6 +23,8 @@ import { setWindowActorRescueMode, getWindowActorRescueMode, type WindowActorRes
 // in the dump means the glass is showing the raw, unblurred capture.
 const _liveEffects: Set<any> = new Set();
 
+export let blurCacheDefault = true;
+
 /**
  * [anim-stall] A rolling in-memory record of what every window glass is doing,
  * flushed to the journal only when asked.
@@ -505,6 +507,16 @@ function _registerGlassDebugHooks(): void {
       console.log(msg);
       return msg;
     },
+    blurCache: (enabled: boolean) => {
+      blurCacheDefault = !!enabled;
+      let n = 0;
+      for (const fx of _liveEffects) {
+        try { fx.setBlurCacheEnabled(enabled); n++; } catch (e) { }
+      }
+      const msg = `[Liquid Glass] cross-frame blur cache ${enabled ? 'ENABLED' : 'DISABLED'} on ${n} instance(s)`;
+      console.log(msg);
+      return msg;
+    },
     earlyExit: (enabled: boolean) => {
       let n = 0;
       for (const fx of _liveEffects) {
@@ -633,6 +645,7 @@ function _registerGlassDebugHooks(): void {
           composited: fx._diagCompositedPaintCount,
           blurRuns: fx._blurRuns,
           blurSkips: fx._blurSkips,
+          blurCacheHits: fx._blurCacheHits,
           snapshotAgeMs: Math.round((now - fx._diagLastSnapshotAt) / 1000),
           ...live,
         }));

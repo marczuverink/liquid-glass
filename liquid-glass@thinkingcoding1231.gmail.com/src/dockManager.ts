@@ -565,7 +565,7 @@ export class DashManager {
     // this._logger.log(`[Gap] ${absX}, ${absY}, ${baseW}, ${baseH}`);
     // --------------------------------------------------------------------
     // --------------------------------------------------------------------
-    let marginValue = this._settings.get_int('dock-margin-bottom') || 0;
+    let marginValue = this._marginValue || 0;
 
     if (monitor && marginValue > 0) {
 

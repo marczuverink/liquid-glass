@@ -1,3 +1,4 @@
+import { addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs } from './animation/frameTicker.js';
 import { Spring, SwiftSpring } from './animation/spring.js';
 // src/uiManager.ts
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -1328,7 +1329,8 @@ export class UIManager {
     this._adaptiveInFlight = true;
 
     this._contrastSampler
-      .chooseColorsForActors(targets, this._adaptiveConfig, this.menu?.actor)
+      .chooseColorsForActors(targets, this._adaptiveConfig, this.menu?.actor,
+        () => this.effect?.paintCount ?? NaN)
       .then(colorMap => {
         if (!this._isEffectActive || this._actorDestroyed) return;
         this._applyAdaptiveColorMap(colorMap, skipAnimations);
@@ -1401,7 +1403,7 @@ export class UIManager {
   _startAnimation(targetValue: number) {
     let isClosing = (targetValue === 0);
     if (this._tickId !== 0) {
-      GLib.source_remove(this._tickId);
+      removeFrameTicker(this._tickId);
       this._tickId = 0;
     }
     // If animation is disabled, just reset to default state
@@ -1437,7 +1439,7 @@ export class UIManager {
     if (this._tickId === 0) {
       let lastTime = GLib.get_monotonic_time();
 
-      this._tickId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, this._animationInterval, () => {
+      this._tickId = addFrameTicker(() => {
         if (!this.bgActor || !this.targetActor) {
           this._tickId = 0;
           return GLib.SOURCE_REMOVE;
@@ -1527,7 +1529,7 @@ export class UIManager {
           return GLib.SOURCE_REMOVE;
         }
         return GLib.SOURCE_CONTINUE;
-      });
+      }, normalizeAnimationIntervalMs(this._animationInterval));
     }
   }
 
@@ -1547,7 +1549,7 @@ export class UIManager {
     this._signals = [];
 
     if (this._tickId && this._tickId !== 0) {
-      GLib.Source.remove(this._tickId);
+      removeFrameTicker(this._tickId);
       this._tickId = 0;
     }
 
