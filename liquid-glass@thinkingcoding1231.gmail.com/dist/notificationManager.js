@@ -4,7 +4,7 @@ import St from 'gi://St';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import { LiquidEffect } from './liquidEffect.js';
-import { StageContrastSampler, AdaptiveContrastConfig } from './contrastSampler.js';
+import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
 import { UnpickableActor } from './actors/unpickable.js';
 import { UILayerSampler } from './capture/uiLayerSampler.js';
 import { WindowCloneManager } from './capture/windowClones.js';
@@ -43,6 +43,7 @@ export class NotificationManager {
     _lastBgY;
     _lastScreenW;
     _lastScreenH;
+    _liveMonitorOrigin = null;
     _contrastSampler;
     _adaptiveConfig;
     _adaptiveTimerId;
@@ -151,8 +152,12 @@ export class NotificationManager {
         connectSetting('notification-enable-adaptive-text-color', () => {
             this._adaptiveConfig.enabled = this._settings.get_boolean('notification-enable-adaptive-text-color');
         });
+        connectSetting('notification-adaptive-text-preference', () => {
+            this._adaptiveConfig.preference = sanitizeColorPreference(this._settings.get_string('notification-adaptive-text-preference'));
+        });
         connectSetting('notification-sample-interval-ms', () => {
             this._adaptiveConfig.sampleIntervalMs = this._settings.get_int('notification-sample-interval-ms');
+            this._adaptiveConfig.preference = sanitizeColorPreference(this._settings.get_string('notification-adaptive-text-preference'));
         });
         connectSetting('notification-y-offset', () => {
             this._notificationYOffset = this._settings.get_int('notification-y-offset');
@@ -273,6 +278,7 @@ export class NotificationManager {
         this.effect.setContrast(contrast);
         this.effect.setBlurRadius(blurRadius);
         this.liquidBox.add_effect(this.effect);
+        this.effect.setLiveGeometryHook(() => this._syncGlassGeometryLive());
         this._windowCloneManager = new WindowCloneManager(this.liquidBox, this._cloneContainer, 'lg-notification');
         this._uiSampler = new UILayerSampler(this.bgActor, this.liquidBox, [bannerRoot, global.windowGroup, global.window_group], this._cloneContainer, 'notification');
         this._buildClones();
@@ -332,6 +338,7 @@ export class NotificationManager {
         let screenH = Math.max(1, monitor?.height ?? 1);
         let localBgX = bgX_abs - monitorX;
         let localBgY = bgY_abs - monitorY;
+        this._liveMonitorOrigin = [monitorX, monitorY];
         if (this._lastBgW !== bgW || this._lastBgH !== bgH ||
             this._lastBgX !== bgX_abs || this._lastBgY !== bgY_abs ||
             this._lastScreenW !== screenW || this._lastScreenH !== screenH) {
@@ -369,6 +376,20 @@ export class NotificationManager {
         });
         this._uiSampler?.sync(monitorX, monitorY, screenW, screenH);
         this._windowCloneManager?.sync();
+    }
+    _syncGlassGeometryLive() {
+        const banner = this.currentBanner;
+        const origin = this._liveMonitorOrigin;
+        if (!banner || !this.effect || !origin)
+            return;
+        if (!banner.mapped)
+            return;
+        const [absX, absY, w, h] = getTransformedRect(banner);
+        if (![absX, absY, w, h].every(Number.isFinite) || w <= 0 || h <= 0)
+            return;
+        const bgW = w + this._glassExpand * 2 + SHADER_PADDING * 2;
+        const bgH = h + this._glassExpand * 2 + SHADER_PADDING * 2;
+        this.effect.setGlassGeometry(absX - this._glassExpand - SHADER_PADDING - origin[0], absY - this._glassExpand - SHADER_PADDING - origin[1], bgW, bgH);
     }
     _buildClones() {
         if (!this.bgActor)
@@ -462,6 +483,7 @@ export class NotificationManager {
     }
     cleanup() {
         this._torndown = true;
+        this._liveMonitorOrigin = null;
         this._teardownStep('frameSync', () => {
             if (this._frameSyncId !== 0) {
                 if (global.compositor?.get_laters)
