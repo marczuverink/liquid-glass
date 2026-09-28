@@ -57,10 +57,19 @@ export class PanelMenuManager {
 
   private _scan() {
     const panel = Main.panel as any;
+    const { buttons, wanted, detected } = this._discover(panel);
+    this._forgetButtons(buttons);
+    this._detachUnwanted(wanted);
+    this._attachWanted(wanted);
+    detected.sort();
+    if (JSON.stringify(detected) !== JSON.stringify(this._settings.get_strv('detected-extra-menus')))
+      this._settings.set_strv('detected-extra-menus', detected);
+  }
+
+  private _discover(panel: any): { buttons: Set<any>, wanted: Map<any, { button: any, name: string }>, detected: string[] } {
     const buttons = new Set<any>();
-    const wanted = new Map<any, any>();
     // Indicator name per menu, so each glass can be told apart in the log.
-    const wantedNames = new Map<any, string>();
+    const wanted = new Map<any, { button: any, name: string }>();
     const detected: string[] = [];
     const disabled = new Set(this._settings.get_strv('disabled-extra-menus'));
     const enabled = this._settings.get_boolean('enable-extra-menu-glass');
@@ -69,15 +78,7 @@ export class PanelMenuManager {
     for (const [name, button] of Object.entries<any>(panel.statusArea)) {
       if (!button || !panel.contains(button.container ?? button)) continue;
       buttons.add(button);
-      if (!this._buttons.has(button)) {
-        this._buttons.set(button, [
-          button.connect('menu-set', () => this._scheduleScan()),
-          button.connect('destroy', () => {
-            this._buttons.delete(button);
-            this._scheduleScan();
-          }),
-        ]);
-      }
+      this._watchButton(button);
       const menu = button.menu;
       // Dummy menus and custom non-popup actors cannot use UIManager.
       // Calendar and Quick Settings already have their own managers.
@@ -86,40 +87,53 @@ export class PanelMenuManager {
       detected.push(name);
       const allowed = LEGACY_KEYS[name]
         ? this._settings.get_boolean(LEGACY_KEYS[name]) : !disabled.has(name);
-      if (enabled && allowed) {
-        wanted.set(menu, button);
-        wantedNames.set(menu, name);
-      }
+      if (enabled && allowed) wanted.set(menu, { button, name });
     }
+    return { buttons, wanted, detected };
+  }
 
+  private _watchButton(button: any) {
+    if (this._buttons.has(button)) return;
+    this._buttons.set(button, [
+      button.connect('menu-set', () => this._scheduleScan()),
+      button.connect('destroy', () => {
+        this._buttons.delete(button);
+        this._scheduleScan();
+      }),
+    ]);
+  }
+
+  private _forgetButtons(present: Set<any>) {
     for (const [button, ids] of this._buttons) {
-      if (buttons.has(button)) continue;
+      if (present.has(button)) continue;
       for (const id of ids) button.disconnect(id);
       this._buttons.delete(button);
     }
+  }
+
+  private _detachUnwanted(wanted: Map<any, unknown>) {
     // Keep existing instances: a new indicator must not close another menu.
     for (const [menu, entry] of this._menus) {
       if (wanted.has(menu)) continue;
       this._menus.delete(menu);
       try { entry.manager.cleanup(); } catch (e) { this._logger.log(`[Liquid Glass] Menu cleanup (${entry.name}): ${e}`); }
     }
-    for (const [menu, button] of wanted) {
+  }
+
+  private _attachWanted(wanted: Map<any, { button: any, name: string }>) {
+    for (const [menu, { button, name }] of wanted) {
       if (this._menus.has(menu)) continue;
-      const name = wantedNames.get(menu) ?? '?';
       let manager: UIManager | null = null;
       try {
         manager = new UIManager(this._path, this._settings, this._logger, button, false,
-          'enable-extra-menu-glass', PANEL_MENU_PREFIX, `menu:${name}`);
+          'enable-extra-menu-glass', PANEL_MENU_PREFIX, `menu:${name}`, false);
         manager.setup();
         this._menus.set(menu, { name, manager });
       } catch (e) {
-        try { manager?.cleanup(); } catch (_) { /* partial setup */ }
+        try { manager?.cleanup(); } catch { }
         this._logger.log(`[Liquid Glass] Could not attach panel menu glass to "${name}": ${e}`);
       }
     }
-    detected.sort();
-    if (JSON.stringify(detected) !== JSON.stringify(this._settings.get_strv('detected-extra-menus')))
-      this._settings.set_strv('detected-extra-menus', detected);
   }
 
   // [FIX] Teardown must not be all-or-nothing — the same guard UIManager,
@@ -135,7 +149,7 @@ export class PanelMenuManager {
     } catch (e) {
       try {
         this._logger?.log(`[Liquid Glass] PanelMenuManager.${name} failed during cleanup: ${e}`);
-      } catch (_) {
+      } catch {
         console.error(`[Liquid Glass] PanelMenuManager.${name} failed during cleanup: ${e}`);
       }
     }
@@ -153,7 +167,7 @@ export class PanelMenuManager {
 
     this._teardownStep('signals', () => {
       for (const { target, id } of this._signals) {
-        try { target.disconnect(id); } catch (e) { }
+        try { target.disconnect(id); } catch { }
       }
       this._signals = [];
     });
@@ -161,7 +175,7 @@ export class PanelMenuManager {
     this._teardownStep('buttonSignals', () => {
       for (const [button, ids] of this._buttons)
         for (const id of ids) {
-          try { button.disconnect(id); } catch (e) { }
+          try { button.disconnect(id); } catch { }
         }
       this._buttons.clear();
     });

@@ -80,8 +80,9 @@ export default class LiquidGlassExtension extends Extension {
 
     // Initialize the logger
     this._logger = new Logger(this._settings);
-    // utils.ts has no settings of its own; hand it the shared, gated logger
-    // so UILayerSampler's diagnostics obey `output-logs` like everything else.
+    // The capture and actor modules have no settings of their own; hand them
+    // the shared, gated logger (diagnostics/logging.ts) so UILayerSampler's
+    // diagnostics obey `output-logs` like everything else.
     setUtilsLogger(this._logger);
 
     this._logger.log(`[Liquid Glass] Enabled. UUID: ${this.uuid}`);
@@ -238,7 +239,7 @@ export default class LiquidGlassExtension extends Extension {
     if (entry.destroyId !== 0) {
       try {
         entry.container.disconnect(entry.destroyId);
-      } catch (e) { }
+      } catch { }
       entry.destroyId = 0;
     }
 
@@ -308,11 +309,11 @@ export default class LiquidGlassExtension extends Extension {
       );
       this._dumpKeybindingInstalled = true;
     } else if (!wanted && this._dumpKeybindingInstalled) {
-      try { Main.wm.removeKeybinding('dump-loop-keybinding'); } catch (e) { }
+      try { Main.wm.removeKeybinding('dump-loop-keybinding'); } catch { }
       this._dumpKeybindingInstalled = false;
       // Switching the shortcut off also stops a dump it started.
       if (this._dumpLoopId) {
-        try { GLib.source_remove(this._dumpLoopId); } catch (e) { }
+        try { GLib.source_remove(this._dumpLoopId); } catch { }
         this._dumpLoopId = 0;
         console.log('[Liquid Glass][dump-loop] STOPPED (shortcut disabled)');
       }
@@ -325,7 +326,7 @@ export default class LiquidGlassExtension extends Extension {
       const accel = this._dumpSettings?.get_strv('dump-loop-keybinding')?.[0];
       if (accel) return accel.replace(/<Control>/gi, 'Ctrl+').replace(/<Alt>/gi, 'Alt+')
         .replace(/<Shift>/gi, 'Shift+').replace(/<Super>/gi, 'Super+').replace(/\+([a-z])$/, (_, k) => `+${k.toUpperCase()}`);
-    } catch (e) { }
+    } catch { }
     return 'the shortcut';
   }
 
@@ -347,7 +348,7 @@ export default class LiquidGlassExtension extends Extension {
     }
 
     const INTERVAL_MS = 100;
-    const TICKS = 600;             // 60 seconds
+    const TICKS = 600; // 60 seconds
     let count = 0;
     const seconds = (TICKS * INTERVAL_MS) / 1000;
     const endsAt = new Date(Date.now() + seconds * 1000);
@@ -373,17 +374,17 @@ export default class LiquidGlassExtension extends Extension {
   }
 
   _removeDumpLoopKeybinding() {
-    try { stopGlassRingSampler(); } catch (e) { }
+    try { stopGlassRingSampler(); } catch { }
     if (this._dumpLoopId) {
-      try { GLib.source_remove(this._dumpLoopId); } catch (e) { }
+      try { GLib.source_remove(this._dumpLoopId); } catch { }
       this._dumpLoopId = 0;
     }
     if (this._dumpSettings && this._dumpSettingsId) {
-      try { this._dumpSettings.disconnect(this._dumpSettingsId); } catch (e) { }
+      try { this._dumpSettings.disconnect(this._dumpSettingsId); } catch { }
     }
     this._dumpSettingsId = 0;
     if (this._dumpKeybindingInstalled) {
-      try { Main.wm.removeKeybinding('dump-loop-keybinding'); } catch (e) { }
+      try { Main.wm.removeKeybinding('dump-loop-keybinding'); } catch { }
       this._dumpKeybindingInstalled = false;
     }
     this._dumpSettings = null;
@@ -392,7 +393,7 @@ export default class LiquidGlassExtension extends Extension {
   disable() {
     this._active = false;
 
-    try { this._removeDumpLoopKeybinding(); } catch (e) { }
+    try { this._removeDumpLoopKeybinding(); } catch { }
 
     // [FIX] disable() must be idempotent and must never throw.
     //
@@ -409,13 +410,13 @@ export default class LiquidGlassExtension extends Extension {
     // so it outlives them. Each manager's _clearAdaptiveStyles() cancels its
     // own actors, but a manager that never got that far would leave entries
     // behind holding a BEFORE_REDRAW chain alive against dead actors.
-    try { adaptiveColorTweener.stopAll(); } catch (e) { }
+    try { adaptiveColorTweener.stopAll(); } catch { }
     // [black-frame] The shared wallpaper mirror is parented to uiGroup and is
     // not owned by any manager, so nothing else would take it down.
-    try { destroySharedBackgroundSource(); } catch (e) { }
+    try { destroySharedBackgroundSource(); } catch { }
     // [window-clone-clip] These effects sit on Mutter's own window actors,
     // which outlive the extension.
-    try { releaseAllClonedWindowActors(); } catch (e) { }
+    try { releaseAllClonedWindowActors(); } catch { }
 
     if (this._quickSettingsTimeoutId && this._quickSettingsTimeoutId !== 0) {
       GLib.Source.remove(this._quickSettingsTimeoutId);
@@ -459,7 +460,7 @@ export default class LiquidGlassExtension extends Extension {
         // failed teardown abort the teardown.
         try {
           this._logger?.error(`[Liquid Glass] ${name} cleanup failed during disable(): ${e}`);
-        } catch (_) {
+        } catch {
           console.error(`[Liquid Glass] ${name} cleanup failed during disable(): ${e}`);
         }
       }

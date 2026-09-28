@@ -23,6 +23,40 @@ const WINDOW_LIST_IFACE = `
     <signal name="WindowsChanged"/>
   </interface>
 </node>`;
+function readWindow(metaWindow) {
+    try {
+        const wmClass = metaWindow.get_wm_class() ?? '';
+        const windowType = metaWindow.get_window_type();
+        const title = metaWindow.get_title() ?? '';
+        // Skip the shell's own desktop/dock/splash surfaces; they can never be
+        // targeted by the effect and would only clutter the picker.
+        if (!wmClass || windowType === Meta.WindowType.DESKTOP ||
+            windowType === Meta.WindowType.DOCK || windowType === Meta.WindowType.SPLASHSCREEN)
+            return null;
+        const normal = windowType === Meta.WindowType.NORMAL ||
+            windowType === Meta.WindowType.DIALOG || windowType === Meta.WindowType.MODAL_DIALOG;
+        return { wmClass, title, normal };
+    }
+    catch {
+        return null;
+    }
+}
+function readApplication(entry, metaWindow, tracker) {
+    if (!tracker)
+        return;
+    try {
+        const app = tracker.get_window_app(metaWindow);
+        if (!app)
+            return;
+        entry.appName = app.get_name() ?? '';
+        // Serialized Gio.Icon: the prefs process turns it back into an icon
+        // with Gio.Icon.new_for_string().
+        const icon = app.get_app_info()?.get_icon();
+        if (icon)
+            entry.iconName = icon.to_string() ?? '';
+    }
+    catch { }
+}
 export class WindowListService {
     _logger;
     _dbusImpl = null;
@@ -48,7 +82,7 @@ export class WindowListService {
             try {
                 this._displaySignals.push({ obj: global.display, id: global.display.connect(signal, callback) });
             }
-            catch (e) { /* signal not present on this mutter — skip */ }
+            catch { }
         };
         connectDisplay('window-created', (_display, metaWindow) => {
             this._trackWindow(metaWindow);
@@ -68,7 +102,7 @@ export class WindowListService {
             try {
                 sig.obj.disconnect(sig.id);
             }
-            catch (e) { }
+            catch { }
         }
         this._displaySignals = [];
         for (const [metaWindow, ids] of this._windowSignals) {
@@ -76,7 +110,7 @@ export class WindowListService {
                 try {
                     metaWindow.disconnect(id);
                 }
-                catch (e) { }
+                catch { }
             }
         }
         this._windowSignals.clear();
@@ -84,7 +118,7 @@ export class WindowListService {
             try {
                 this._dbusImpl.unexport();
             }
-            catch (e) { }
+            catch { }
             this._dbusImpl = null;
         }
     }
@@ -107,7 +141,7 @@ export class WindowListService {
             try {
                 ids.push(metaWindow.connect(signal, () => this._queueChanged()));
             }
-            catch (e) { /* property not present — skip */ }
+            catch { }
         }
         try {
             ids.push(metaWindow.connect('unmanaged', () => {
@@ -115,7 +149,7 @@ export class WindowListService {
                 this._queueChanged();
             }));
         }
-        catch (e) { }
+        catch { }
         this._windowSignals.set(metaWindow, ids);
     }
     _untrackWindow(metaWindow) {
@@ -126,7 +160,7 @@ export class WindowListService {
             try {
                 metaWindow.disconnect(id);
             }
-            catch (e) { }
+            catch { }
         }
         this._windowSignals.delete(metaWindow);
     }
@@ -149,7 +183,7 @@ export class WindowListService {
                 try {
                     tracker = Shell.WindowTracker.get_default();
                 }
-                catch (e) {
+                catch {
                     tracker = null;
                 }
             }
@@ -157,53 +191,21 @@ export class WindowListService {
         };
         const byClass = new Map();
         for (const metaWindow of this._listMetaWindows()) {
-            let wmClass = '';
-            let windowType = null;
-            let title = '';
-            try {
-                wmClass = metaWindow.get_wm_class() ?? '';
-                windowType = metaWindow.get_window_type();
-                title = metaWindow.get_title() ?? '';
-            }
-            catch (e) {
+            const window = readWindow(metaWindow);
+            if (!window)
                 continue;
-            }
-            if (!wmClass)
-                continue;
-            // Skip the shell's own override-redirect/utility surfaces; they can never
-            // be targeted by the effect and would only clutter the picker.
-            if (windowType === Meta.WindowType.DESKTOP ||
-                windowType === Meta.WindowType.DOCK ||
-                windowType === Meta.WindowType.SPLASHSCREEN)
-                continue;
-            const isNormal = windowType === Meta.WindowType.NORMAL ||
-                windowType === Meta.WindowType.DIALOG ||
-                windowType === Meta.WindowType.MODAL_DIALOG;
+            const { wmClass, title, normal } = window;
             let entry = byClass.get(wmClass);
             if (!entry) {
                 entry = { wmClass, appName: '', iconName: '', titles: [], count: 0, normal: false };
                 byClass.set(wmClass, entry);
             }
             entry.count += 1;
-            entry.normal = entry.normal || isNormal;
+            entry.normal = entry.normal || normal;
             if (title && entry.titles.length < 8 && !entry.titles.includes(title))
                 entry.titles.push(title);
-            const trackerRef = entry.appName ? null : getTracker();
-            if (trackerRef) {
-                try {
-                    const app = trackerRef.get_window_app(metaWindow);
-                    if (app) {
-                        entry.appName = app.get_name() ?? '';
-                        const appInfo = app.get_app_info();
-                        const icon = appInfo?.get_icon();
-                        // Serialized Gio.Icon: the prefs process turns it back into an icon
-                        // with Gio.Icon.new_for_string().
-                        if (icon)
-                            entry.iconName = icon.to_string() ?? '';
-                    }
-                }
-                catch (e) { /* app may have gone away mid-iteration */ }
-            }
+            if (!entry.appName)
+                readApplication(entry, metaWindow, getTracker());
         }
         const entries = [...byClass.values()];
         entries.sort((a, b) => (a.appName || a.wmClass).toLowerCase()

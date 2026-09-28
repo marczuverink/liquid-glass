@@ -13,7 +13,6 @@ export class Logger {
   }
 
   _bindSettings() {
-
     const connectSetting = (key: string, callback: Function) => {
       let id = this._settings.connect(`changed::${key}`, callback.bind(this));
       this._settingsIds.push(id);

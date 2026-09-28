@@ -2,7 +2,7 @@ import Shell from 'gi://Shell';
 import Gio from 'gi://Gio';
 import GdkPixbuf from 'gi://GdkPixbuf';
 import GLib from 'gi://GLib';
-import { getTransformedRect } from './utils.js';
+import { getTransformedRect } from './actors/geometry.js';
 // How much better the OTHER colour has to score before the decision flips.
 // Only used when no preference is set ('auto'); with a preference the two
 // directions get their own, deliberately asymmetric thresholds below.
@@ -22,6 +22,10 @@ const AMBIGUOUS_RATIO = 1.15;
 // half-finished colour change. See the feedback-loop note on sampleLuminance().
 const SWITCH_SETTLE_MS = 600;
 const MIN_READABLE_CONTRAST = 4.5;
+const BACKDROP_COVERS_GLASS_ALPHA = 190;
+const READABILITY_FLIP_COOLDOWN = 3;
+const BACKGROUND_REALLY_MOVED = 0.15;
+const BACKDROP_SEARCH_DEPTH = 8;
 export const AdaptiveContrastConfig = {
     enabled: true,
     samplePerElement: false, // 要素ごとにサンプリングするか、全体をまとめてサンプリングするか　負荷を考慮してデフォルトはまとめてサンプリング
@@ -190,19 +194,103 @@ function _captureViaScreenshot(screenshot, rect) {
                         step: Math.max(1, Math.floor(Math.min(width, height) / SAMPLE_MAX_EDGE)),
                     });
                 }
-                catch (e) {
+                catch {
                     try {
                         stream.close(null);
                     }
-                    catch (_) { }
+                    catch { }
                     resolve(null);
                 }
             });
         }
-        catch (e) {
+        catch {
             resolve(null);
         }
     });
+}
+export function backdropLuminance(actor, root = null) {
+    let node = actor;
+    for (let depth = 0; node && depth < BACKDROP_SEARCH_DEPTH; depth++) {
+        try {
+            const themeNode = node.get_theme_node?.();
+            const color = themeNode?.get_background_color?.();
+            if (color && color.alpha >= BACKDROP_COVERS_GLASS_ALPHA) {
+                return {
+                    luminance: _luminanceFromRgb(color.red, color.green, color.blue),
+                    alpha: color.alpha,
+                };
+            }
+        }
+        catch {
+            return null;
+        }
+        if (root && node === root)
+            break;
+        node = node.get_parent?.();
+    }
+    return null;
+}
+function _visibleTargets(actors) {
+    const targets = [];
+    const rects = [];
+    for (const actor of actors) {
+        const rect = _getActorRect(actor);
+        if (!rect)
+            continue;
+        targets.push(actor);
+        rects.push(rect);
+    }
+    return { targets, rects };
+}
+function _rootOrMergedRect(root, rects) {
+    const rootRect = root ? _getActorRect(root) : null;
+    return rootRect ?? _mergeRects(rects);
+}
+function _readSignature(paintSignature) {
+    if (!paintSignature)
+        return null;
+    try {
+        const v = paintSignature();
+        return Number.isFinite(v) ? v : null;
+    }
+    catch {
+        return null;
+    }
+}
+// The decision also depends on the configuration, not only on pixels.
+function _skipKey(rects, config) {
+    return rects
+        .map(r => `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}`)
+        .join(';') + `|${config.samplePerElement ? 'e' : 'm'}|${config.lightTextColor}|${config.darkTextColor}`;
+}
+function _pixelLuminance(data, idx, channels) {
+    if (channels <= 3)
+        return _luminanceFromRgb(data[idx], data[idx + 1], data[idx + 2]);
+    const a = data[idx + 3];
+    if (a < 32)
+        return null;
+    if (a >= 255)
+        return _luminanceFromRgb(data[idx], data[idx + 1], data[idx + 2]);
+    // Un-premultiply before measuring luminance. Kept exactly as
+    // the original pixbuf loop had it so the sampled value does not
+    // shift; it only matters for semi-transparent pixels, which the
+    // opaque desktop behind a menu rarely produces.
+    const inv = 255.0 / a;
+    const unpremultiply = (c) => _clamp(Math.round(c * inv), 0, 255);
+    return _luminanceFromRgb(unpremultiply(data[idx]), unpremultiply(data[idx + 1]), unpremultiply(data[idx + 2]));
+}
+export function luminanceSamples(shot) {
+    const { data, width, height, stride, channels, step } = shot;
+    const values = [];
+    for (let y = 0; y < height; y += step) {
+        const row = y * stride;
+        for (let x = 0; x < width; x += step) {
+            const luma = _pixelLuminance(data, row + x * channels, channels);
+            if (luma !== null)
+                values.push(luma);
+        }
+    }
+    return values;
 }
 export class StageContrastSampler {
     // Created lazily on the first sample rather than in the constructor: the
@@ -211,25 +299,22 @@ export class StageContrastSampler {
     _screenshot = null;
     _lastLuma = null;
     _lastIsBright = null;
-    /** Monotonic time of the last polarity change; see SWITCH_SETTLE_MS. */
-    _lastSwitchAt = 0;
+    /** Monotonic time of the last polarity change (null: none yet); see SWITCH_SETTLE_MS. */
+    _lastSwitchAt = null;
+    _roundsSinceFlip = READABILITY_FLIP_COOLDOWN;
+    _lastRawLuma = null;
     _lastRect = null;
-    // [PERF B4] "Nothing under the text has been redrawn since the last sample."
-    // See chooseColorsForActors(). _unchangedSig is the caller's paint counter
-    // as of the end of the last capture (null = unknown, sample next time);
-    // _unchangedRects is the rect set that capture measured.
-    _unchangedSig = null;
-    _unchangedRects = '';
-    _skippedSamples = 0;
     _lastDecided = null;
-    /** [DIAG] How many samples were skipped because nothing had been redrawn. */
-    get skippedSamples() {
-        return this._skippedSamples;
-    }
+    // [PERF B4] "Nothing under the text has been redrawn since the last sample."
+    // See chooseColorsForActors(). _unchangedSignature is the caller's paint
+    // counter as of the end of the last capture (null = unknown, sample next
+    // time); _unchangedKey is the rects and configuration that capture measured.
+    _unchangedSignature = null;
+    _unchangedKey = '';
     /** Forget the skip baseline, so the next call always samples. */
     invalidate() {
-        this._unchangedSig = null;
-        this._unchangedRects = '';
+        this._unchangedSignature = null;
+        this._unchangedKey = '';
     }
     async sampleLuminance(rect) {
         if (!rect || rect.width <= 0 || rect.height <= 0)
@@ -242,39 +327,15 @@ export class StageContrastSampler {
             return null;
         }
         try {
-            const { data, width, height, stride, channels, step } = shot;
-            const values = [];
-            for (let y = 0; y < height; y += step) {
-                const row = y * stride;
-                for (let x = 0; x < width; x += step) {
-                    const idx = row + x * channels;
-                    if (channels > 3) {
-                        const a = data[idx + 3];
-                        if (a < 32)
-                            continue;
-                        if (a < 255) {
-                            // Un-premultiply before measuring luminance. Kept exactly as
-                            // the original pixbuf loop had it so the sampled value does not
-                            // shift; it only matters for semi-transparent pixels, which the
-                            // opaque desktop behind a menu rarely produces.
-                            const inv = 255.0 / a;
-                            const r = _clamp(Math.round(data[idx + 0] * inv), 0, 255);
-                            const g = _clamp(Math.round(data[idx + 1] * inv), 0, 255);
-                            const b = _clamp(Math.round(data[idx + 2] * inv), 0, 255);
-                            values.push(_luminanceFromRgb(r, g, b));
-                            continue;
-                        }
-                    }
-                    values.push(_luminanceFromRgb(data[idx + 0], data[idx + 1], data[idx + 2]));
-                }
-            }
+            const values = luminanceSamples(shot);
             if (values.length === 0) {
                 _reportCapturePath('capture produced no usable pixels (everything below the alpha cutoff)');
                 return null;
             }
-            // [FIX] 0.10 -> 0.30. The rectangle handed to this function is the
-            // union of the TEXT actors' own rects, so a large minority of the
-            // pixels in it are the glyphs themselves — and their colour is the very
+            // [FIX] 0.10 -> 0.30. The rectangle handed to this function contains
+            // the TEXT actors (the menu's root region, or the union of the text
+            // rects), so a large minority of the pixels in it are the glyphs
+            // themselves — and their colour is the very
             // thing this measurement decides. At a 10% trim the mean still moved by
             // roughly 0.1 in luminance when the text flipped, which on a background
             // sitting anywhere near the light/dark crossover is enough to flip the
@@ -286,7 +347,7 @@ export class StageContrastSampler {
             // colour. The background itself, being the majority, still decides.
             return _trimmedMean(values, 0.30);
         }
-        catch (e) {
+        catch {
             return null;
         }
     }
@@ -306,18 +367,18 @@ export class StageContrastSampler {
         const rawLight = contrast(luminance, light);
         const rawDark = contrast(luminance, dark);
         const preference = config.preference ?? 'auto';
-        const preferDark = preference === 'dark';
         const hasPreference = preference !== 'auto';
+        const preferDark = preference === 'dark';
         // "Ambiguous" = the two candidates score within AMBIGUOUS_RATIO of each
         // other, i.e. the background is the half-way grey where neither colour is
         // meaningfully more readable. Computed from the RAW contrasts so the
         // classification reflects what is on screen right now.
         const ambiguous = Math.max(rawLight, rawDark) < Math.min(rawLight, rawDark) * AMBIGUOUS_RATIO;
+        // Stateless path (one decision per element): there is no single "last
+        // decision" that could hold, so the only stabiliser available is the
+        // preference. In the ambiguous band it decides outright; outside it the
+        // measurement still wins, exactly as before.
         if (config.samplePerElement) {
-            // Stateless path (one decision per element): there is no single "last
-            // decision" that could hold, so the only stabiliser available is the
-            // preference. In the ambiguous band it decides outright; outside it the
-            // measurement still wins, exactly as before.
             if (ambiguous && hasPreference)
                 return preferDark ? config.darkTextColor : config.lightTextColor;
             return rawDark > rawLight ? config.darkTextColor : config.lightTextColor;
@@ -326,42 +387,41 @@ export class StageContrastSampler {
         // driven by a screenshot of the area the text is drawn on, so for the
         // ~380ms the colour tween runs, every measurement is partly a measurement
         // of our own in-progress change — a feedback loop that can sustain the
-        // ping-pong on its own even with the hysteresis below.
+        // ping-pong on its own even with the hysteresis below. An unreadable
+        // colour is never held when the other one is readable.
         const now = GLib.get_monotonic_time();
-        if (this._lastIsBright !== null &&
-            now - this._lastSwitchAt < SWITCH_SETTLE_MS * 1000) {
-            return this._lastIsBright ? config.darkTextColor : config.lightTextColor;
+        if (this._lastIsBright !== null && this._inSettleHold(now)) {
+            const heldContrast = this._lastIsBright ? rawDark : rawLight;
+            const otherContrast = this._lastIsBright ? rawLight : rawDark;
+            const heldUnreadable = heldContrast < MIN_READABLE_CONTRAST && otherContrast >= MIN_READABLE_CONTRAST;
+            if (!heldUnreadable)
+                return this._lastIsBright ? config.darkTextColor : config.lightTextColor;
         }
         const smoothed = this._lastLuma === null
             ? luminance : this._lastLuma * 0.7 + luminance * 0.3;
         this._lastLuma = smoothed;
         const lightContrast = contrast(smoothed, light);
         const darkContrast = contrast(smoothed, dark);
-        const previous = this._lastIsBright;
         let isBright;
-        if (previous === null) {
-            // First decision for this surface. An ambiguous background is decided
-            // by the preference rather than by a coin-flip-grade measurement.
-            isBright = (ambiguous && hasPreference) ? preferDark : (darkContrast > lightContrast);
-        }
-        else if (ambiguous && hasPreference) {
+        if (ambiguous && hasPreference) {
             // [FIX] The oscillation zone, resolved by fiat. Inside this band the
             // preference is simply asserted; since the band is defined by the
             // measurement alone (no history), the result cannot depend on which
             // colour happens to be on screen, so it cannot oscillate.
             isBright = preferDark;
         }
+        else if (this._lastIsBright === null) {
+            // First decision for this surface.
+            isBright = darkContrast > lightContrast;
+        }
         else {
-            isBright = previous;
+            isBright = this._lastIsBright;
             const current = isBright ? darkContrast : lightContrast;
             const alternative = isBright ? lightContrast : darkContrast;
             // Does flipping move us TOWARDS the preferred colour or away from it?
-            const alternativeIsPreferred = hasPreference && (preferDark !== isBright);
-            const advantage = !hasPreference
-                ? SWITCH_ADVANTAGE
-                : (alternativeIsPreferred
-                    ? SWITCH_ADVANTAGE_TOWARD_PREFERRED
-                    : SWITCH_ADVANTAGE_AGAINST_PREFERRED);
+            const towardPreferred = hasPreference && preferDark !== isBright;
+            const advantage = !hasPreference ? SWITCH_ADVANTAGE
+                : (towardPreferred ? SWITCH_ADVANTAGE_TOWARD_PREFERRED : SWITCH_ADVANTAGE_AGAINST_PREFERRED);
             // A meaningful advantage prevents small sampling fluctuations changing polarity.
             if (alternative > current * advantage)
                 isBright = !isBright;
@@ -372,12 +432,27 @@ export class StageContrastSampler {
         // cases where both colours work, never about keeping unreadable text.
         const rawCurrent = isBright ? rawDark : rawLight;
         const rawAlternative = isBright ? rawLight : rawDark;
-        if (rawCurrent < MIN_READABLE_CONTRAST && rawAlternative >= MIN_READABLE_CONTRAST)
+        const jumped = this._lastRawLuma === null ||
+            Math.abs(luminance - this._lastRawLuma) > BACKGROUND_REALLY_MOVED;
+        this._lastRawLuma = luminance;
+        const wasBright = isBright;
+        if (rawCurrent < MIN_READABLE_CONTRAST && rawAlternative >= MIN_READABLE_CONTRAST &&
+            (jumped || this._roundsSinceFlip >= READABILITY_FLIP_COOLDOWN))
             isBright = !isBright;
-        if (previous !== null && previous !== isBright)
+        this._roundsSinceFlip = isBright === wasBright ? this._roundsSinceFlip + 1 : 0;
+        if (this._lastIsBright !== null && this._lastIsBright !== isBright)
             this._lastSwitchAt = now;
         this._lastIsBright = isBright;
         return isBright ? config.darkTextColor : config.lightTextColor;
+    }
+    _inSettleHold(now = GLib.get_monotonic_time()) {
+        return this._lastSwitchAt !== null && now - this._lastSwitchAt < SWITCH_SETTLE_MS * 1000;
+    }
+    _backdropColorFor(actor, config, root) {
+        const backdrop = backdropLuminance(actor, root);
+        if (backdrop === null)
+            return null;
+        return this.decideTextColor(backdrop.luminance, { ...config, samplePerElement: true });
     }
     /**
      * @param paintSignature [PERF B4] Optional. Returns a counter that advances
@@ -392,88 +467,76 @@ export class StageContrastSampler {
      *   untouched (memo.md 地雷10); only the cost of a sample that cannot
      *   change anything goes away.
      */
-    async chooseColorsForActors(actors, config = AdaptiveContrastConfig, paintSignature) {
-        const rects = [];
-        const targets = [];
-        for (const actor of actors) {
-            const rect = _getActorRect(actor);
-            if (!rect)
-                continue;
-            targets.push(actor);
-            rects.push(rect);
-        }
-        const result = new Map();
+    async chooseColorsForActors(actors, config = AdaptiveContrastConfig, root = null, paintSignature) {
+        const { targets, rects } = _visibleTargets(actors);
         if (targets.length === 0)
-            return result;
-        const readSig = () => {
-            if (!paintSignature)
-                return null;
-            try {
-                const v = paintSignature();
-                return Number.isFinite(v) ? v : null;
-            }
-            catch (_) {
-                return null;
-            }
-        };
-        const rectsKey = rects
-            .map(r => `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}`)
-            .join(';') + (config.samplePerElement ? '|pe' : '|m') +
-            // The decision also depends on the configuration, not only on pixels.
-            `|${config.preference ?? 'auto'}|${config.lightTextColor}|${config.darkTextColor}`;
-        const preSig = readSig();
-        if (preSig !== null && preSig === this._unchangedSig && rectsKey === this._unchangedRects) {
-            this._skippedSamples++;
-            return result;
-        }
-        // The capture paints the stage region itself, so it advances the counter
-        // by (at most) one per screenshot. Anything beyond that means the screen
-        // really changed while it was being taken; then no baseline is kept and
-        // the next tick samples again.
-        const nCaptures = config.samplePerElement ? targets.length : 1;
+            return new Map();
+        const merged = config.samplePerElement ? null : _rootOrMergedRect(root, rects);
+        const mergedRects = merged ? [merged] : [];
+        const sampledRects = config.samplePerElement ? rects : mergedRects;
+        const key = _skipKey(config.samplePerElement ? rects : [...sampledRects, ...rects], config);
+        const before = _readSignature(paintSignature);
+        if (before !== null && before === this._unchangedSignature && key === this._unchangedKey)
+            return new Map();
         // `stable` is required on top of the counter check: the merged path's
         // decision is NOT a pure function of the pixels — it smooths the luma over
         // successive samples and holds for SWITCH_SETTLE_MS after a flip — so
         // re-measuring an unchanged screen can still move it until it converges.
         // Only a converged, repeated decision may be frozen.
+        //
+        // The capture paints the stage region itself, so it advances the counter
+        // by (at most) one per screenshot. Anything beyond that means the screen
+        // really changed while it was being taken; then no baseline is kept and
+        // the next tick samples again.
         const settle = (stable) => {
-            const postSig = readSig();
-            if (stable && preSig !== null && postSig !== null && postSig - preSig <= nCaptures) {
-                this._unchangedSig = postSig;
-                this._unchangedRects = rectsKey;
+            const after = _readSignature(paintSignature);
+            if (stable && before !== null && after !== null && after - before <= sampledRects.length) {
+                this._unchangedSignature = after;
+                this._unchangedKey = key;
             }
             else {
                 this.invalidate();
             }
         };
-        if (!config.samplePerElement) {
-            const merged = _mergeRects(rects);
-            if (!merged)
-                return result;
-            if (!this._lastRect || ['x', 'y', 'width', 'height'].some(key => Math.abs(merged[key] - this._lastRect[key]) > 2)) {
-                this._lastLuma = null;
-                this._lastIsBright = null;
-                this._lastSwitchAt = 0;
-            }
-            this._lastRect = merged;
-            const luma = await this.sampleLuminance(merged);
-            if (luma === null) {
-                this.invalidate();
-                return result;
-            }
-            const inHold = this._lastIsBright !== null &&
-                GLib.get_monotonic_time() - this._lastSwitchAt < SWITCH_SETTLE_MS * 1000;
-            const color = this.decideTextColor(luma, config);
-            const stable = !inHold && color !== null && color === this._lastDecided &&
-                this._lastLuma !== null && Math.abs(this._lastLuma - _clamp(luma, 0, 1)) < 0.01;
-            this._lastDecided = color;
-            settle(stable);
-            if (!color)
-                return result;
-            for (const actor of targets)
-                result.set(actor, color);
+        if (config.samplePerElement)
+            return this._choosePerElement(targets, rects, config, settle);
+        if (!merged)
+            return new Map();
+        return this._chooseMerged(targets, merged, config, settle);
+    }
+    _resetIfRegionMoved(merged) {
+        const last = this._lastRect;
+        const moved = !last || ['x', 'y', 'width', 'height'].some(k => Math.abs(merged[k] - last[k]) > 2);
+        if (moved) {
+            this._lastLuma = null;
+            this._lastIsBright = null;
+            this._lastRawLuma = null;
+            this._lastSwitchAt = null;
+            this._roundsSinceFlip = READABILITY_FLIP_COOLDOWN;
+        }
+        this._lastRect = merged;
+    }
+    async _chooseMerged(targets, merged, config, settle) {
+        const result = new Map();
+        this._resetIfRegionMoved(merged);
+        const luma = await this.sampleLuminance(merged);
+        if (luma === null) {
+            this.invalidate();
             return result;
         }
+        const inHold = this._lastIsBright !== null && this._inSettleHold();
+        const color = this.decideTextColor(luma, config);
+        const converged = this._lastLuma !== null && Math.abs(this._lastLuma - _clamp(luma, 0, 1)) < 0.01;
+        settle(!inHold && color !== null && color === this._lastDecided && converged &&
+            this._roundsSinceFlip >= READABILITY_FLIP_COOLDOWN);
+        this._lastDecided = color;
+        if (color)
+            for (const actor of targets)
+                result.set(actor, color);
+        return result;
+    }
+    async _choosePerElement(targets, rects, config, settle) {
+        const result = new Map();
         for (let i = 0; i < targets.length; i++) {
             const luma = await this.sampleLuminance(rects[i]);
             if (luma === null) {

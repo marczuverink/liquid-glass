@@ -39,6 +39,40 @@ interface WindowEntry {
   normal: boolean;
 }
 
+function readWindow(metaWindow: Meta.Window) {
+  try {
+    const wmClass = metaWindow.get_wm_class() ?? '';
+    const windowType = metaWindow.get_window_type();
+    const title = metaWindow.get_title() ?? '';
+    // Skip the shell's own desktop/dock/splash surfaces; they can never be
+    // targeted by the effect and would only clutter the picker.
+    if (!wmClass || windowType === Meta.WindowType.DESKTOP ||
+      windowType === Meta.WindowType.DOCK || windowType === Meta.WindowType.SPLASHSCREEN)
+      return null;
+    const normal = windowType === Meta.WindowType.NORMAL ||
+      windowType === Meta.WindowType.DIALOG || windowType === Meta.WindowType.MODAL_DIALOG;
+    return { wmClass, title, normal };
+  } catch {
+    return null;
+  }
+}
+
+function readApplication(entry: WindowEntry, metaWindow: Meta.Window, tracker: Shell.WindowTracker | null) {
+  if (!tracker)
+    return;
+  try {
+    const app = tracker.get_window_app(metaWindow);
+    if (!app)
+      return;
+    entry.appName = app.get_name() ?? '';
+    // Serialized Gio.Icon: the prefs process turns it back into an icon
+    // with Gio.Icon.new_for_string().
+    const icon = app.get_app_info()?.get_icon();
+    if (icon)
+      entry.iconName = icon.to_string() ?? '';
+  } catch { }
+}
+
 export class WindowListService {
   private _logger: Logger;
   private _dbusImpl: any = null;
@@ -65,7 +99,7 @@ export class WindowListService {
     const connectDisplay = (signal: string, callback: (...args: any[]) => void) => {
       try {
         this._displaySignals.push({ obj: global.display, id: global.display.connect(signal as any, callback) });
-      } catch (e) { /* signal not present on this mutter — skip */ }
+      } catch { }
     };
 
     connectDisplay('window-created', (_display: any, metaWindow: Meta.Window) => {
@@ -87,19 +121,19 @@ export class WindowListService {
     }
 
     for (const sig of this._displaySignals) {
-      try { sig.obj.disconnect(sig.id); } catch (e) { }
+      try { sig.obj.disconnect(sig.id); } catch { }
     }
     this._displaySignals = [];
 
     for (const [metaWindow, ids] of this._windowSignals) {
       for (const id of ids) {
-        try { metaWindow.disconnect(id); } catch (e) { }
+        try { metaWindow.disconnect(id); } catch { }
       }
     }
     this._windowSignals.clear();
 
     if (this._dbusImpl) {
-      try { this._dbusImpl.unexport(); } catch (e) { }
+      try { this._dbusImpl.unexport(); } catch { }
       this._dbusImpl = null;
     }
   }
@@ -123,14 +157,14 @@ export class WindowListService {
     for (const signal of ['notify::wm-class', 'notify::title', 'notify::window-type']) {
       try {
         ids.push(metaWindow.connect(signal as any, () => this._queueChanged()));
-      } catch (e) { /* property not present — skip */ }
+      } catch { }
     }
     try {
       ids.push(metaWindow.connect('unmanaged', () => {
         this._untrackWindow(metaWindow);
         this._queueChanged();
       }));
-    } catch (e) { }
+    } catch { }
 
     this._windowSignals.set(metaWindow, ids);
   }
@@ -140,7 +174,7 @@ export class WindowListService {
     if (!ids)
       return;
     for (const id of ids) {
-      try { metaWindow.disconnect(id); } catch (e) { }
+      try { metaWindow.disconnect(id); } catch { }
     }
     this._windowSignals.delete(metaWindow);
   }
@@ -163,7 +197,7 @@ export class WindowListService {
       if (tracker === undefined) {
         try {
           tracker = Shell.WindowTracker.get_default();
-        } catch (e) {
+        } catch {
           tracker = null;
         }
       }
@@ -173,31 +207,10 @@ export class WindowListService {
     const byClass: Map<string, WindowEntry> = new Map();
 
     for (const metaWindow of this._listMetaWindows()) {
-      let wmClass = '';
-      let windowType: Meta.WindowType | null = null;
-      let title = '';
-      try {
-        wmClass = metaWindow.get_wm_class() ?? '';
-        windowType = metaWindow.get_window_type();
-        title = metaWindow.get_title() ?? '';
-      } catch (e) {
+      const window = readWindow(metaWindow);
+      if (!window)
         continue;
-      }
-
-      if (!wmClass)
-        continue;
-
-      // Skip the shell's own override-redirect/utility surfaces; they can never
-      // be targeted by the effect and would only clutter the picker.
-      if (windowType === Meta.WindowType.DESKTOP ||
-        windowType === Meta.WindowType.DOCK ||
-        windowType === Meta.WindowType.SPLASHSCREEN)
-        continue;
-
-      const isNormal = windowType === Meta.WindowType.NORMAL ||
-        windowType === Meta.WindowType.DIALOG ||
-        windowType === Meta.WindowType.MODAL_DIALOG;
-
+      const { wmClass, title, normal } = window;
       let entry = byClass.get(wmClass);
       if (!entry) {
         entry = { wmClass, appName: '', iconName: '', titles: [], count: 0, normal: false };
@@ -205,25 +218,12 @@ export class WindowListService {
       }
 
       entry.count += 1;
-      entry.normal = entry.normal || isNormal;
+      entry.normal = entry.normal || normal;
       if (title && entry.titles.length < 8 && !entry.titles.includes(title))
         entry.titles.push(title);
 
-      const trackerRef = entry.appName ? null : getTracker();
-      if (trackerRef) {
-        try {
-          const app = trackerRef.get_window_app(metaWindow);
-          if (app) {
-            entry.appName = app.get_name() ?? '';
-            const appInfo = app.get_app_info();
-            const icon = appInfo?.get_icon();
-            // Serialized Gio.Icon: the prefs process turns it back into an icon
-            // with Gio.Icon.new_for_string().
-            if (icon)
-              entry.iconName = icon.to_string() ?? '';
-          }
-        } catch (e) { /* app may have gone away mid-iteration */ }
-      }
+      if (!entry.appName)
+        readApplication(entry, metaWindow, getTracker());
     }
 
     const entries = [...byClass.values()];

@@ -5,7 +5,20 @@ import Meta from 'gi://Meta';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { LiquidEffect, noteStrandEntry } from './liquidEffect.js';
 import GLib from 'gi://GLib';
-import { UnpickableClone, UnpickableActor, InverseCornerEffect, getWindowActors, isActorValid, InvertedPositionConstraint, getAllocatedSize, setActorVisible, ensureGlassAllocated, isFrameSyncFrozen, getNestedGlassFix, innerGlassEffectOf, isFocusDebugEnabled, setTranslationIfChanged, setSizeIfChanged, setScaleIfChanged, setOpacityIfChanged, isCullSiteEnabled, rectsIntersect, setCloneCulled, createBackgroundMirror, reportClonedWindowActors, releaseClonedWindowActors, ensureWindowActorAllocated } from './utils.js';
+import { UnpickableClone, UnpickableActor } from './actors/unpickable.js';
+import { InverseCornerEffect } from './actors/inverseCorner.js';
+import { getWindowActors } from './actors/windows.js';
+import { isActorValid } from './actors/lifecycle.js';
+import { InvertedPositionConstraint } from './actors/invertedPosition.js';
+import { getAllocatedSize, rectsIntersect } from './actors/geometry.js';
+import { setActorVisible, ensureGlassAllocated, ensureWindowActorAllocated } from './actors/allocation.js';
+import { isFrameSyncFrozen, SAME_FRAME_WINDOW_US } from './animation/frameSync.js';
+import { getNestedGlassFix, innerGlassEffectOf, isFocusDebugEnabled } from './capture/nestedGlass.js';
+import { setTranslationIfChanged, setSizeIfChanged, setScaleIfChanged, setOpacityIfChanged, setCloneCulled } from './actors/writes.js';
+import { isCullSiteEnabled } from './capture/options.js';
+import { createBackgroundMirror } from './capture/background.js';
+import { reportClonedWindowActors, releaseClonedWindowActors } from './capture/windowCulling.js';
+import { syncDamageHooks, releaseDamageHooks } from './capture/damageHooks.js';
 // Padding to allow the shader to draw effects (like refraction and blur) outside the actor's strict bounds.
 // [FIX] How far the glass actor extends beyond the real window bounds, in
 // screen pixels. This is one number with two jobs: it is the sampling
@@ -157,7 +170,7 @@ const MAX_ANCHOR_DISPLACEMENT = 256;
 //
 // The test taken BEFORE the write is: is the counter-scale about to be large,
 // and did the container fail to pick up the last relayout? `_frameTick()` runs
-// as a BEFORE_REDRAW later, i.e. before `clutter_stage_maybe_relayout()`, so
+// from the stage's 'before-update', i.e. before `clutter_stage_maybe_relayout()`, so
 // the previous tick's writes have already been serviced by the time this runs
 // — `has_allocation()` here is false only for a subtree that really is
 // stranded, which is the same freshness the anchor read has.
@@ -187,10 +200,11 @@ export class ApplicationManager {
     _settings;
     _logger;
     _settingsSignals;
-    _frameSyncId;
+    _frameSignalId = 0;
+    _lastTickUs = 0;
     // [FIX] Set by cleanup() before anything that can throw. Read by the
-    // per-frame BEFORE_REDRAW tick so an orphaned chain stops itself even if
-    // cleanup() never reached its laterRemove(). See the note in frameTick().
+    // per-frame tick so an orphaned one stops working even if cleanup() never
+    // reached the call that stops it. See the note in _frameTick().
     _torndown = false;
     _windowCreatedId;
     _restackedId = 0;
@@ -246,7 +260,6 @@ export class ApplicationManager {
         this._logger = logger;
         this._states = new Map();
         this._settingsSignals = [];
-        this._frameSyncId = 0;
         this._windowCreatedId = 0;
         this._restackedId = 0;
     }
@@ -291,7 +304,7 @@ export class ApplicationManager {
                     id: global.display.connect(sig, () => this._armFocusDebug(sig)),
                 });
             }
-            catch (e) { /* signal not present on this mutter — skip */ }
+            catch { }
         }
         this._logger.log("[Liquid Glass] checking if effect enabled in setup: " + this._isEffectEnabled());
         if (this._isEffectEnabled())
@@ -312,7 +325,7 @@ export class ApplicationManager {
             try {
                 this._logger?.error(`[Liquid Glass] ${this.constructor.name}.${name} failed during cleanup: ${e}`);
             }
-            catch (_) {
+            catch {
                 console.error(`[Liquid Glass] ${name} failed during cleanup: ${e}`);
             }
         }
@@ -334,7 +347,7 @@ export class ApplicationManager {
                 try {
                     sig.obj.disconnect(sig.id);
                 }
-                catch (e) { }
+                catch { }
             }
             this._debugArmSignals = [];
             this._displacedContainers.clear();
@@ -345,7 +358,7 @@ export class ApplicationManager {
                 try {
                     this._settings.disconnect(id);
                 }
-                catch (e) { }
+                catch { }
             });
             this._settingsSignals = [];
         });
@@ -503,7 +516,7 @@ export class ApplicationManager {
         try {
             parent = metaWindow.get_transient_for();
         }
-        catch (e) {
+        catch {
             return false;
         }
         for (let depth = 0; parent && depth < MAX_TRANSIENT_DEPTH; depth++) {
@@ -516,7 +529,7 @@ export class ApplicationManager {
             try {
                 parent = parent.get_transient_for();
             }
-            catch (e) {
+            catch {
                 return false;
             }
         }
@@ -566,12 +579,7 @@ export class ApplicationManager {
         this._startFrameSync();
     }
     _removeAllEffects() {
-        if (this._frameSyncId) {
-            if (global.compositor?.get_laters) {
-                global.compositor.get_laters().remove(this._frameSyncId);
-            }
-            this._frameSyncId = 0;
-        }
+        this._stopFrameSync();
         if (this._rebuildFollowupLaterId) {
             if (global.compositor?.get_laters) {
                 global.compositor.get_laters().remove(this._rebuildFollowupLaterId);
@@ -630,7 +638,7 @@ export class ApplicationManager {
             radius = this._settings.get_double('shadow-radius');
             intensity = this._settings.get_double('shadow-intensity');
         }
-        catch (e) {
+        catch {
             return GLASS_MIN_MARGIN;
         }
         if (!(radius > 0) || !(intensity > 0))
@@ -693,7 +701,7 @@ export class ApplicationManager {
     // same amount on every side (straight edges included), instead of only
     // pulling the 4 actual corners inward. That revealed a uniform band of
     // raw, unblurred/unshadowed background all the way around the window —
-    // see InverseCornerEffect._updateShader() in utils.ts for the full
+    // see InverseCornerEffect._updateShader() in actors/inverseCorner.ts for the full
     // explanation. The overlay now derives the window's true edge from this
     // value alone (it equals SHADER_PADDING, the outward padding this actor
     // has beyond the real window bounds), while CORNER_PADDING is applied
@@ -714,8 +722,20 @@ export class ApplicationManager {
     // get_transformed_position, set_position vs translation_x/y vs
     // Clutter.Constraint) was tried in every combination and changed nothing.
     _startFrameSync() {
-        if (this._frameSyncId === 0)
-            this._frameTick();
+        if (this._frameSignalId !== 0)
+            return;
+        this._frameSignalId = global.stage.connect('before-update', () => this._frameTick());
+        this._frameTick();
+    }
+    _stopFrameSync() {
+        const signalId = this._frameSignalId;
+        this._frameSignalId = 0;
+        if (signalId) {
+            try {
+                global.stage.disconnect(signalId);
+            }
+            catch { }
+        }
     }
     _rebuildAllClones() {
         if (this._rebuildQueued)
@@ -748,8 +768,8 @@ export class ApplicationManager {
             // "safety net" — a plain wall-clock guess with no relation to actual
             // frame timing, so the visible gap could span many frames (up to
             // 150ms) before the follow-up pass ran. Replaced with a short chain
-            // of Meta.LaterType.BEFORE_REDRAW laters (the same primitive
-            // _frameTick() itself uses) so the follow-up passes run on the very
+            // of Meta.LaterType.BEFORE_REDRAW laters (the primitive _frameTick()
+            // itself used before it moved to 'before-update') so the follow-up passes run on the very
             // next few actual frames instead of after an arbitrary delay,
             // shrinking the visible window considerably. Still a mitigation for
             // a not-fully-confirmed race, not a verified fix for the settling
@@ -900,7 +920,7 @@ export class ApplicationManager {
         // [black-frame] Deliberately NOT a Clone of _backgroundGroup. Cloning it
         // made the wallpaper inherit the real background actor's per-frame
         // culling state, so it only painted inside the current frame's damage
-        // region — see BackgroundMirror in utils.ts for the full mechanism.
+        // region — see BackgroundMirror in capture/background.ts for the full mechanism.
         let baseClone = createBackgroundMirror('lgw-base-wallpaper-clone');
         if (monitor) {
             baseClone.set_size(monitor.width, monitor.height);
@@ -1154,8 +1174,8 @@ export class ApplicationManager {
             // there's no point creating it — hence the guard below.
             //
             // The size feeding that guard comes from the allocation, though, not
-            // from get_size(): this runs from a BEFORE_REDRAW later, i.e. before
-            // clutter_stage_maybe_relayout(), and get_size() answers with the
+            // from get_size(): this runs before clutter_stage_maybe_relayout()
+            // (the frame tick's 'before-update'), and get_size() answers with the
             // preferred size while a relayout is pending. That is how a perfectly
             // healthy window actor can report 0 here and get skipped for the rest
             // of the rebuild — so some of the zeros this guard used to catch were
@@ -1170,7 +1190,7 @@ export class ApplicationManager {
                     const mw = actor.get_meta_window();
                     return (mw && mw.get_title()) || '(untitled)';
                 }
-                catch (_) {
+                catch {
                     return '(?)';
                 }
             })();
@@ -1479,6 +1499,10 @@ export class ApplicationManager {
         // them.
         const [pivotFxEarly, pivotFyEarly] = actor.get_pivot_point();
         const [actorWEarly, actorHEarly] = getAllocatedSize(actor);
+        // Reads LAST frame's anchor: the offsets written below only reach the
+        // scene graph at the next relayout, which is the whole point — if the
+        // subtree is stranded that relayout never comes, and this is how we find
+        // out. See MAX_ANCHOR_DISPLACEMENT.
         const anchorOffByEarly = this._checkContainerAnchor(state);
         // [FIX] Refuse the frame BEFORE writing a runaway transform, not after —
         // see MAX_STRANDED_COUNTER_SCALE. Returns early rather than falling
@@ -1513,12 +1537,7 @@ export class ApplicationManager {
             pivotFxEarly * (Number.isFinite(actorWEarly) ? actorWEarly : 0),
             pivotFyEarly * (Number.isFinite(actorHEarly) ? actorHEarly : 0),
         ];
-        for (let i = 0; i < GEOM_SIG_LEN; i++) {
-            if (sig[i] !== sigValues[i]) {
-                geomUnchanged = false;
-                sig[i] = sigValues[i];
-            }
-        }
+        geomUnchanged = this._updateGeometrySignature(sig, sigValues, geomUnchanged);
         if (geomUnchanged) {
             this._syncClones(state);
             return;
@@ -1569,12 +1588,55 @@ export class ApplicationManager {
         // animation is actually running (and once more on the way out), so the
         // steady state still costs nothing.
         this._syncAnimatedCornerRadius(state, sx);
-        // Reads LAST frame's anchor: the offsets written below only reach the
-        // scene graph at the next relayout, which is the whole point — if the
-        // subtree is stranded that relayout never comes, and this is how we find
-        // out. See MAX_ANCHOR_DISPLACEMENT.
-        // [PERF] Sampled once, up where the geometry fast path needs it.
-        const anchorOffBy = anchorOffByEarly;
+        this._syncCaptureOffset(state, actor, [pivotFxEarly, pivotFyEarly], [actorWEarly, actorHEarly], [sx, sy], [localX, localY]);
+        this._syncClones(state);
+        // Sync corner overlays
+        // [PERF] Hidden and not laid out at all when the reveal is off — see
+        // CORNER_REVEAL_ENABLED. cornerOverlayClone is a Clone of baseActor, so
+        // painting it repaints the wallpaper clone and every behind-window clone
+        // a second time per frame per window.
+        setActorVisible(state.cornerOverlay, CORNER_REVEAL_ENABLED);
+        if (CORNER_REVEAL_ENABLED) {
+            const baseW = visW + (margin * 2);
+            const baseH = visH + (margin * 2);
+            this._applyCounterScale(state.cornerOverlay, actor, frameDX - margin, frameDY - margin, baseW, baseH);
+            state.cornerOverlayClone.set_position(0, 0);
+            state.cornerOverlayClone.set_size(baseW, baseH);
+        }
+        // [FIX] Last line of defence, applied after every setActorVisible(…, true)
+        // above so it wins. If the clone containers are anchored hundreds of
+        // pixels away from screen (0,0), this glass cannot draw anything but
+        // garbage this frame — the constraint offsets are computed correctly (the
+        // [anchor] log prints them) but are not reaching the allocation, which
+        // only happens when the subtree is stranded. Everything inside is then
+        // painting the wrong part of the screen, magnified by whatever
+        // counter-scale the current animation asked for. Hide it and let
+        // _frameTick()'s ensureGlassAllocated() calls do the repair.
+        if (anchorOffByEarly > MAX_ANCHOR_DISPLACEMENT) {
+            // Opacity, not visibility — see _setGlassStrandHidden(). The comment
+            // above says to let ensureGlassAllocated() do the repair, and with
+            // setActorVisible() it never could.
+            this._setGlassStrandHidden(state, true);
+            // [PERF] Drop the geometry signature: this frame HID the glass without
+            // running the write half, so a later frame that comes back with the
+            // exact same geometry would match the stale signature, take the fast
+            // path, and never show the actors again.
+            state.geomSig = undefined;
+        }
+        else {
+            this._setGlassStrandHidden(state, false);
+        }
+    }
+    _updateGeometrySignature(sig, values, unchanged) {
+        for (let i = 0; i < sig.length; i++) {
+            if (sig[i] !== values[i]) {
+                unchanged = false;
+                sig[i] = values[i];
+            }
+        }
+        return unchanged;
+    }
+    _syncCaptureOffset(state, actor, [pivotFxEarly, pivotFyEarly], [actorWEarly, actorHEarly], [sx, sy], [localX, localY]) {
         // ▼ Constraintによる画面全体(0,0)への絶対座標固定 ▼
         // クローン群は絶対スクリーン座標で配置されるので、そのコンテナの原点が
         // 画面の (0,0) に乗るようオフセットを求める。
@@ -1584,8 +1646,9 @@ export class ApplicationManager {
         // これを 0 と置くと offset = (windowActor.x - A) - localX。
         //
         // ここで A は windowActor の変換後原点だが、**get_transformed_position()
-        // で読んではならない**。この関数は Meta.LaterType.BEFORE_REDRAW の later
-        // から呼ばれ、それは clutter_stage_maybe_relayout() より前に走る。
+        // で読んではならない**。この関数はステージの 'before-update'（以前は
+        // Meta.LaterType.BEFORE_REDRAW の later）から呼ばれ、どちらも
+        // clutter_stage_maybe_relayout() より前に走る。
         // つまり:
         //   actor.x                        → needs_allocation 中は fixed_pos、
         //                                    すなわち「今フレームの新しい位置」
@@ -1622,53 +1685,7 @@ export class ApplicationManager {
             state.constraints.base.setOffset(offsetX, offsetY);
             state.constraints.baseWindows.setOffset(offsetX, offsetY);
         }
-        this._syncClones(state);
-        // Sync corner overlays
-        // [PERF] Hidden and not laid out at all when the reveal is off — see
-        // CORNER_REVEAL_ENABLED. cornerOverlayClone is a Clone of baseActor, so
-        // painting it repaints the wallpaper clone and every behind-window clone
-        // a second time per frame per window.
-        setActorVisible(state.cornerOverlay, CORNER_REVEAL_ENABLED);
-        if (CORNER_REVEAL_ENABLED) {
-            const baseW = visW + (margin * 2);
-            const baseH = visH + (margin * 2);
-            this._applyCounterScale(state.cornerOverlay, actor, frameDX - margin, frameDY - margin, baseW, baseH);
-            state.cornerOverlayClone.set_position(0, 0);
-            state.cornerOverlayClone.set_size(baseW, baseH);
-        }
-        // [FIX] Last line of defence, applied after every setActorVisible(…, true)
-        // above so it wins. If the clone containers are anchored hundreds of
-        // pixels away from screen (0,0), this glass cannot draw anything but
-        // garbage this frame — the constraint offsets are computed correctly (the
-        // [anchor] log prints them) but are not reaching the allocation, which
-        // only happens when the subtree is stranded. Everything inside is then
-        // painting the wrong part of the screen, magnified by whatever
-        // counter-scale the current animation asked for. Hide it and let
-        // _frameTick()'s ensureGlassAllocated() calls do the repair.
-        if (anchorOffBy > MAX_ANCHOR_DISPLACEMENT) {
-            // Opacity, not visibility — see _setGlassStrandHidden(). The comment
-            // above says to let ensureGlassAllocated() do the repair, and with
-            // setActorVisible() it never could.
-            this._setGlassStrandHidden(state, true);
-            // [PERF] Drop the geometry signature: this frame HID the glass without
-            // running the write half, so a later frame that comes back with the
-            // exact same geometry would match the stale signature, take the fast
-            // path, and never show the actors again.
-            state.geomSig = undefined;
-        }
-        else {
-            this._setGlassStrandHidden(state, false);
-        }
     }
-    /**
-     * Places every "window behind" clone at its source's current geometry.
-     *
-     * [PERF] Split out of _syncStateInner() so the geometry fast path there can
-     * skip its own work and still run this: a behind-window can move, resize,
-     * fade or unmap without anything about THIS window's geometry changing, and
-     * a clone left at a stale position is the failure mode this file has
-     * regressed into most often. Body is unchanged from when it was inline.
-     */
     /**
      * Keeps a glass whose capture contains another glass from latching to black.
      *
@@ -1683,10 +1700,12 @@ export class ApplicationManager {
      * happen again.
      *
      * Two repairs, switchable so they can be compared on the same desktop —
-     * see NestedGlassFix in utils.ts for why neither is obviously right.
+     * see NestedGlassFix in capture/nestedGlass.ts for why neither is obviously right.
      */
     _repairNestedGlass(state) {
         const mode = getNestedGlassFix();
+        if (mode !== 'damage')
+            this._releaseDamageHooks(state);
         if (mode === 'off')
             return;
         const bg = state.bgActor;
@@ -1707,6 +1726,10 @@ export class ApplicationManager {
             bg.queue_redraw();
             return;
         }
+        if (this._nestedClonesChanged(state))
+            bg.queue_redraw();
+    }
+    _nestedClonesChanged(state) {
         // (C) Only after an inner glass we clone actually re-rendered. Cheap, but
         // the serial can only be read on the frame AFTER the re-render, so the
         // repair is one frame late by construction: the black becomes a flicker
@@ -1731,13 +1754,10 @@ export class ApplicationManager {
         }
         // Drop entries for clones this glass no longer has, so the map cannot grow
         // with every window that has ever been behind this one.
-        if (seen.size > state.clones.size) {
-            for (const src of [...seen.keys()])
-                if (!state.clones.has(src))
-                    seen.delete(src);
-        }
-        if (stale)
-            bg.queue_redraw();
+        for (const src of seen.keys())
+            if (!state.clones.has(src))
+                seen.delete(src);
+        return stale;
     }
     /**
      * Keeps one MetaWindowActor::damaged handler per behind-cloned window that
@@ -1765,49 +1785,27 @@ export class ApplicationManager {
             hooks = new Map();
             state.damageHooks = hooks;
         }
-        for (const src of state.clones.keys()) {
-            if (hooks.has(src))
-                continue;
-            if (!isActorValid(src) || !innerGlassEffectOf(src))
-                continue;
-            try {
-                const id = src.connect('damaged', () => {
-                    const bg = state.bgActor;
-                    if (bg && isActorValid(bg) && bg.mapped && bg.visible)
-                        bg.queue_redraw();
-                });
-                hooks.set(src, id);
-            }
-            catch (_) { /* a source that cannot be connected simply goes unhooked */ }
-        }
-        // Drop handlers for windows this glass no longer clones, so the map cannot
-        // grow with every window that has ever been behind this one.
-        if (hooks.size > state.clones.size) {
-            for (const [src, id] of [...hooks]) {
-                if (state.clones.has(src))
-                    continue;
-                try {
-                    if (isActorValid(src))
-                        src.disconnect(id);
-                }
-                catch (_) { }
-                hooks.delete(src);
-            }
-        }
+        syncDamageHooks(hooks, state.clones, () => {
+            const bg = state.bgActor;
+            if (bg && isActorValid(bg) && bg.mapped && bg.visible)
+                bg.queue_redraw();
+        });
     }
     _releaseDamageHooks(state) {
         if (!state.damageHooks)
             return;
-        for (const [src, id] of state.damageHooks) {
-            try {
-                if (isActorValid(src))
-                    src.disconnect(id);
-            }
-            catch (_) { }
-        }
-        state.damageHooks.clear();
+        releaseDamageHooks(state.damageHooks);
         state.damageHooks = undefined;
     }
+    /**
+     * Places every "window behind" clone at its source's current geometry.
+     *
+     * [PERF] Split out of _syncStateInner() so the geometry fast path there can
+     * skip its own work and still run this: a behind-window can move, resize,
+     * fade or unmap without anything about THIS window's geometry changing, and
+     * a clone left at a stale position is the failure mode this file has
+     * regressed into most often.
+     */
     _syncClones(state) {
         // [PERF ①b] Cull behind-window clones that fall outside this glass's own
         // box. See state.glassScreenRect.
@@ -1832,45 +1830,20 @@ export class ApplicationManager {
             : undefined;
         // ▼ 個別ウィンドウのクローン同期 (translation_x/yを使用) ▼
         // Sync blurred clones
-        for (let [src, clone] of state.clones.entries()) {
-            if (!isActorValid(src) || !src.visible || !src.mapped) {
-                if (isActorValid(clone))
-                    setActorVisible(clone, false);
-                this._clearCloneAnomaly(clone);
-                continue;
-            }
-            if (isActorValid(clone)) {
-                if (this._shouldCullClone(src, cullRect)) {
-                    setCloneCulled(clone, true, () => this._cullWhy(src, cullRect, 'blurred'));
-                    this._clearCloneAnomaly(clone);
-                    continue;
-                }
-                setCloneCulled(clone, false, 'app/blurred');
-                setActorVisible(clone, true);
-                // 実際のプロパティ(x,y)は0,0に固定し、描画オフセットのみで配置する
-                // [PERF] 値が変わったときだけ書く。Clutter の translation/scale の
-                // setter は比較せずに queue_redraw() まで走るので、静止中でも毎フレーム
-                // クローンを damage し、それを含むガラス全段を再描画させていた。
-                // 詳細は utils.ts の setTranslationIfChanged()。
-                if (clone.x !== 0 || clone.y !== 0)
-                    clone.set_position(0, 0);
-                setTranslationIfChanged(clone, src.x, src.y);
-                setSizeIfChanged(clone, src.width, src.height);
-                setScaleIfChanged(clone, src.scale_x, src.scale_y);
-                setOpacityIfChanged(clone, src.opacity);
-                this._checkCloneAnomaly(clone, src, 'blurred');
-            }
-        }
+        this._syncCloneLayer(state.clones, cullRect, 'blurred');
         // [window-clone-clip] Keep the cull opt-out in step with what this glass
         // clones, so mutter stops handing those windows' surface actors a
-        // damage-limited clip region. See CullOptOutEffect in utils.ts.
+        // damage-limited clip region. See CullOptOutEffect in capture/windowCulling.ts.
         reportClonedWindowActors(state, state.clones.keys());
         this._repairNestedGlass(state);
         // Sync base clones (unblurred). The map is empty while the base layer is
         // off (they are never built), so this is just skipping the iteration.
         if (!BASE_LAYER_ENABLED)
             return;
-        for (let [src, clone] of state.baseClones.entries()) {
+        this._syncCloneLayer(state.baseClones, cullRect, 'base');
+    }
+    _syncCloneLayer(clones, cullRect, kind) {
+        for (let [src, clone] of clones.entries()) {
             if (!isActorValid(src) || !src.visible || !src.mapped) {
                 if (isActorValid(clone))
                     setActorVisible(clone, false);
@@ -1879,19 +1852,24 @@ export class ApplicationManager {
             }
             if (isActorValid(clone)) {
                 if (this._shouldCullClone(src, cullRect)) {
-                    setCloneCulled(clone, true, () => this._cullWhy(src, cullRect, 'base'));
+                    setCloneCulled(clone, true, () => this._cullWhy(src, cullRect, kind));
                     this._clearCloneAnomaly(clone);
                     continue;
                 }
-                setCloneCulled(clone, false, 'app/base');
+                setCloneCulled(clone, false, `app/${kind}`);
                 setActorVisible(clone, true);
+                // 実際のプロパティ(x,y)は0,0に固定し、描画オフセットのみで配置する
+                // [PERF] 値が変わったときだけ書く。Clutter の translation/scale の
+                // setter は比較せずに queue_redraw() まで走るので、静止中でも毎フレーム
+                // クローンを damage し、それを含むガラス全段を再描画させていた。
+                // 詳細は actors/writes.ts の setTranslationIfChanged()。
                 if (clone.x !== 0 || clone.y !== 0)
                     clone.set_position(0, 0);
                 setTranslationIfChanged(clone, src.x, src.y);
                 setSizeIfChanged(clone, src.width, src.height);
                 setScaleIfChanged(clone, src.scale_x, src.scale_y);
                 setOpacityIfChanged(clone, src.opacity);
-                this._checkCloneAnomaly(clone, src, 'base');
+                this._checkCloneAnomaly(clone, src, kind);
             }
         }
     }
@@ -1899,7 +1877,7 @@ export class ApplicationManager {
     // loops. `kind` is just "blurred"/"base" for the log line. Deliberately
     // does NOT check has_allocation() — we just called set_position()/
     // set_size() on this same clone moments earlier in this same frame,
-    // which (per the BEFORE_REDRAW timing already confirmed via
+    // which (per the pre-relayout tick timing already confirmed via
     // [alloc-probe]) would make has_allocation() read false unconditionally
     // regardless of whether anything is actually wrong; including it here
     // would just spam false positives every frame. `mapped` and a
@@ -1909,11 +1887,11 @@ export class ApplicationManager {
         try {
             mapped = clone.mapped;
         }
-        catch (e) { }
+        catch { }
         try {
             [w, h] = clone.get_size();
         }
-        catch (e) { }
+        catch { }
         const degenerate = !Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0;
         const anomalous = !mapped || degenerate;
         if (anomalous && !this._anomalousClones.has(clone)) {
@@ -1934,26 +1912,26 @@ export class ApplicationManager {
     _clearCloneAnomaly(clone) {
         this._anomalousClones.delete(clone);
     }
-    /**
-     * [PERF ①b] True when `src` cannot contribute a pixel to a glass whose box
-     * is `cullRect` (screen coordinates), so its clone need not be painted.
-     *
-     * **Fails open.** The size comes from the allocation rather than from
-     * src.width/src.height: those fall back to the PREFERRED size whenever a
-     * relayout is pending, and this runs from a BEFORE_REDRAW later, i.e.
-     * before clutter_stage_maybe_relayout() — the exact situation
-     * getAllocatedSize() exists for (see its comment, and the same trap in
-     * _rebuildWindowClones()). A source that reports a degenerate rect there
-     * would intersect nothing and be culled from every glass that is not at
-     * the top-left of the screen, which on screen reads as the glass losing
-     * its background. So anything not clearly outside is kept.
-     */
     /** [DIAG] The one-line "why" handed to setCloneCulled() on a transition. */
     _cullWhy(src, cullRect, kind) {
         const [w, h] = getAllocatedSize(src);
         return `src=(${Math.round(src.x)},${Math.round(src.y)},${Math.round(w)}x${Math.round(h)}) ` +
             `glassRect=[${cullRect.map(Math.round)}] app/${kind}`;
     }
+    /**
+     * [PERF ①b] True when `src` cannot contribute a pixel to a glass whose box
+     * is `cullRect` (screen coordinates), so its clone need not be painted.
+     *
+     * **Fails open.** The size comes from the allocation rather than from
+     * src.width/src.height: those fall back to the PREFERRED size whenever a
+     * relayout is pending, and this runs from the frame tick, i.e. before
+     * clutter_stage_maybe_relayout() — the exact situation
+     * getAllocatedSize() exists for (see its comment, and the same trap in
+     * _rebuildWindowClones()). A source that reports a degenerate rect there
+     * would intersect nothing and be culled from every glass that is not at
+     * the top-left of the screen, which on screen reads as the glass losing
+     * its background. So anything not clearly outside is kept.
+     */
     _shouldCullClone(src, cullRect) {
         if (!cullRect)
             return false;
@@ -1968,105 +1946,26 @@ export class ApplicationManager {
     }
     _frameTick() {
         // [FIX] Hard stop after teardown — see the note on _torndown. This tick
-        // re-adds itself as a BEFORE_REDRAW later at the end, so without this a
-        // cleanup() that threw before its laters().remove() would leave the
-        // chain running forever against destroyed window actors.
+        // runs from the stage's 'before-update' signal, so without this a
+        // cleanup() that threw before disconnecting it would leave it running
+        // forever against destroyed window actors.
         if (this._torndown)
             return;
-        // [DIAG] See setFrameSyncFrozen() in utils.ts. Reschedules but does
-        // nothing, so the cost of this poll can be measured directly.
-        if (isFrameSyncFrozen()) {
-            this._frameSyncId = global.compositor.get_laters().add(Meta.LaterType.BEFORE_REDRAW, () => { this._frameTick(); return false; });
+        // [DIAG] See setFrameSyncFrozen() in animation/frameSync.ts. Does
+        // nothing, so the cost of the per-frame work can be measured directly.
+        if (isFrameSyncFrozen())
             return;
-        }
+        // Two stage views updating in the same frame each emit 'before-update';
+        // step once.
+        const nowUs = GLib.get_monotonic_time();
+        if (nowUs - this._lastTickUs < SAME_FRAME_WINDOW_US)
+            return;
+        this._lastTickUs = nowUs;
+        // One window's failure must not stop the others: each runs in its own
+        // try/catch.
         for (let state of this._states.values()) {
             try {
-                const metaWin = state.windowActor?.get_meta_window?.();
-                // Skip this window only — never return, or the reschedule at the end
-                // is missed and the whole per-frame sync chain stops permanently.
-                if (!metaWin)
-                    continue;
-                // [FIX] Rescue the WINDOW ACTOR first, not just our own three roots.
-                //
-                // The earlier comment here claimed MetaWindowActor is flagged
-                // NO_LAYOUT, which would make bgActor/baseActor/cornerOverlay queue
-                // their relayouts straight onto the stage
-                // (clutter_actor_queue_shallow_relayout) and be rescuable on their
-                // own. It is not: mutter's MetaWindowActor sets no such flag and
-                // implements no allocate vfunc — its children are laid out by
-                // Clutter's default fixed layout. So a glass root's
-                // queue_relayout() goes to
-                //
-                //     clutter_actor_real_queue_relayout()
-                //       -> _clutter_actor_queue_only_relayout(windowActor)
-                //            if (needs_width_request && needs_height_request &&
-                //                needs_allocation) return;  // save some cpu cycles
-                //
-                // and dies there whenever the window actor itself is stranded. That
-                // made the rescue below unable to ever land: hide()/show() cleared
-                // the glass root's own three flags via real_map(), the follow-up
-                // queue_relayout() was swallowed by the stranded window actor, and
-                // the root was unallocated again on the very next frame. journalctl
-                // from the bad session shows exactly that — "Can't update stage
-                // views actor lgw-base ... needs an allocation" at 60/s per window,
-                // for a minute and a half, never once recovering, with the window
-                // actor itself ("unnamed [MetaWindowActorWayland]") warned about in
-                // the same stretch.
-                //
-                // Remapping the window actor clears the flags for the whole subtree
-                // in one go (real_map() recurses into every child), so this single
-                // call is what makes the three below effective again. Gated on a
-                // longer stranded streak than our own actors get: this one is
-                // Mutter's, and a live window must never be remapped just because a
-                // legitimate relayout took a few frames.
-                // [anim-jitter] Two stages now; see ensureWindowActorAllocated(). The
-                // remap below is mutter's own window actor being unmapped and remapped
-                // mid-animation, which the 100ms capture caught happening ~3 times a
-                // second across five windows. Stage 1 asks the window group to
-                // relayout instead, which is not swallowed by the window actor's own
-                // short-circuit and costs one relayout.
-                // [anim-diag] Keep the dump able to say WHICH window this glass is.
-                try {
-                    const label = metaWin.get_title() || '(untitled)';
-                    if (state.effect._diagOwnerLabel !== label)
-                        state.effect._diagOwnerLabel = label;
-                }
-                catch (_) { /* noop */ }
-                const rescue = ensureWindowActorAllocated(state.windowActor, WINDOW_ACTOR_RELAYOUT_FRAMES, WINDOW_ACTOR_STRANDED_FRAMES);
-                if (rescue) {
-                    const title = metaWin.get_title() || '(untitled)';
-                    // [anim-stall] First few entries only — see noteStrandEntry().
-                    noteStrandEntry(title, `wa.alloc=${state.windowActor.has_allocation()} ` +
-                        `wg.alloc=${(() => {
-                            const p = state.windowActor.get_parent();
-                            return p ? p.has_allocation() : '-';
-                        })()} ` +
-                        `scale=${state.windowActor.scale_x.toFixed(3)} op=${state.windowActor.opacity} ` +
-                        `min=${metaWin.minimized} stage=${rescue}`);
-                    // The whole chain, because "needs an allocation" alone never said
-                    // WHY. clutter_actor_allocate() refuses outright for an actor that
-                    // is not mapped and has no mapped clones, and a parent whose own
-                    // box did not change never re-runs its layout manager -- so the
-                    // answer is in the map/alloc flags of the actor AND its parent, not
-                    // in the glass.
-                    this._logger.log(`[Liquid Glass][strand] ${rescue} for "${title}" — ` +
-                        `wa(mapped=${state.windowActor.mapped},vis=${state.windowActor.visible},` +
-                        `alloc=${state.windowActor.has_allocation()},op=${state.windowActor.opacity},` +
-                        `scale=${state.windowActor.scale_x.toFixed(3)}) ` +
-                        `parent(${(() => {
-                            const p = state.windowActor.get_parent();
-                            return p ? `${p.constructor?.name},mapped=${p.mapped},alloc=${p.has_allocation()}` : 'none';
-                        })()}) ` +
-                        `bg(mapped=${state.bgActor.mapped},vis=${state.bgActor.visible},` +
-                        `alloc=${state.bgActor.has_allocation()}) ` +
-                        `min=${metaWin.minimized}`);
-                }
-                ensureGlassAllocated(state.bgActor);
-                ensureGlassAllocated(state.baseActor);
-                ensureGlassAllocated(state.cornerOverlay);
-                this._syncState(state);
-                if (this._debugFocusLogFrames > 0)
-                    this._logFocusDebugInfo(state);
+                this._syncFrameState(state);
             }
             catch (e) {
                 this._logger.error(`[Liquid Glass] Error in _syncState: ${e}`);
@@ -2074,10 +1973,93 @@ export class ApplicationManager {
         }
         if (this._debugFocusLogFrames > 0)
             this._debugFocusLogFrames--;
-        this._frameSyncId = global.compositor.get_laters().add(Meta.LaterType.BEFORE_REDRAW, () => {
-            this._frameTick();
-            return false;
-        });
+    }
+    _syncFrameState(state) {
+        const metaWin = state.windowActor?.get_meta_window?.();
+        // Skip this window only.
+        if (!metaWin)
+            return;
+        // [FIX] Rescue the WINDOW ACTOR first, not just our own three roots.
+        //
+        // The earlier comment here claimed MetaWindowActor is flagged
+        // NO_LAYOUT, which would make bgActor/baseActor/cornerOverlay queue
+        // their relayouts straight onto the stage
+        // (clutter_actor_queue_shallow_relayout) and be rescuable on their
+        // own. It is not: mutter's MetaWindowActor sets no such flag and
+        // implements no allocate vfunc — its children are laid out by
+        // Clutter's default fixed layout. So a glass root's
+        // queue_relayout() goes to
+        //
+        //     clutter_actor_real_queue_relayout()
+        //       -> _clutter_actor_queue_only_relayout(windowActor)
+        //            if (needs_width_request && needs_height_request &&
+        //                needs_allocation) return;  // save some cpu cycles
+        //
+        // and dies there whenever the window actor itself is stranded. That
+        // made the rescue below unable to ever land: hide()/show() cleared
+        // the glass root's own three flags via real_map(), the follow-up
+        // queue_relayout() was swallowed by the stranded window actor, and
+        // the root was unallocated again on the very next frame. journalctl
+        // from the bad session shows exactly that — "Can't update stage
+        // views actor lgw-base ... needs an allocation" at 60/s per window,
+        // for a minute and a half, never once recovering, with the window
+        // actor itself ("unnamed [MetaWindowActorWayland]") warned about in
+        // the same stretch.
+        //
+        // Remapping the window actor clears the flags for the whole subtree
+        // in one go (real_map() recurses into every child), so this single
+        // call is what makes the three below effective again. Gated on a
+        // longer stranded streak than our own actors get: this one is
+        // Mutter's, and a live window must never be remapped just because a
+        // legitimate relayout took a few frames.
+        // [anim-jitter] Two stages now; see ensureWindowActorAllocated(). The
+        // remap below is mutter's own window actor being unmapped and remapped
+        // mid-animation, which the 100ms capture caught happening ~3 times a
+        // second across five windows. Stage 1 asks the window group to
+        // relayout instead, which is not swallowed by the window actor's own
+        // short-circuit and costs one relayout.
+        // [anim-diag] Keep the dump able to say WHICH window this glass is.
+        try {
+            const label = metaWin.get_title() || '(untitled)';
+            if (state.effect._diagOwnerLabel !== label)
+                state.effect._diagOwnerLabel = label;
+        }
+        catch { }
+        const rescue = ensureWindowActorAllocated(state.windowActor, WINDOW_ACTOR_RELAYOUT_FRAMES, WINDOW_ACTOR_STRANDED_FRAMES);
+        if (rescue) {
+            const title = metaWin.get_title() || '(untitled)';
+            // [anim-stall] First few entries only — see noteStrandEntry().
+            noteStrandEntry(title, `wa.alloc=${state.windowActor.has_allocation()} ` +
+                `wg.alloc=${(() => {
+                    const p = state.windowActor.get_parent();
+                    return p ? p.has_allocation() : '-';
+                })()} ` +
+                `scale=${state.windowActor.scale_x.toFixed(3)} op=${state.windowActor.opacity} ` +
+                `min=${metaWin.minimized} stage=${rescue}`);
+            // The whole chain, because "needs an allocation" alone never said
+            // WHY. clutter_actor_allocate() refuses outright for an actor that
+            // is not mapped and has no mapped clones, and a parent whose own
+            // box did not change never re-runs its layout manager -- so the
+            // answer is in the map/alloc flags of the actor AND its parent, not
+            // in the glass.
+            this._logger.log(`[Liquid Glass][strand] ${rescue} for "${title}" — ` +
+                `wa(mapped=${state.windowActor.mapped},vis=${state.windowActor.visible},` +
+                `alloc=${state.windowActor.has_allocation()},op=${state.windowActor.opacity},` +
+                `scale=${state.windowActor.scale_x.toFixed(3)}) ` +
+                `parent(${(() => {
+                    const p = state.windowActor.get_parent();
+                    return p ? `${p.constructor?.name},mapped=${p.mapped},alloc=${p.has_allocation()}` : 'none';
+                })()}) ` +
+                `bg(mapped=${state.bgActor.mapped},vis=${state.bgActor.visible},` +
+                `alloc=${state.bgActor.has_allocation()}) ` +
+                `min=${metaWin.minimized}`);
+        }
+        ensureGlassAllocated(state.bgActor);
+        ensureGlassAllocated(state.baseActor);
+        ensureGlassAllocated(state.cornerOverlay);
+        this._syncState(state);
+        if (this._debugFocusLogFrames > 0)
+            this._logFocusDebugInfo(state);
     }
     // ── Diagnostics: focus-change "shifted texture" investigation ──────────────
     // Logs, for `state`'s own window, the raw Clutter actor position next to
@@ -2100,30 +2082,6 @@ export class ApplicationManager {
         this._debugFocusLogFrames = ApplicationManager.DEBUG_FOCUS_LOG_FRAME_COUNT;
         this._logger.log(`[Liquid Glass][focus-debug] ---- ${reason} event ----`);
     }
-    // The load-bearing invariant of this whole file: windowsContainer /
-    // baseWindowsContainer carry an InvertedPositionConstraint whose offset is
-    // chosen so the container's origin lands exactly on SCREEN (0,0) — that is
-    // the only reason the clones inside it can be positioned with raw absolute
-    // screen coordinates (clone.translation_x = src.x).
-    //
-    // If that anchor drifts, every clone inside the glass is displaced by the
-    // same amount — which is both the "the glass shows a completely different
-    // part of the screen" report and the one-frame drag lag (this probe caught
-    // the latter: offset wobbling between -19 and -44 where the geometry says
-    // it must be a constant -35). Anything computing that offset from an
-    // allocation-derived read inside the BEFORE_REDRAW later will trip it, so
-    // it is worth leaving armed.
-    //
-    // Returns how far the anchor is off, in screen pixels (Infinity when it is
-    // not a finite position at all), so the caller can refuse to draw glass
-    // that is grossly displaced — see MAX_ANCHOR_DISPLACEMENT.
-    /**
-     * True when this frame is about to counter-scale a subtree that did not pick
-     * up the last relayout — the combination that turns a legitimate 1/scale
-     * transform into a damage rectangle tens of thousands of pixels wide. See
-     * MAX_STRANDED_COUNTER_SCALE for why both halves are needed and why this can
-     * be trusted at the top of a BEFORE_REDRAW tick.
-     */
     /**
      * [min-restore] Drags a glass subtree back into the allocation cycle after
      * its window actor was remapped.
@@ -2207,6 +2165,13 @@ export class ApplicationManager {
                 actor.opacity = wanted;
         }
     }
+    /**
+     * True when this frame is about to counter-scale a subtree that did not pick
+     * up the last relayout — the combination that turns a legitimate 1/scale
+     * transform into a damage rectangle tens of thousands of pixels wide. See
+     * MAX_STRANDED_COUNTER_SCALE for why both halves are needed and why this can
+     * be trusted at the top of a frame tick.
+     */
     _counterScaleWouldStrand(state) {
         const container = state.windowsContainer;
         if (!isActorValid(container))
@@ -2218,7 +2183,7 @@ export class ApplicationManager {
             try {
                 stranded = !container.has_allocation();
             }
-            catch (_) {
+            catch {
                 stranded = false;
             }
         }
@@ -2238,15 +2203,32 @@ export class ApplicationManager {
         }
         return stranded;
     }
+    // The load-bearing invariant of this whole file: windowsContainer /
+    // baseWindowsContainer carry an InvertedPositionConstraint whose offset is
+    // chosen so the container's origin lands exactly on SCREEN (0,0) — that is
+    // the only reason the clones inside it can be positioned with raw absolute
+    // screen coordinates (clone.translation_x = src.x).
+    //
+    // If that anchor drifts, every clone inside the glass is displaced by the
+    // same amount — which is both the "the glass shows a completely different
+    // part of the screen" report and the one-frame drag lag (this probe caught
+    // the latter: offset wobbling between -19 and -44 where the geometry says
+    // it must be a constant -35). Anything computing that offset from an
+    // allocation-derived read inside the pre-relayout frame tick will trip it, so
+    // it is worth leaving armed.
+    //
+    // Returns how far the anchor is off, in screen pixels (Infinity when it is
+    // not a finite position at all), so the caller can refuse to draw glass
+    // that is grossly displaced — see MAX_ANCHOR_DISPLACEMENT.
     _checkContainerAnchor(state) {
         const container = state.windowsContainer;
         if (!isActorValid(container))
             return 0;
-        let x = NaN, y = NaN;
+        let x, y;
         try {
             [x, y] = container.get_transformed_position();
         }
-        catch (e) {
+        catch {
             return 0;
         }
         const offBy = (!Number.isFinite(x) || !Number.isFinite(y))
@@ -2290,7 +2272,7 @@ export class ApplicationManager {
         try {
             [ancX, ancY] = state.windowsContainer.get_transformed_position();
         }
-        catch (e) { }
+        catch { }
         this._logger.log(`[Liquid Glass][focus-debug] window="${title}" ` +
             `windowActor.(x,y)=(${actorX},${actorY}) ` +
             `transformedPos=(${Math.round(tX)},${Math.round(tY)}) ` +
@@ -2318,7 +2300,7 @@ export class ApplicationManager {
             try {
                 [cloneScreenX, cloneScreenY] = clone.get_transformed_position();
             }
-            catch (e) { }
+            catch { }
             this._logger.log(`[Liquid Glass][focus-debug]   behind-clone src="${srcTitle}" ` +
                 `src.(x,y)=(${srcX},${srcY}) src.transformedPos=(${Math.round(srcTX)},${Math.round(srcTY)}) ` +
                 `diff=(${Math.round(srcTX - srcX)},${Math.round(srcTY - srcY)}) ` +
@@ -2342,9 +2324,31 @@ export class ApplicationManager {
             try {
                 global.compositor.get_laters().remove(state.remapReallocLaterId);
             }
-            catch (_) { /* noop */ }
+            catch { }
             state.remapReallocLaterId = 0;
         }
+        this._restoreWindowSurface(state);
+        this._releaseWindowConstraints(state);
+        state.clones.forEach(clone => { if (isActorValid(clone))
+            clone.destroy(); });
+        state.clones.clear();
+        state.baseClones.forEach(clone => { if (isActorValid(clone))
+            clone.destroy(); });
+        state.baseClones.clear();
+        if (state.effect) {
+            try {
+                state.effect.cleanup();
+            }
+            catch { }
+        }
+        if (isActorValid(state.bgActor))
+            state.bgActor.destroy();
+        if (isActorValid(state.baseActor))
+            state.baseActor.destroy();
+        if (isActorValid(state.cornerOverlay))
+            state.cornerOverlay.destroy();
+    }
+    _restoreWindowSurface(state) {
         // Restore the original opacity of the window's own content layer.
         // Uses the cached surfaceActor reference (see WindowState) rather than
         // windowActor.get_first_child(), which no longer points at the real
@@ -2355,7 +2359,7 @@ export class ApplicationManager {
                     state.surfaceActor.opacity = state.originalOpacity;
                 }
             }
-            catch (e) {
+            catch {
                 // Window actor may already be destroyed; safe to ignore.
             }
         }
@@ -2364,10 +2368,12 @@ export class ApplicationManager {
                 try {
                     sig.obj.disconnect(sig.id);
                 }
-                catch (e) { }
+                catch { }
             });
             state.signals = [];
         }
+    }
+    _releaseWindowConstraints(state) {
         // [FIX] Every actor below is a child of the window actor, so by the time
         // this runs from the 'destroy' handler (windowManager's destroy-animation
         // completion) Clutter has usually already disposed the whole subtree.
@@ -2390,23 +2396,5 @@ export class ApplicationManager {
             state.constraints.base.source = null;
             state.constraints.baseWindows.source = null;
         }
-        state.clones.forEach(clone => { if (isActorValid(clone))
-            clone.destroy(); });
-        state.clones.clear();
-        state.baseClones.forEach(clone => { if (isActorValid(clone))
-            clone.destroy(); });
-        state.baseClones.clear();
-        if (state.effect) {
-            try {
-                state.effect.cleanup();
-            }
-            catch (e) { }
-        }
-        if (isActorValid(state.bgActor))
-            state.bgActor.destroy();
-        if (isActorValid(state.baseActor))
-            state.baseActor.destroy();
-        if (isActorValid(state.cornerOverlay))
-            state.cornerOverlay.destroy();
     }
 }

@@ -1,3 +1,6 @@
+import { stepMenuSpring, applyMenuFrame, showMenuAtRest } from './animation/menuSpring.js';
+import { addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs } from './animation/frameTicker.js';
+import { Spring, SwiftSpring } from './animation/spring.js';
 // src/uiManager.ts
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
@@ -7,7 +10,17 @@ import Meta from 'gi://Meta';
 import Gio from 'gi://Gio';
 import { LiquidEffect } from './liquidEffect.js';
 import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
-import { UnpickableActor, UILayerSampler, UnpickableWidget, WindowCloneManager, reportFrameLoopError, ensureGlassAllocated, resolveMonitorGeometry, isActorValid, getAllocatedSize, isFrameSyncFrozen, setClipIfChanged, syncGlassCaptureClip, resolveCrossFade, adaptiveColorTweener, addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs } from './utils.js';
+import { UnpickableActor, UnpickableWidget } from './actors/unpickable.js';
+import { UILayerSampler } from './capture/uiLayerSampler.js';
+import { WindowCloneManager } from './capture/windowClones.js';
+import { ensureGlassAllocated } from './actors/allocation.js';
+import { resolveMonitorGeometry, getAllocatedSize } from './actors/geometry.js';
+import { isActorValid } from './actors/lifecycle.js';
+import { startLaterLoop, stopLaterLoop } from './animation/frameLoops.js';
+import { excludeOtherGlass } from './capture/glassExclusions.js';
+import { placeScreenGlass, resolveGlassOrigin, applyGlassScale, GLASS_SHADOW_MAX_RADIUS } from './actors/glassBounds.js';
+import { syncGlassCaptureClip } from './capture/clip.js';
+import { resolveCrossFade, adaptiveColorTweener } from './animation/colors.js';
 // ========== Configuration Parameters ==========
 // Transparent padding outside the glass area.
 // This prevents the shader distortion or rounded corners from being clipped by the actor bounds.
@@ -16,10 +29,15 @@ const SHADER_PADDING = 20;
 const SAMPLE_PER_ELEMENT = false;
 // ==============================================
 const MIN_MENU_SCALE = 0.5;
+const MENU_MEASURE_FRAMES = 30;
+let _quickSettingsHeight = 0;
+let _quickSettingsWaiting = null;
+const MENU_MEASURE_STABLE_FRAMES = 3;
 export class UIManager {
     _enableKey;
     _keyPrefix;
     _label;
+    _ownsSettingsNamespace;
     extensionPath;
     _settings;
     _logger;
@@ -35,9 +53,12 @@ export class UIManager {
     _destroySignalId = 0;
     _actorDestroyed = false;
     _frameSyncId;
+    get _frameSlot() {
+        return { get: () => this._frameSyncId, set: (id) => { this._frameSyncId = id; } };
+    }
     // [FIX] Set by cleanup() before anything that can throw. Read by the
-    // per-frame BEFORE_REDRAW tick so an orphaned chain stops itself even if
-    // cleanup() never reached its laterRemove(). See the note in frameTick().
+    // per-frame loop so an orphaned one stops itself even if cleanup() never
+    // reached the call that stops it. See the note on DockManager's frameTick.
     _torndown = false;
     _glassExpand;
     _menuXoffset;
@@ -45,11 +66,21 @@ export class UIManager {
     _menuScale = 1.0;
     _ownsAccentCss = true;
     _matchQuickSettingsHeight = false;
+    _settledHeightScale = null;
+    _measuringHeights = false;
+    _ownOpenHeight = 0;
+    _measureLaterId = 0;
+    _restoreQuickSettings = null;
     _tickId;
     _contrastSampler;
     _adaptiveTimerId;
     _adaptiveInFlight;
     _styledActors;
+    _hoverSignals = new Map();
+    _pendingBackdropRoots = new Set();
+    _backdropColored = new Set();
+    _applyingColors = false;
+    _backdropRefreshId = 0;
     _settingsSignals;
     _isEffectActive;
     _adaptiveConfig;
@@ -64,7 +95,6 @@ export class UIManager {
     _lastBgY;
     // Spring physics parameters
     _springScale;
-    _springPos;
     _springStiffness;
     _springDamping;
     _springMass;
@@ -73,7 +103,6 @@ export class UIManager {
     _swiftResponse = 0.3;
     _swiftDampingFraction = 0.65;
     _swiftSpringScale;
-    _swiftSpringPos;
     _enableAnimation;
     _interfaceSettings = null;
     _accentColorSignalId = 0;
@@ -100,10 +129,11 @@ export class UIManager {
      * session with several panel menus says which one it is talking
      * about instead of five lines that all read "menu".
      */
-    _label = 'menu') {
+    _label = 'menu', _ownsSettingsNamespace = true) {
         this._enableKey = _enableKey;
         this._keyPrefix = _keyPrefix;
         this._label = _label;
+        this._ownsSettingsNamespace = _ownsSettingsNamespace;
         this.extensionPath = extensionPath;
         this._settings = settings;
         this._logger = logger;
@@ -120,12 +150,10 @@ export class UIManager {
         this._menuYoffset = 0;
         // Custom spring physics parameters for the open/close animation
         this._springScale = new Spring(120, 8, 1.0);
-        this._springPos = new Spring(300, 12, 1.0);
         this._springStiffness = 120;
         this._springDamping = 8;
         this._springMass = 1.0;
         this._swiftSpringScale = new SwiftSpring(this._swiftResponse, this._swiftDampingFraction);
-        this._swiftSpringPos = new SwiftSpring(this._swiftResponse, this._swiftDampingFraction);
         this._enableAnimation = false;
         this._tickId = 0;
         this._contrastSampler = new StageContrastSampler();
@@ -159,12 +187,14 @@ export class UIManager {
         this._enableAnimation = this._settings.get_boolean(this._animationKey());
         this._menuScale = this._settings.get_double(this._key('scale'));
         this._matchQuickSettingsHeight = this._settings.get_boolean(this._key('match-quick-settings-height'));
+        const remembered = this._ownsSettingsNamespace
+            ? this._settings.get_double(this._key('settled-height-scale')) : 0;
+        this._settledHeightScale = remembered > 0 ? remembered : null;
         this._applyMenuScale();
         this._springStiffness = this._settings.get_double(this._key('spring-stiffness'));
         this._springDamping = this._settings.get_double(this._key('spring-damping'));
         this._springMass = this._settings.get_double(this._key('spring-mass'));
         this._springScale.updateParams(this._springStiffness, this._springDamping, this._springMass);
-        this._springPos.updateParams(this._springStiffness, this._springDamping, this._springMass);
         this._interfaceSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.interface' });
         this._accentColorSignalId = this._interfaceSettings.connect('changed::accent-color', () => {
             // console.log(`[Liquid Glass] System accent color changed.`);
@@ -179,12 +209,32 @@ export class UIManager {
             this._applyEffect();
         }
     }
-    _applySystemAccentColor() {
-        if (!this._ownsAccentCss || !this.targetActor)
-            return;
+    /**
+     * The accent colour and its foreground as [background, foreground] hex.
+     *
+     * [FIX] Asked of St directly, not read off a themed dummy. The dummy
+     * (`.calendar > .calendar-day.calendar-today`) only answers with the accent
+     * when the shell theme paints today in it unconditionally, as Adwaita does.
+     * MacTahoe paints an unselected today in `rgba(222, 222, 222, 0.1)` and
+     * keeps the accent for `:selected`, so the dummy read back #dedede (its
+     * alpha dropped) and the rule below then forced that pale grey onto today
+     * in every state — a white circle instead of the accent. Which answer came
+     * back depended on whether the user theme had been loaded yet when this
+     * ran. The dummy stays as the fallback for a shell without
+     * get_accent_color(), marked :selected so such themes resolve the accent.
+     */
+    _resolveAccentColors() {
+        try {
+            const [accent, accentFg] = St.ThemeContext.get_for_stage(global.stage).get_accent_color();
+            if (accent && accentFg)
+                return [this._rgbToHex(accent.red, accent.green, accent.blue),
+                    this._rgbToHex(accentFg.red, accentFg.green, accentFg.blue)];
+        }
+        catch { }
         // 1. 親要素と子要素を作成して、GNOMEテーマが要求する正しい階層を再現
         const parent = new UnpickableWidget({ style_class: 'calendar' });
         const child = new UnpickableWidget({ style_class: 'calendar-day calendar-today' });
+        child.add_style_pseudo_class('selected');
         parent.add_child(child);
         // 2. UIグループに追加してスタイルを強制計算させる
         Main.layoutManager.uiGroup.add_child(parent);
@@ -196,16 +246,22 @@ export class UIManager {
         Main.layoutManager.uiGroup.remove_child(parent);
         parent.destroy();
         // 5. HEXに変換
-        const colorStr = this._rgbToHex(bgColor.red, bgColor.green, bgColor.blue);
+        return [this._rgbToHex(bgColor.red, bgColor.green, bgColor.blue), '#ffffff'];
+    }
+    _applySystemAccentColor() {
+        if (!this._ownsAccentCss || !this.targetActor)
+            return;
+        const [colorStr, fgStr] = this._resolveAccentColors();
         // console.log(`[Liquid Glass] Set system accent color to ${colorStr}`);
         const cssContent = `
       .liquid-glass-menu-root .calendar-today,
       .liquid-glass-menu-root .calendar-today:hover,
       .liquid-glass-menu-root .calendar-today:active,
       .liquid-glass-menu-root .calendar-today:checked,
+      .liquid-glass-menu-root .calendar-today:selected,
       .liquid-glass-menu-root .calendar-today:focus {
         background-color: ${colorStr} !important;
-        color: white !important;
+        color: ${fgStr} !important;
       }
     `;
         try {
@@ -234,33 +290,181 @@ export class UIManager {
         let b = parseInt(hex.slice(5, 7), 16) / 255.0;
         return [r, g, b];
     }
-    _naturalHeightOf(actor) {
+    _allocatedHeightOf(actor) {
         if (!actor || !isActorValid(actor))
             return 0;
         try {
+            if (!actor.has_allocation?.())
+                return 0;
             const [, allocated] = getAllocatedSize(actor);
             if (allocated > 1)
                 return allocated;
         }
-        catch (e) { /* fall through to the preferred size */ }
-        try {
-            const [, natural] = actor.get_preferred_height(-1);
-            if (natural > 1)
-                return natural;
-        }
-        catch (e) { /* no usable measurement */ }
+        catch { }
         return 0;
+    }
+    _firstHeight(actors, measure) {
+        for (const actor of actors) {
+            const height = measure(actor);
+            if (height > 0)
+                return height;
+        }
+        return 0;
+    }
+    _settleHeight(menu, done) {
+        const actor = menu?.actor;
+        if (!actor || !isActorValid(actor)) {
+            done(0);
+            return;
+        }
+        let framesLeft = MENU_MEASURE_FRAMES;
+        let tallest = 0;
+        let repeats = 0;
+        const tick = () => {
+            this._measureLaterId = 0;
+            let height = 0;
+            try {
+                height = this._firstHeight([actor, menu.box], a => this._allocatedHeightOf(a));
+            }
+            catch { }
+            repeats = height > 0 && height === tallest ? repeats + 1 : 0;
+            if (height > tallest)
+                tallest = height;
+            if (repeats < MENU_MEASURE_STABLE_FRAMES && --framesLeft > 0 && !this._torndown) {
+                this._measureLaterId = this._addMeasureLater(tick);
+                return GLib.SOURCE_REMOVE;
+            }
+            done(tallest);
+            return GLib.SOURCE_REMOVE;
+        };
+        this._measureLaterId = this._addMeasureLater(tick);
+    }
+    _addMeasureLater(callback) {
+        return global.compositor?.get_laters?.().add(Meta.LaterType.BEFORE_REDRAW, callback) ?? 0;
+    }
+    _cancelHeightMeasurement() {
+        if (this._measureLaterId !== 0) {
+            if (global.compositor?.get_laters)
+                global.compositor.get_laters().remove(this._measureLaterId);
+            this._measureLaterId = 0;
+        }
+        const restore = this._restoreQuickSettings;
+        this._restoreQuickSettings = null;
+        if (restore)
+            restore();
+    }
+    _withQuickSettingsHeight(done) {
+        if (_quickSettingsHeight > 0) {
+            done(_quickSettingsHeight);
+            return;
+        }
+        if (_quickSettingsWaiting) {
+            _quickSettingsWaiting.push(done);
+            return;
+        }
+        const menu = Main.panel.statusArea.quickSettings?.menu;
+        const actor = menu?.actor;
+        if (!menu || !actor || !isActorValid(actor)) {
+            done(0);
+            return;
+        }
+        _quickSettingsWaiting = [done];
+        const settle = (height) => {
+            _quickSettingsHeight = height;
+            const waiting = _quickSettingsWaiting ?? [];
+            _quickSettingsWaiting = null;
+            for (const callback of waiting)
+                callback(height);
+        };
+        if (menu.isOpen) {
+            this._settleHeight(menu, settle);
+            return;
+        }
+        const opacity = actor.opacity;
+        let restored = false;
+        const restore = () => {
+            if (restored)
+                return;
+            restored = true;
+            try {
+                menu.close(0);
+            }
+            catch { }
+            try {
+                actor.opacity = opacity;
+            }
+            catch { }
+        };
+        try {
+            menu.open(0);
+            actor.opacity = 0;
+        }
+        catch {
+            restore();
+            settle(0);
+            return;
+        }
+        this._restoreQuickSettings = restore;
+        this._settleHeight(menu, height => {
+            this._restoreQuickSettings = null;
+            restore();
+            settle(height);
+        });
+    }
+    _measureHeightScale() {
+        if (this._torndown || !this.menu)
+            return;
+        _quickSettingsHeight = 0;
+        this._ownOpenHeight = 0;
+        this._withQuickSettingsHeight(() => this._rememberRatioWhenBothKnown());
+    }
+    _noteOwnOpenedHeight() {
+        if (this._torndown || !this._matchQuickSettingsHeight)
+            return;
+        if (this._measuringHeights || _quickSettingsHeight <= 0)
+            return;
+        this._measuringHeights = true;
+        this._settleHeight(this.menu, height => {
+            this._measuringHeights = false;
+            if (height > 0) {
+                this._ownOpenHeight = height;
+                this._rememberRatioWhenBothKnown();
+            }
+        });
+    }
+    _rememberRatioWhenBothKnown() {
+        if (_quickSettingsHeight <= 0 || this._ownOpenHeight <= 0)
+            return;
+        const ratio = _quickSettingsHeight / this._ownOpenHeight;
+        if (!Number.isFinite(ratio) || ratio <= 0 || ratio >= 1)
+            return;
+        this._rememberHeightScale(ratio);
+        this._applyMenuScale();
     }
     _quickSettingsHeightScale() {
         const quickSettings = Main.panel.statusArea.quickSettings?.menu;
         if (!quickSettings)
-            return null;
-        const targetHeight = this._naturalHeightOf(quickSettings.actor) || this._naturalHeightOf(quickSettings.box);
-        const ownHeight = this._naturalHeightOf(this.targetActor) || this._naturalHeightOf(this.animActor);
+            return this._settledHeightScale;
+        const targetHeight = this._firstHeight([quickSettings.actor, quickSettings.box], actor => this._allocatedHeightOf(actor));
+        const ownHeight = this._firstHeight([this.targetActor, this.animActor], actor => this._allocatedHeightOf(actor));
         if (targetHeight <= 0 || ownHeight <= 0)
-            return null;
+            return this._settledHeightScale;
         const ratio = targetHeight / ownHeight;
-        return Number.isFinite(ratio) && ratio > 0 ? ratio : null;
+        if (!Number.isFinite(ratio) || ratio <= 0)
+            return this._settledHeightScale;
+        this._rememberHeightScale(ratio);
+        return ratio;
+    }
+    _rememberHeightScale(ratio) {
+        if (this._settledHeightScale !== null && Math.abs(this._settledHeightScale - ratio) < 0.005)
+            return;
+        this._settledHeightScale = ratio;
+        if (!this._ownsSettingsNamespace)
+            return;
+        try {
+            this._settings.set_double(this._key('settled-height-scale'), ratio);
+        }
+        catch { }
     }
     _applyMenuScale() {
         if (!this.targetActor || !isActorValid(this.targetActor))
@@ -412,6 +616,8 @@ export class UIManager {
         connectSetting(this._key('match-quick-settings-height'), () => {
             this._matchQuickSettingsHeight = this._settings.get_boolean(this._key('match-quick-settings-height'));
             this._applyMenuScale();
+            if (this._matchQuickSettingsHeight)
+                this._measureHeightScale();
         });
         connectSetting(this._key('y-offset'), () => {
             if (this.animActor) {
@@ -520,100 +726,50 @@ export class UIManager {
         this.effect.setBlurRadius(blurRadius);
         this.liquidBox.add_effect(this.effect);
         this.bgActor.hide();
-        // Helper functions to hook into GNOME's render pipeline
-        const laterAdd = (laterType, callback) => {
-            return global.compositor?.get_laters?.().add(laterType, callback);
-        };
-        const laterRemove = (id) => {
-            if (!id)
-                return;
-            if (global.compositor?.get_laters)
-                global.compositor.get_laters().remove(id);
-        };
-        const frameLaterType = Meta.LaterType.BEFORE_REDRAW;
-        // Rebuild clones (called on menu open): delegate entirely to WindowCloneManager + UILayerSampler
-        let buildClones = () => {
-            if (!this.bgActor)
-                return;
-            // _uiSampler が存在する場合のみ除外リストへの追加処理を行う
-            if (this._uiSampler) {
-                for (let child of Main.layoutManager.uiGroup.get_children()) {
-                    if (child === this.bgActor)
-                        continue;
-                    // 名前が 'liquid-glass-bg-actor' のもの、または 'liquid-box' を子に持つものを
-                    // 他のLiquid Glassエフェクトの背景アクターと判定する
-                    let isLiquidBg = child.name === 'liquid-glass-bg-actor' ||
-                        (typeof child.get_children === 'function' &&
-                            child.get_children().some(c => c.name === 'liquid-box'));
-                    if (isLiquidBg) {
-                        this._uiSampler.addExclusion(child);
-                    }
-                }
-            }
-            // Before the clones, so this frame's capture already sees the final order.
-            this._restackGlass();
-            this._windowCloneManager?.rebuildClones();
-            this._uiSampler?.rebindSelf();
-            this._uiSampler?.refresh();
-        };
-        // Render loop: called every frame while the menu is visible.
-        // The reschedule must survive a throw out of _syncGeometry() — see the
-        // comment on DockManager's frameTick: skipping it freezes this glass
-        // instance's clones until the menu is closed and reopened.
-        let frameTick = () => {
-            this._frameSyncId = 0;
-            // [FIX] Hard stop after teardown. Every one of these ticks ends by
-            // re-adding itself as a BEFORE_REDRAW later, so a cleanup() that does
-            // not reach its laterRemove() — because an earlier step threw — leaves
-            // a self-rescheduling chain running forever against destroyed actors,
-            // holding this whole manager (and its settings and logger) alive. The
-            // next enable() then builds a second set on top of a live first set,
-            // which is the "the extension can no longer be enabled" symptom.
-            // Removing the later is still done in cleanup(); this is the backstop
-            // that does not depend on cleanup() getting that far.
-            if (this._torndown)
-                return GLib.SOURCE_REMOVE;
-            if (!this.bgActor || !this.targetActor.mapped)
-                return GLib.SOURCE_REMOVE;
-            // [DIAG] See setFrameSyncFrozen() in utils.ts. Reschedules but does
-            // nothing, so the cost of this poll can be measured directly.
-            if (isFrameSyncFrozen()) {
-                this._frameSyncId = laterAdd(frameLaterType, frameTick);
-                return GLib.SOURCE_REMOVE;
-            }
-            // Repair the subtree if Clutter has stopped allocating it. Sampled
-            // here, at the top of the tick, because the previous frame's relayout
-            // has settled by now and this frame's sync has not dirtied anything
-            // yet. See ensureGlassAllocated().
-            ensureGlassAllocated(this.bgActor);
-            try {
-                this._syncGeometry();
-            }
-            catch (e) {
-                reportFrameLoopError('UIManager', e);
-            }
-            this._frameSyncId = laterAdd(frameLaterType, frameTick);
-            return GLib.SOURCE_REMOVE;
-        };
         // Starts the render loop and builds fresh clones when the menu is opened
-        let startFrameSync = () => {
-            if (this._frameSyncId === 0) {
-                buildClones();
-                this._frameSyncId = laterAdd(frameLaterType, frameTick);
-            }
+        const startFrameSync = () => {
+            if (this._frameSyncId !== 0)
+                return;
+            this._buildClones();
+            // Render loop: called every frame while the menu is visible.
+            // startLaterLoop() re-arms before running the step and catches what it
+            // throws — see the comment on DockManager's frameTick: a throw that
+            // skipped the reschedule used to freeze this glass instance's clones
+            // until the menu was closed and reopened.
+            startLaterLoop(this._frameSlot, {
+                // [FIX] Hard stop after teardown. A cleanup() that does not reach
+                // stopLaterLoop() — because an earlier step threw — would otherwise
+                // leave a self-rescheduling chain running forever against destroyed
+                // actors, holding this whole manager (and its settings and logger)
+                // alive. The next enable() then builds a second set on top of a live
+                // first set, which is the "the extension can no longer be enabled"
+                // symptom. Stopping the loop is still done in cleanup(); this is the
+                // backstop that does not depend on cleanup() getting that far.
+                alive: () => !this._torndown && !!this.bgActor && this.targetActor.mapped,
+                // [DIAG] See setFrameSyncFrozen() in animation/frameSync.ts. The loop
+                // keeps running but does nothing, so the cost of this poll can be
+                // measured directly.
+                honourFreeze: true,
+                errorTag: 'UIManager',
+                step: () => {
+                    // Repair the subtree if Clutter has stopped allocating it. Sampled
+                    // here, at the top of the tick, because the previous frame's relayout
+                    // has settled by now and this frame's sync has not dirtied anything
+                    // yet. See ensureGlassAllocated().
+                    ensureGlassAllocated(this.bgActor);
+                    this._syncGeometry();
+                },
+            });
         };
-        let stopFrameSync = () => {
-            if (this._frameSyncId !== 0) {
-                laterRemove(this._frameSyncId);
-                this._frameSyncId = 0;
-            }
-        };
+        const stopFrameSync = () => stopLaterLoop(this._frameSlot);
         // Clear the cached size whenever the menu opens so it can recalculate
         // based on any new notifications or calendar events
         this._signals.push({
             target: this.menu,
             id: this.menu.connect('open-state-changed', (menu, isOpen) => {
                 if (isOpen) {
+                    this._queueBackdropRefresh(this.menu?.actor);
+                    this._noteOwnOpenedHeight();
                     this._stableBaseW = undefined;
                     this._stableBaseH = undefined;
                     startFrameSync();
@@ -645,72 +801,23 @@ export class UIManager {
             startFrameSync();
         }
     }
+    // Rebuild clones (called on menu open): delegate entirely to WindowCloneManager + UILayerSampler
+    _buildClones() {
+        if (!this.bgActor)
+            return;
+        excludeOtherGlass(this._uiSampler, this.bgActor);
+        // Before the clones, so this frame's capture already sees the final order.
+        this._restackGlass();
+        this._windowCloneManager?.rebuildClones();
+        this._uiSampler?.rebindSelf();
+        this._uiSampler?.refresh();
+    }
     // Calculates and synchronizes the position/size of the glass background every frame
     _syncGeometry() {
-        if (!this.bgActor || !this.targetActor || !this.targetActor.mapped) {
-            if (this.bgActor && this.bgActor.visible) {
-                this.bgActor.hide();
-            }
+        if (!this._syncBgVisibility())
             return;
-        }
-        if (!this.bgActor.visible) {
-            this.bgActor.show();
-        }
-        if (!this._enableAnimation) {
-            this.bgActor.opacity = this.targetActor.opacity;
-        }
-        let [inW, inH] = this.animActor.get_size();
-        let [outW, outH] = this.targetActor.get_size();
-        let [scaleX, scaleY] = this.animActor.get_scale();
-        inW = Number.isNaN(inW) || inW <= 0 ? (this._stableBaseW || 1) : inW;
-        inH = Number.isNaN(inH) || inH <= 0 ? (this._stableBaseH || 1) : inH;
-        scaleX = Number.isNaN(scaleX) ? 1.0 : scaleX;
-        scaleY = Number.isNaN(scaleY) ? 1.0 : scaleY;
-        scaleX *= this.targetActor.get_scale()[0];
-        scaleY *= this.targetActor.get_scale()[1];
-        let themeNode = this.animActor.get_theme_node();
-        let mL = themeNode ? themeNode.get_margin(St.Side.LEFT) : 0;
-        let mR = themeNode ? themeNode.get_margin(St.Side.RIGHT) : 0;
-        let mT = themeNode ? themeNode.get_margin(St.Side.TOP) : 0;
-        let mB = themeNode ? themeNode.get_margin(St.Side.BOTTOM) : 0;
-        let marginW = mL + mR;
-        let marginH = mT + mB;
-        let targetW = Math.round(inW);
-        let targetH = Math.round(inH);
-        // GNOME Shell Hover Bug Compensation:
-        if (Math.abs(inW - outW) <= 2 && marginW > 0) {
-            targetW = Math.round(inW - marginW);
-            targetH = Math.round(inH - marginH);
-        }
-        this._stableBaseW = targetW;
-        this._stableBaseH = targetH;
-        // Multiply by the current animation scale.
-        let w = Math.max(1, this._stableBaseW * scaleX);
-        let h = Math.max(1, this._stableBaseH * scaleY);
-        // Get the absolute position of the inner content actor
-        let [animAbsX, animAbsY] = this.animActor.get_transformed_position();
-        // Advanced Fallback Logic for NaN Coordinates
-        if (Number.isNaN(animAbsX) || Number.isNaN(animAbsY)) {
-            if (this._lastValidAnimAbsX !== undefined && this._lastValidAnimAbsY !== undefined) {
-                animAbsX = this._lastValidAnimAbsX;
-                animAbsY = this._lastValidAnimAbsY;
-            }
-            else {
-                let monitor = Main.layoutManager.primaryMonitor;
-                if (monitor) {
-                    animAbsX = (monitor.width / 2) - (w / 2) + this._menuXoffset;
-                    animAbsY = (Main.panel.height || 27) + this._menuYoffset;
-                }
-                else {
-                    animAbsX = 0;
-                    animAbsY = 0;
-                }
-            }
-        }
-        else {
-            this._lastValidAnimAbsX = animAbsX;
-            this._lastValidAnimAbsY = animAbsY;
-        }
+        const { w, h, scaleX, scaleY } = this._measureMenu();
+        const [animAbsX, animAbsY] = this._resolveMenuOrigin(w);
         // The background needs to be larger than the UI to account for the glass expansion
         // and the extra padding required by the shader for edge refraction.
         let bgW = w + (this._glassExpand * 2) + (SHADER_PADDING * 2);
@@ -723,52 +830,86 @@ export class UIManager {
         let monitorY = monitor?.y ?? 0;
         let screenW = Math.max(1, monitor?.width ?? 1);
         let screenH = Math.max(1, monitor?.height ?? 1);
-        if (!Number.isNaN(bgX) && !Number.isNaN(bgY) && w >= 1.0 && h >= 1.0) {
-            // Menu position in monitor-local coordinates (shader uses these)
-            let localBgX = bgX - monitorX;
-            let localBgY = bgY - monitorY;
-            // Only update positions/sizes if they actually changed to save CPU cycles
-            if (this._lastBgW !== bgW || this._lastBgH !== bgH ||
-                this._lastBgX !== bgX || this._lastBgY !== bgY ||
-                this._lastScreenW !== screenW || this._lastScreenH !== screenH) {
-                // 1. bgActor: full monitor size, positioned at monitor origin
-                this.bgActor.remove_transition('size');
-                this.bgActor.remove_transition('position');
-                this.bgActor.set_position(monitorX, monitorY);
-                this.bgActor.set_size(screenW, screenH);
-                this.bgActor.remove_transition('size');
-                this.bgActor.remove_transition('position');
-                // 2. liquidBox: full monitor size (relative to bgActor = 0,0)
-                this.liquidBox?.set_position(0, 0);
-                this.liquidBox?.set_size(screenW, screenH);
-                // 3. GPU-efficient soft clip — limits rendering to the menu region +
-                //    generous margin for drop-shadow decay without hard-clipping children.
-                const CLIP_PADDING = 200;
-                // this.liquidBox?.remove_clip();
-                // [PERF] set_clip() queues a redraw unconditionally — see setClipIfChanged().
-                setClipIfChanged(this.bgActor, localBgX - CLIP_PADDING, localBgY - CLIP_PADDING, bgW + CLIP_PADDING * 2, bgH + CLIP_PADDING * 2);
-                const SHADOW_MAX_RADIUS = CLIP_PADDING - 20;
-                this.effect?.setShadowMaxRadius(SHADOW_MAX_RADIUS);
-                // 4. Update shader with full-screen resolution
-                this.effect?.setResolution(screenW, screenH);
-                // 5. Tell the shader where the menu lives within the full-screen FBO
-                //    (matches the dockManager setGlassGeometry pattern)
-                this.effect?.setGlassGeometry(localBgX, localBgY, bgW, bgH);
-                this._lastBgW = bgW;
-                this._lastBgH = bgH;
-                this._lastBgX = bgX;
-                this._lastBgY = bgY;
-                this._lastScreenW = screenW;
-                this._lastScreenH = screenH;
+        if (!Number.isNaN(bgX) && !Number.isNaN(bgY) && w >= 1.0 && h >= 1.0)
+            this._applyGlassBounds(this.bgActor, bgX, bgY, bgW, bgH, monitorX, monitorY, screenW, screenH);
+        this._applyGlassScale(scaleX, scaleY);
+        this._syncCaptureLayers(monitorX, monitorY, screenW, screenH);
+    }
+    _syncBgVisibility() {
+        if (!this.bgActor || !this.targetActor || !this.targetActor.mapped) {
+            if (this.bgActor && this.bgActor.visible) {
+                this.bgActor.hide();
             }
+            return false;
         }
-        if (this.effect) {
-            let currentScale = Math.min(scaleX, scaleY);
-            this.effect.setCornerRadius(this._cornerRadius * currentScale);
-            if (typeof this.effect.setAnimationScale === 'function') {
-                this.effect.setAnimationScale(currentScale);
-            }
+        if (!this.bgActor.visible) {
+            this.bgActor.show();
         }
+        if (!this._enableAnimation) {
+            this.bgActor.opacity = this.targetActor.opacity;
+        }
+        return true;
+    }
+    _measureMenu() {
+        // The ALLOCATION, not get_size(). A hover restyle invalidates the layout,
+        // and while a relayout is pending get_size() answers with the preferred
+        // size, CSS margins included, although nothing on screen has moved. The
+        // old "GNOME Shell Hover Bug Compensation" subtracted those margins by hand
+        // whenever the inner and outer sizes agreed; reading the allocation makes
+        // the glass immune to it instead (see menu-geometry.test.cjs).
+        let [inW, inH] = getAllocatedSize(this.animActor);
+        let [scaleX, scaleY] = this.animActor.get_scale();
+        inW = Number.isNaN(inW) || inW <= 0 ? (this._stableBaseW || 1) : inW;
+        inH = Number.isNaN(inH) || inH <= 0 ? (this._stableBaseH || 1) : inH;
+        scaleX = Number.isNaN(scaleX) ? 1.0 : scaleX;
+        scaleY = Number.isNaN(scaleY) ? 1.0 : scaleY;
+        scaleX *= this.targetActor.get_scale()[0];
+        scaleY *= this.targetActor.get_scale()[1];
+        this._stableBaseW = Math.round(inW);
+        this._stableBaseH = Math.round(inH);
+        // Multiply by the current animation scale.
+        return {
+            w: Math.max(1, this._stableBaseW * scaleX),
+            h: Math.max(1, this._stableBaseH * scaleY),
+            scaleX,
+            scaleY,
+        };
+    }
+    _resolveMenuOrigin(w) {
+        return resolveGlassOrigin(this.animActor, this, () => {
+            const monitor = Main.layoutManager.primaryMonitor;
+            if (!monitor)
+                return [0, 0];
+            return [(monitor.width / 2) - (w / 2) + this._menuXoffset, (Main.panel.height || 27) + this._menuYoffset];
+        });
+    }
+    _applyGlassBounds(bgActor, bgX, bgY, bgW, bgH, monitorX, monitorY, screenW, screenH) {
+        // Only update positions/sizes if they actually changed to save CPU cycles
+        if (this._lastBgW === bgW && this._lastBgH === bgH &&
+            this._lastBgX === bgX && this._lastBgY === bgY &&
+            this._lastScreenW === screenW && this._lastScreenH === screenH)
+            return;
+        // Menu position in monitor-local coordinates (shader uses these)
+        let localBgX = bgX - monitorX;
+        let localBgY = bgY - monitorY;
+        placeScreenGlass(bgActor, this.liquidBox, monitorX, monitorY, screenW, screenH, { x: localBgX, y: localBgY, w: bgW, h: bgH }, false);
+        this.effect?.setShadowMaxRadius(GLASS_SHADOW_MAX_RADIUS);
+        // 4. Update shader with full-screen resolution
+        this.effect?.setResolution(screenW, screenH);
+        // 5. Tell the shader where the menu lives within the full-screen FBO
+        //    (matches the dockManager setGlassGeometry pattern)
+        this.effect?.setGlassGeometry(localBgX, localBgY, bgW, bgH);
+        this._lastBgW = bgW;
+        this._lastBgH = bgH;
+        this._lastBgX = bgX;
+        this._lastBgY = bgY;
+        this._lastScreenW = screenW;
+        this._lastScreenH = screenH;
+    }
+    _applyGlassScale(scaleX, scaleY) {
+        applyGlassScale(this.effect, this._cornerRadius, scaleX, scaleY);
+    }
+    _syncCaptureLayers(monitorX, monitorY, screenW, screenH) {
         // Clone sync every frame (dockManager pattern).
         // WindowCloneManager handles background + window actor clones.
         // UILayerSampler handles all uiGroup children — including the overview actors
@@ -779,7 +920,7 @@ export class UIManager {
         // actually show, and hide the clones that fall outside it. Must sit
         // between setGlassGeometry() (which makes the effect's uniforms describe
         // this frame) and the two sync() calls below (which consume the cull
-        // rect this sets). See syncGlassCaptureClip() in utils.ts.
+        // rect this sets). See syncGlassCaptureClip() in capture/clip.ts.
         syncGlassCaptureClip({
             cloneContainer: this._cloneContainer,
             effect: this.effect,
@@ -845,7 +986,7 @@ export class UIManager {
         // A light<->dark flip used to be snapped here, because interpolating the
         // two in RGB passes through the background's own grey and the label
         // disappears mid-tween. _animateActorColor() now cross-dissolves that case
-        // instead (see crossFadeColorAt() in utils.ts), so it is animated like any
+        // instead (see crossFadeColorAt() in animation/colors.ts), so it is animated like any
         // other change.
         actor._currentTargetColor = color;
         actor._currentInsensitiveState = isInsensitive;
@@ -864,10 +1005,96 @@ export class UIManager {
                     actor.remove_style_class_name('adaptive-color-dark');
                     actor.set_style(originalStyle || null);
                 }
-                catch (e) { }
+                catch { }
             }
         }
         this._styledActors.clear();
+        this._backdropColored.clear();
+        this._disconnectHoverWatchers();
+    }
+    _disconnectHoverWatchers() {
+        this._pendingBackdropRoots.clear();
+        if (this._backdropRefreshId !== 0) {
+            if (global.compositor?.get_laters)
+                global.compositor.get_laters().remove(this._backdropRefreshId);
+            this._backdropRefreshId = 0;
+        }
+        for (const [actor, id] of this._hoverSignals.entries()) {
+            try {
+                if (isActorValid(actor))
+                    actor.disconnect(id);
+            }
+            catch { }
+        }
+        this._hoverSignals.clear();
+    }
+    _watchHoverFor(targets) {
+        const restyled = new Set(targets);
+        for (const target of targets) {
+            const holder = target.get_parent?.();
+            if (!holder || restyled.has(holder))
+                continue;
+            if (this._hoverSignals.has(holder) || typeof holder.connect !== 'function')
+                continue;
+            try {
+                this._hoverSignals.set(holder, holder.connect('style-changed', () => {
+                    if (this._applyingColors)
+                        return;
+                    this._queueBackdropRefresh(holder);
+                }));
+            }
+            catch { }
+        }
+        for (const [actor, id] of [...this._hoverSignals.entries()]) {
+            if (isActorValid(actor))
+                continue;
+            this._hoverSignals.delete(actor);
+            try {
+                actor.disconnect(id);
+            }
+            catch { }
+        }
+    }
+    _queueBackdropRefresh(root) {
+        if (!this._adaptiveConfig.enabled || !this._isEffectActive || this._actorDestroyed)
+            return;
+        this._pendingBackdropRoots.add(root);
+        if (this._backdropRefreshId !== 0)
+            return;
+        this._backdropRefreshId = global.compositor.get_laters().add(Meta.LaterType.BEFORE_REDRAW, () => {
+            this._backdropRefreshId = 0;
+            const roots = [...this._pendingBackdropRoots];
+            this._pendingBackdropRoots.clear();
+            const targets = [];
+            for (const actor of roots) {
+                if (isActorValid(actor))
+                    this._findAllTextActors(actor, targets);
+            }
+            this._applyBackdropColorsTo(targets);
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+    _applyBackdropColorsTo(targets) {
+        if (!targets || targets.length === 0)
+            return;
+        const root = this.menu?.actor ?? null;
+        const batchStart = GLib.get_monotonic_time();
+        this._applyingColors = true;
+        try {
+            for (const actor of new Set(targets)) {
+                const color = this._contrastSampler._backdropColorFor(actor, this._adaptiveConfig, root);
+                if (color) {
+                    this._backdropColored.add(actor);
+                    this._setActorColor(actor, color, true, batchStart);
+                }
+                else {
+                    this._backdropColored.delete(actor);
+                }
+            }
+        }
+        finally {
+            this._applyingColors = false;
+        }
     }
     // Iterates through the color map and applies the new target colors to the respective actors
     _applyAdaptiveColorMap(colorMap, skipAnimations = false) {
@@ -877,14 +1104,24 @@ export class UIManager {
         // then runs off the same clock, so a row of labels moves as one instead of
         // each starting whenever its own source first fired.
         const batchStart = GLib.get_monotonic_time();
-        for (const [actor, color] of colorMap.entries()) {
-            this._setActorColor(actor, color, skipAnimations, batchStart);
+        this._applyingColors = true;
+        try {
+            for (const [actor, color] of colorMap.entries()) {
+                if (this._backdropColored.has(actor))
+                    continue;
+                this._setActorColor(actor, color, skipAnimations, batchStart);
+            }
+        }
+        finally {
+            this._applyingColors = false;
         }
     }
     // Starts the timer for periodically sampling contrast and updating adaptive text colors
     _startAdaptiveColorSampling(skipAnimations = false) {
         if (!this._adaptiveConfig.enabled)
             return;
+        if (skipAnimations)
+            this._contrastSampler.invalidate();
         this._updateAdaptiveTextColors(skipAnimations);
         if (this._adaptiveTimerId !== 0)
             return;
@@ -911,12 +1148,13 @@ export class UIManager {
         const targets = this._collectAdaptiveTextTargets();
         if (targets.length === 0)
             return;
+        this._watchHoverFor(targets);
         this._adaptiveInFlight = true;
         this._contrastSampler
-            .chooseColorsForActors(targets, this._adaptiveConfig, 
+            .chooseColorsForActors(targets, this._adaptiveConfig, this.menu?.actor, 
         // [PERF B4] Skip the capture while the glass under the text has not
         // been repainted since the last one. See chooseColorsForActors().
-        () => this.effect?._diagPaintCount ?? NaN)
+        () => this.effect?.paintCount ?? NaN)
             .then(colorMap => {
             if (!this._isEffectActive || this._actorDestroyed)
                 return;
@@ -961,7 +1199,7 @@ export class UIManager {
             try {
                 actor.set_style(`${stylePrefix}color: ${rgba}; -st-icon-foreground-color: ${rgba};`);
             }
-            catch (e) { }
+            catch { }
         };
         if (skipAnimations) {
             adaptiveColorTweener.cancel(actor);
@@ -970,7 +1208,7 @@ export class UIManager {
         }
         const startRgb = { r: startColor.red, g: startColor.green, b: startColor.blue };
         // One shared frame-clock driver, one shared start time per batch — see
-        // AdaptiveColorTweener in utils.ts for why this is not a per-actor timer.
+        // AdaptiveColorTweener in animation/colors.ts for why this is not a per-actor timer.
         adaptiveColorTweener.add(actor, {
             startRgb, startAlpha,
             targetRgb, targetAlpha,
@@ -981,22 +1219,13 @@ export class UIManager {
     }
     // Handles the custom bounce/spring physics when the menu opens or closes
     _startAnimation(targetValue) {
-        let isClosing = (targetValue === 0);
         if (this._tickId !== 0) {
             removeFrameTicker(this._tickId);
             this._tickId = 0;
         }
         // If animation is disabled, just reset to default state
         if (!this._enableAnimation) {
-            if (this.bgActor) {
-                this.bgActor.remove_all_transitions();
-                this.bgActor.opacity = 255;
-                this.bgActor.set_scale(1.0, 1.0);
-                if (this.animActor) {
-                    this.animActor.set_scale(1.0, 1.0);
-                    this.animActor.opacity = 255;
-                }
-            }
+            showMenuAtRest(this.bgActor, this.animActor);
             return;
         }
         if (this.animActor)
@@ -1005,17 +1234,12 @@ export class UIManager {
             this.bgActor.remove_all_transitions();
         if (this._swiftAnimation) {
             this._swiftSpringScale.updateParams(this._swiftResponse, this._swiftDampingFraction);
-            this._swiftSpringPos.updateParams(this._swiftResponse, this._swiftDampingFraction);
             this._swiftSpringScale.target = targetValue;
-            this._swiftSpringPos.target = targetValue;
             if (Number.isNaN(this._swiftSpringScale.value))
                 this._swiftSpringScale.value = 0;
-            if (Number.isNaN(this._swiftSpringPos.value))
-                this._swiftSpringPos.value = 0;
         }
         else {
             this._springScale.target = targetValue;
-            this._springPos.target = targetValue;
         }
         if (this._tickId === 0) {
             let lastTime = GLib.get_monotonic_time();
@@ -1030,79 +1254,11 @@ export class UIManager {
                 let currentTime = GLib.get_monotonic_time();
                 let elapsedMs = (currentTime - lastTime) / 1000;
                 lastTime = currentTime;
-                let isClosing = this._swiftAnimation ? (this._swiftSpringScale.target === 0) : (this._springScale.target === 0);
-                let dt = elapsedMs / 1000;
-                if (dt > 0.066)
-                    dt = 0.066; // [PERF C1] covers a 20fps cap; the physics sub-steps, so no blow-up
-                let stopped = false;
-                let s, p;
-                if (isClosing) {
-                    let speed = 15.0;
-                    if (this._swiftAnimation) {
-                        this._swiftSpringScale.value += (0 - this._swiftSpringScale.value) * (1.0 - Math.exp(-speed * dt));
-                        this._swiftSpringPos.value += (0 - this._swiftSpringPos.value) * (1.0 - Math.exp(-speed * dt));
-                        s = this._swiftSpringScale.value;
-                        p = this._swiftSpringPos.value;
-                    }
-                    else {
-                        this._springScale.value += (0 - this._springScale.value) * (1.0 - Math.exp(-speed * dt));
-                        this._springPos.value += (0 - this._springPos.value) * (1.0 - Math.exp(-speed * dt));
-                        s = this._springScale.value;
-                        p = this._springPos.value;
-                    }
-                    if (s < 0.005) {
-                        s = 0;
-                        p = 0;
-                        stopped = true;
-                    }
-                }
-                else {
-                    if (this._swiftAnimation) {
-                        stopped = this._swiftSpringScale.update(elapsedMs) && this._swiftSpringPos.update(elapsedMs);
-                        s = this._swiftSpringScale.value;
-                        p = this._swiftSpringPos.value;
-                    }
-                    else {
-                        stopped = this._springScale.update(elapsedMs) && this._springPos.update(elapsedMs);
-                        s = this._springScale.value;
-                        p = this._springPos.value;
-                    }
-                    if (Math.abs(1.0 - s) < 0.002 && Math.abs(this._swiftAnimation ? this._swiftSpringScale.velocity : this._springScale.velocity) < 0.03) {
-                        s = 1.0;
-                        p = 1.0;
-                        stopped = true;
-                    }
-                }
-                let currentScale;
-                let opacity;
-                if (isClosing) {
-                    currentScale = Math.max(0.001, s);
-                    opacity = Math.min(255, Math.max(0, (s - 0.3) / 0.7 * 255));
-                }
-                else {
-                    currentScale = 0.2 + (s * 0.8);
-                    opacity = Math.min(255, Math.max(0, (s / 0.3) * 255));
-                }
-                this.animActor.set_scale(currentScale, currentScale);
-                this.bgActor.opacity = opacity;
-                this.animActor.opacity = opacity;
-                this._syncGeometry();
-                if (stopped) {
+                const frame = stepMenuSpring(this._swiftAnimation ? this._swiftSpringScale : this._springScale, elapsedMs);
+                if (frame.stopped)
                     this._tickId = 0;
-                    if (isClosing && this.menu.actor) {
-                        this.menu.actor.hide();
-                        this.bgActor.opacity = 0;
-                        this.animActor.opacity = 0;
-                    }
-                    if (!isClosing) {
-                        this.animActor.set_scale(1.0, 1.0);
-                        this.animActor.opacity = 255;
-                        this.bgActor.opacity = 255;
-                        this._syncGeometry();
-                    }
-                    return GLib.SOURCE_REMOVE;
-                }
-                return GLib.SOURCE_CONTINUE;
+                applyMenuFrame(frame, this.animActor, this.bgActor, this.menu.actor, () => this._syncGeometry());
+                return frame.stopped ? GLib.SOURCE_REMOVE : GLib.SOURCE_CONTINUE;
             }, normalizeAnimationIntervalMs(this._animationInterval));
         }
     }
@@ -1112,13 +1268,18 @@ export class UIManager {
         this._isEffectActive = false;
         this._stopAdaptiveColorSampling();
         this._clearAdaptiveStyles();
+        this._teardownStep('disconnectEffectSources', () => this._disconnectEffectSources());
+        this._teardownStep('restoreMenuActors', () => this._restoreMenuActors());
+        this._teardownStep('releaseGlass', () => this._releaseGlass());
+    }
+    _disconnectEffectSources() {
         // Disconnect all event listeners
         for (let sig of this._signals) {
             try {
                 if (sig && sig.id)
                     sig.target.disconnect(sig.id);
             }
-            catch (e) { }
+            catch { }
         }
         this._signals = [];
         if (this._tickId && this._tickId !== 0) {
@@ -1126,16 +1287,14 @@ export class UIManager {
             this._tickId = 0;
         }
         // Stop the render frame loop
-        if (this._frameSyncId !== 0) {
-            if (global.compositor?.get_laters)
-                global.compositor.get_laters().remove(this._frameSyncId);
-            this._frameSyncId = 0;
-        }
+        stopLaterLoop(this._frameSlot);
         if (this._interfaceSettings && this._accentColorSignalId) {
             this._interfaceSettings.disconnect(this._accentColorSignalId);
             this._accentColorSignalId = 0;
             this._interfaceSettings = null;
         }
+    }
+    _restoreMenuActors() {
         // Remove transparent CSS overrides
         if (!this._actorDestroyed)
             this.targetActor.remove_style_class_name('liquid-glass-transparent');
@@ -1164,6 +1323,8 @@ export class UIManager {
                 this.menu.close(false);
             }
         }
+    }
+    _releaseGlass() {
         // DESTROY EFFECT FIRST
         if (this.effect) {
             this.effect.cleanup();
@@ -1202,27 +1363,22 @@ export class UIManager {
             try {
                 this._logger?.error(`[Liquid Glass] ${this.constructor.name}.${name} failed during cleanup: ${e}`);
             }
-            catch (_) {
+            catch {
                 console.error(`[Liquid Glass] ${name} failed during cleanup: ${e}`);
             }
         }
     }
     cleanup() {
         this._torndown = true;
+        this._teardownStep('heightMeasurement', () => this._cancelHeightMeasurement());
         // The later chain goes first and unconditionally — see _teardownStep().
-        this._teardownStep('frameSync', () => {
-            if (this._frameSyncId !== 0) {
-                if (global.compositor?.get_laters)
-                    global.compositor.get_laters().remove(this._frameSyncId);
-                this._frameSyncId = 0;
-            }
-        });
+        this._teardownStep('frameSync', () => stopLaterLoop(this._frameSlot));
         this._teardownStep('settingsSignals', () => {
             for (let sigId of this._settingsSignals) {
                 try {
                     this._settings.disconnect(sigId);
                 }
-                catch (e) { }
+                catch { }
             }
             this._settingsSignals = [];
         });
@@ -1248,139 +1404,5 @@ export class UIManager {
         // leaving the signal handlers, the glass actors and the per-frame later
         // chain in place across disable().
         this._teardownStep('removeEffect', () => this._removeEffect());
-    }
-}
-// A straightforward mathematical implementation of Hooke's Law for spring physics
-class Spring {
-    stiffness;
-    damping;
-    mass;
-    value;
-    velocity;
-    target;
-    constructor(stiffness, damping, mass) {
-        this.stiffness = stiffness;
-        this.damping = damping;
-        this.mass = mass;
-        this.value = 0;
-        this.velocity = 0;
-        this.target = 0;
-    }
-    updateParams(stiffness, damping, mass) {
-        this.stiffness = stiffness;
-        this.damping = damping;
-        this.mass = mass;
-    }
-    update(elapsedMs) {
-        let dt = elapsedMs / 1000;
-        if (dt > 0.066)
-            dt = 0.066; // [PERF C1] covers a 20fps cap; the physics sub-steps, so no blow-up
-        // [PERF C1] Sub-stepped. The integrator is explicit (semi-implicit Euler),
-        // and with the stiffness the preferences allow a 16.7ms frame is not a
-        // stable step. The old 1ms GLib timer hid that by stepping — and repainting
-        // — a thousand times a second. Now the physics keeps its fine step while
-        // the frame driver writes the actors once per frame.
-        const mass = this.mass > 1e-3 ? this.mass : 1e-3;
-        let remaining = dt;
-        while (remaining > 1e-6) {
-            const h = Math.min(remaining, 0.002);
-            let springForce = -this.stiffness * (this.value - this.target);
-            let dampingForce = -this.damping * this.velocity;
-            let acceleration = (springForce + dampingForce) / mass;
-            this.velocity += acceleration * h;
-            this.value += this.velocity * h;
-            remaining -= h;
-        }
-        return Math.abs(this.velocity) < 0.01 && Math.abs(this.value - this.target) < 0.001;
-    }
-}
-class SwiftSpring {
-    response;
-    dampingFraction;
-    mass;
-    value;
-    velocity;
-    target;
-    constructor(response, dampingFraction, mass = 1.0) {
-        this.response = typeof response === 'number' && !isNaN(response) && response > 0.01 ? response : 0.4;
-        this.dampingFraction = typeof dampingFraction === 'number' && !isNaN(dampingFraction) && dampingFraction >= 0 ? dampingFraction : 0.7;
-        this.mass = typeof mass === 'number' && !isNaN(mass) && mass > 0.01 ? mass : 1.0;
-        this.value = 0;
-        this.velocity = 0;
-        this.target = 0;
-    }
-    updateParams(response, dampingFraction, mass = 1.0) {
-        if (typeof response === 'number' && !isNaN(response) && response > 0.01)
-            this.response = response;
-        if (typeof dampingFraction === 'number' && !isNaN(dampingFraction) && dampingFraction >= 0)
-            this.dampingFraction = dampingFraction;
-        if (typeof mass === 'number' && !isNaN(mass) && mass > 0.01)
-            this.mass = mass;
-    }
-    update(elapsedMs) {
-        let dt = elapsedMs / 1000;
-        if (isNaN(dt) || dt <= 0)
-            return false;
-        if (dt > 0.1)
-            dt = 0.1;
-        if (isNaN(this.value) || !isFinite(this.value) || isNaN(this.velocity) || !isFinite(this.velocity)) {
-            this.value = this.target;
-            this.velocity = 0;
-            return true;
-        }
-        const x0 = this.value - this.target;
-        const v0 = this.velocity;
-        if (Math.abs(x0) < 0.001 && Math.abs(v0) < 0.001) {
-            this.value = this.target;
-            this.velocity = 0;
-            return true;
-        }
-        const omega0 = (2 * Math.PI) / this.response;
-        const zeta = this.dampingFraction;
-        let x_t = 0;
-        let v_t = 0;
-        // Analytical solution — no numerical explosion regardless of spring stiffness
-        if (zeta < 0.999) {
-            // 1. Underdamped — standard bouncy motion
-            const omegaD = omega0 * Math.sqrt(1.0 - zeta * zeta);
-            const alpha = zeta * omega0;
-            const exp = Math.exp(-alpha * dt);
-            const cos = Math.cos(omegaD * dt);
-            const sin = Math.sin(omegaD * dt);
-            x_t = exp * (x0 * cos + ((v0 + alpha * x0) / omegaD) * sin);
-            v_t = exp * (v0 * cos - ((alpha * v0 + omega0 * omega0 * x0) / omegaD) * sin);
-        }
-        else if (zeta > 1.001) {
-            // 2. Overdamped — slow, viscous motion
-            const beta = omega0 * Math.sqrt(zeta * zeta - 1.0);
-            const gamma1 = -zeta * omega0 + beta;
-            const gamma2 = -zeta * omega0 - beta;
-            const exp1 = Math.exp(gamma1 * dt);
-            const exp2 = Math.exp(gamma2 * dt);
-            const c1 = (v0 - gamma2 * x0) / (gamma1 - gamma2);
-            const c2 = x0 - c1;
-            x_t = c1 * exp1 + c2 * exp2;
-            v_t = c1 * gamma1 * exp1 + c2 * gamma2 * exp2;
-        }
-        else {
-            // 3. Critically damped — fastest settle without overshoot
-            const exp = Math.exp(-omega0 * dt);
-            x_t = exp * (x0 + (v0 + omega0 * x0) * dt);
-            v_t = exp * (v0 - omega0 * (v0 + omega0 * x0) * dt);
-        }
-        this.value = x_t + this.target;
-        this.velocity = v_t;
-        if (isNaN(this.value) || !isFinite(this.value)) {
-            this.value = this.target;
-            this.velocity = 0;
-            return true;
-        }
-        this.value = Math.max(-0.5, Math.min(2.5, this.value));
-        if (Math.abs(this.value - this.target) < 0.001 && Math.abs(this.velocity) < 0.001) {
-            this.value = this.target;
-            this.velocity = 0;
-            return true;
-        }
-        return false;
     }
 }
