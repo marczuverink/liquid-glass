@@ -8,7 +8,7 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import Gio from 'gi://Gio';
 import { LiquidEffect } from './liquidEffect.js';
-import { StageContrastSampler, AdaptiveContrastConfig } from './contrastSampler.js';
+import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
 import { UnpickableActor, UnpickableWidget } from './actors/unpickable.js';
 import { UILayerSampler } from './capture/uiLayerSampler.js';
 import { WindowCloneManager } from './capture/windowClones.js';
@@ -688,6 +688,11 @@ export class UIManager {
     connectSetting(this._key('sample-interval-ms'), () => {
       this._adaptiveConfig.sampleIntervalMs = this._settings.get_int(this._key('sample-interval-ms'));
     });
+
+    connectSetting(this._key('adaptive-text-preference'), () => {
+      this._adaptiveConfig.preference = sanitizeColorPreference(
+        this._settings.get_string(this._key('adaptive-text-preference')));
+    });
   }
 
   _applyEffect() {
@@ -715,6 +720,8 @@ export class UIManager {
       enabled: this._settings.get_boolean(this._key('enable-adaptive-text-color')),
       samplePerElement: SAMPLE_PER_ELEMENT,
       sampleIntervalMs: this._settings.get_int(this._key('sample-interval-ms')),
+      preference: sanitizeColorPreference(
+        this._settings.get_string(this._key('adaptive-text-preference'))),
     };
 
     // 1. bgActor: full monitor, no effect — starts 1×1, _syncGeometry expands it immediately
@@ -1452,7 +1459,7 @@ export class UIManager {
         let isClosing = this._swiftAnimation ? (this._swiftSpringScale.target === 0) : (this._springScale.target === 0);
 
         let dt = elapsedMs / 1000;
-        if (dt > 0.033) dt = 0.033;
+        if (dt > 0.066) dt = 0.066; // [PERF C1] covers a 20fps cap; the physics sub-steps, so no blow-up
 
         let stopped = false;
         let s: number, p: number;

@@ -118,6 +118,8 @@ export const LiquidEffect = GObject.registerClass({
   // ApplicationManager uses this serial to repair outer captures after an inner
   // glass re-renders. Increment only when Clutter marks the capture ACTOR_DIRTY.
   declare private _recaptureSerial: number;
+  declare private _liveGeometryHook: (() => void) | null;
+  declare private _inLiveGeometry: boolean;
 
   declare private _material: MaterialSettings;
 
@@ -168,6 +170,8 @@ export const LiquidEffect = GObject.registerClass({
     this._blurCacheHits = 0;
     this._blurCacheEnabled = blurCacheDefault;
     this._recaptureSerial = 0;
+    this._liveGeometryHook = null;
+    this._inLiveGeometry = false;
     ensureFrameSerialHook();
     this._diagFirstPaintLogged = false;
 
@@ -271,6 +275,17 @@ export const LiquidEffect = GObject.registerClass({
     }
 
     // ── Wait for async shaders ──────────────────────────────────────────────
+    if (this._liveGeometryHook) {
+      this._inLiveGeometry = true;
+      try {
+        this._liveGeometryHook();
+      } catch (e) {
+        this._logger?.error(`[Liquid Glass] Live geometry hook failed: ${e}`);
+      } finally {
+        this._inLiveGeometry = false;
+      }
+    }
+
     if (!this._shadersLoaded) {
       super.vfunc_paint_target(_paintNode, paintContext);
       return;
@@ -666,6 +681,7 @@ export const LiquidEffect = GObject.registerClass({
   // ─── Public API (compatible with the previous ShaderEffect-based interface) ──
 
   cleanup(): void {
+    this._liveGeometryHook = null;
     // The frame-serial hook is one signal shared by every instance; drop it
     // once nothing is left to use it, so disabling the extension leaves
     // nothing connected to the stage.
@@ -920,6 +936,10 @@ export const LiquidEffect = GObject.registerClass({
   private declare _batchDepth: number;
   private declare _batchDirty: boolean;
 
+  setLiveGeometryHook(fn: (() => void) | null): void {
+    this._liveGeometryHook = fn;
+  }
+
   beginBatch(): void {
     if (!LiquidEffect.DRAG_PERF_MODE_ENABLED) return;
     this._batchDepth = (this._batchDepth || 0) + 1;
@@ -943,6 +963,7 @@ export const LiquidEffect = GObject.registerClass({
   // sites transparently goes through here without needing to change any
   // of them individually) the inherited Clutter.Effect.queue_repaint().
   queue_repaint(): void {
+    if (this._inLiveGeometry) return;
     if (LiquidEffect.DRAG_PERF_MODE_ENABLED && this._batchDepth) {
       this._batchDirty = true;
       return;
