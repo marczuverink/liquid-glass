@@ -1,6 +1,6 @@
 import { isActorValid } from '../actors/lifecycle.js';
-import { isCaptureClipEnabled, isCloneCullEnabled } from './options.js';
-import { unionRectInto } from '../actors/geometry.js';
+import { isCaptureClipEnabled, isCloneCullEnabled, isCullSiteEnabled } from './options.js';
+import { unionRectInto, rectsIntersect } from '../actors/geometry.js';
 import { setClipIfChanged } from '../actors/writes.js';
 export function syncGlassCaptureClip(opts) {
     const { cloneContainer, effect, originX, originY } = opts;
@@ -21,8 +21,10 @@ export function syncGlassCaptureClip(opts) {
         uiSampler?.setCullRect(null);
         windowCloneManager?.setCullRect(null);
         windowCloneManager?.applyBgCloneClip(null);
-        if (effect)
+        if (effect) {
             effect._lgCaptureClip = null;
+            effect._lgCaptureScreenRect = null;
+        }
     };
     if (!isCaptureClipEnabled() && !isCloneCullEnabled()) {
         clear();
@@ -51,8 +53,11 @@ export function syncGlassCaptureClip(opts) {
         return;
     }
     const bmsRects = uiSampler?.getBmsScreenRects() ?? [];
+    const ownRect = [rect[0], rect[1], rect[2], rect[3]];
     for (const b of bmsRects) {
-        unionRectInto(rect, [b[0] - originX, b[1] - originY, b[2], b[3]]);
+        const local = [b[0] - originX, b[1] - originY, b[2], b[3]];
+        if (!isCullSiteEnabled('bms') || rectsIntersect(local[0], local[1], local[2], local[3], ownRect))
+            unionRectInto(rect, local);
     }
     const [resW, resH] = typeof effect.getResolution === 'function'
         ? effect.getResolution() : [0, 0];
@@ -74,6 +79,7 @@ export function syncGlassCaptureClip(opts) {
     windowCloneManager?.applyBgCloneClip(isCaptureClipEnabled() ? screenRect : null);
     uiSampler?.setCullRect(screenRect);
     windowCloneManager?.setCullRect(screenRect);
+    effect._lgCaptureScreenRect = screenRect;
 }
 function applyCaptureClip(cloneContainer, rect) {
     if (isCaptureClipEnabled() && cloneContainer && isActorValid(cloneContainer)) {

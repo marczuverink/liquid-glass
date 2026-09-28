@@ -235,6 +235,8 @@ module.exports = ({ Clutter, Cogl, GLib, computeCaptureLayout, frameClock, confi
                 blurRuns: this._blurRuns,
                 blurSkips: this._blurSkips,
                 blurCacheHits: this._blurCacheHits,
+                nestedRoiClamps: this._nestedRoiClamps,
+                nestedRoiSkips: this._nestedRoiSkips,
                 u: {
                     shadowRadius: this._uniforms.values.get('shadow_radius'),
                     shadowIntensity: this._uniforms.values.get('shadow_intensity'),

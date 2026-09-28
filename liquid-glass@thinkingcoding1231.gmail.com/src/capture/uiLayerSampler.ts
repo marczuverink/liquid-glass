@@ -705,11 +705,16 @@ export class UILayerSampler {
   private _cullSourceClone(sourceClone: Clutter.Actor, absX: number, absY: number,
     scaledW: number, scaledH: number): boolean {
     const cull = this._cullRect;
+    const replica = (sourceClone as any)._lgBmsReplica;
     const cullable = !!cull && isCullSiteEnabled('ui') &&
-      !(sourceClone as any)._lgBmsReplica &&
+      (!replica || (isCullSiteEnabled('bms') && !!replica.panelRect)) &&
       scaledW > 0 && scaledH > 0 &&
       Number.isFinite(absX) && Number.isFinite(absY);
     if (cullable && !rectsIntersect(absX, absY, scaledW, scaledH, cull!)) {
+      if (replica) {
+        const pr = replica.panelRect;
+        this._bmsScreenRects.push([absX + pr[0], absY + pr[1], pr[2], pr[3]]);
+      }
       setCloneCulled(sourceClone, true, () =>
         `src=(${Math.round(absX)},${Math.round(absY)},${Math.round(scaledW)}x${Math.round(scaledH)}) ` +
         `cullRect=[${cull!.map(Math.round)}] label=${this._label}`);

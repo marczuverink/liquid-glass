@@ -224,3 +224,14 @@ test('a fresh install shows the default shadow as the Soft preset, not Custom', 
   const f = fixture();
   assert.equal(f.row('Shadows').selected, 1);
 });
+
+test('the preferred text colour writes only its own surface key, and the dump shortcut has a switch', () => {
+  const f = fixture({'preferences-advanced': true});
+  f.row('Surface').selected = 1;
+  const row = f.row('Preferred text colour');
+  assert.ok(row, 'calendar shows the preferred text colour');
+  const before = f.writes.length;
+  row.selected = 2;
+  assert.deepEqual(f.writes.slice(before), [{'menu-adaptive-text-preference': 'dark'}]);
+  assert.ok(f.row('Dump shortcut'));
+});

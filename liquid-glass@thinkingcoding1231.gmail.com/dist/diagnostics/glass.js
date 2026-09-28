@@ -12,6 +12,7 @@ import { setCullOptOutEnabled, isCullOptOutEnabled } from '../capture/windowCull
 import { setWindowActorRescueMode, getWindowActorRescueMode } from '../actors/allocation.js';
 const _liveEffects = new Set();
 export let blurCacheDefault = true;
+export let nestedRoiDefault = true;
 const RING_MAX = 4000;
 const _ring = [];
 let _ringLast = new Map();
@@ -140,6 +141,8 @@ function _dumpRow(fx, now) {
         blurRuns: fx._blurRuns,
         blurSkips: fx._blurSkips,
         blurCacheHits: fx._blurCacheHits,
+        nestedRoiClamps: fx._nestedRoiClamps,
+        nestedRoiSkips: fx._nestedRoiSkips,
         snapshotAgeMs: Math.round((now - fx._diagLastSnapshotAt) / 1000),
         ..._dumpLiveState(fx),
     });
@@ -353,6 +356,12 @@ function _registerGlassDebugHooks() {
             console.log(msg);
             return msg;
         },
+        cullBms: (enabled) => {
+            setCullSiteEnabled('bms', enabled);
+            const msg = `[Liquid Glass] cull site bms (BMS replicas out of reach) ${enabled ? 'ON' : 'OFF'}`;
+            console.log(msg);
+            return msg;
+        },
         cullUi: (enabled) => {
             setCullSiteEnabled('ui', enabled);
             const msg = `[Liquid Glass] cull site ui (uiGroup clones) ${enabled ? 'ON' : 'OFF'}`;
@@ -417,10 +426,22 @@ function _registerGlassDebugHooks() {
             console.log(out);
             return out;
         },
+        geom: (owner) => {
+            const out = [];
+            for (const fx of _liveEffects) {
+                if (owner && fx._owner !== owner)
+                    continue;
+                const u = fx._uniforms?.values;
+                out.push({ owner: fx._owner, x: u?.get('dock_x') ?? 0, y: u?.get('dock_y') ?? 0,
+                    w: u?.get('dock_w') ?? 0, h: u?.get('dock_h') ?? 0 });
+            }
+            return out;
+        },
         cullSites: () => ({
             app: isCullSiteEnabled('app'),
             windows: isCullSiteEnabled('windows'),
             ui: isCullSiteEnabled('ui'),
+            bms: isCullSiteEnabled('bms'),
         }),
         cullReport: () => {
             const lines = [];
@@ -509,6 +530,20 @@ function _registerGlassDebugHooks() {
                 catch { }
             }
             const msg = `[Liquid Glass] crop pass ${enabled ? 'ENABLED' : 'DISABLED'} on ${n} instance(s)`;
+            console.log(msg);
+            return msg;
+        },
+        nestedRoi: (enabled) => {
+            nestedRoiDefault = !!enabled;
+            let n = 0;
+            for (const fx of _liveEffects) {
+                try {
+                    fx.setNestedRoiEnabled(enabled);
+                    n++;
+                }
+                catch { }
+            }
+            const msg = `[Liquid Glass] nested composite ROI ${enabled ? 'ENABLED' : 'DISABLED'} on ${n} instance(s)`;
             console.log(msg);
             return msg;
         },

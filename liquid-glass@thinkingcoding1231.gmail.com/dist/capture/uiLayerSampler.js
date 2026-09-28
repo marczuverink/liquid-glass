@@ -674,11 +674,16 @@ export class UILayerSampler {
     }
     _cullSourceClone(sourceClone, absX, absY, scaledW, scaledH) {
         const cull = this._cullRect;
+        const replica = sourceClone._lgBmsReplica;
         const cullable = !!cull && isCullSiteEnabled('ui') &&
-            !sourceClone._lgBmsReplica &&
+            (!replica || (isCullSiteEnabled('bms') && !!replica.panelRect)) &&
             scaledW > 0 && scaledH > 0 &&
             Number.isFinite(absX) && Number.isFinite(absY);
         if (cullable && !rectsIntersect(absX, absY, scaledW, scaledH, cull)) {
+            if (replica) {
+                const pr = replica.panelRect;
+                this._bmsScreenRects.push([absX + pr[0], absY + pr[1], pr[2], pr[3]]);
+            }
             setCloneCulled(sourceClone, true, () => `src=(${Math.round(absX)},${Math.round(absY)},${Math.round(scaledW)}x${Math.round(scaledH)}) ` +
                 `cullRect=[${cull.map(Math.round)}] label=${this._label}`);
             return true;

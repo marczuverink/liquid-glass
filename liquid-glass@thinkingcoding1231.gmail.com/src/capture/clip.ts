@@ -2,8 +2,8 @@ import Clutter from 'gi://Clutter';
 import { UILayerSampler } from './uiLayerSampler.js';
 import { WindowCloneManager } from './windowClones.js';
 import { isActorValid } from '../actors/lifecycle.js';
-import { isCaptureClipEnabled, isCloneCullEnabled, GlassRect } from './options.js';
-import { unionRectInto } from '../actors/geometry.js';
+import { isCaptureClipEnabled, isCloneCullEnabled, isCullSiteEnabled, GlassRect } from './options.js';
+import { unionRectInto, rectsIntersect } from '../actors/geometry.js';
 import { setClipIfChanged } from '../actors/writes.js';
 export function syncGlassCaptureClip(opts: {
   cloneContainer: Clutter.Actor | null,
@@ -29,7 +29,10 @@ export function syncGlassCaptureClip(opts: {
     uiSampler?.setCullRect(null);
     windowCloneManager?.setCullRect(null);
     windowCloneManager?.applyBgCloneClip(null);
-    if (effect) effect._lgCaptureClip = null;
+    if (effect) {
+      effect._lgCaptureClip = null;
+      effect._lgCaptureScreenRect = null;
+    }
   };
 
   if (!isCaptureClipEnabled() && !isCloneCullEnabled()) { clear(); return; }
@@ -48,8 +51,11 @@ export function syncGlassCaptureClip(opts: {
   if (uiSampler?.hasUnmeasuredBmsReplica()) { clear(); return; }
 
   const bmsRects = uiSampler?.getBmsScreenRects() ?? [];
+  const ownRect: GlassRect = [rect[0], rect[1], rect[2], rect[3]];
   for (const b of bmsRects) {
-    unionRectInto(rect, [b[0] - originX, b[1] - originY, b[2], b[3]]);
+    const local: GlassRect = [b[0] - originX, b[1] - originY, b[2], b[3]];
+    if (!isCullSiteEnabled('bms') || rectsIntersect(local[0], local[1], local[2], local[3], ownRect))
+      unionRectInto(rect, local);
   }
 
   const [resW, resH] = typeof effect.getResolution === 'function'
@@ -74,6 +80,7 @@ export function syncGlassCaptureClip(opts: {
 
   uiSampler?.setCullRect(screenRect);
   windowCloneManager?.setCullRect(screenRect);
+  effect._lgCaptureScreenRect = screenRect;
 }
 
 function applyCaptureClip(cloneContainer: Clutter.Actor | null, rect: GlassRect): void {

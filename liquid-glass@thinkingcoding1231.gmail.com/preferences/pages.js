@@ -79,6 +79,7 @@ export function buildPreferences(window, settings) {
     const diagnostics = controls.group(advanced, 'Troubleshooting');
     controls.toggle(diagnostics, 'Logging', 'output-logs');
     controls.toggle(diagnostics, 'Render diagnostics', 'glass-debug-diagnostics', 'Adds rendering overhead; leave off for normal use.');
+    controls.toggle(diagnostics, 'Dump shortcut', 'enable-dump-shortcut', 'Ctrl+Alt+L records the glass state for bug reports.');
   });
   let showAdvanced;
   controls.watch(['preferences-advanced'], () => {

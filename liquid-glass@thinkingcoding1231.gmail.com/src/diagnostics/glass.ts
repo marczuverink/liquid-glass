@@ -13,6 +13,7 @@ import { setWindowActorRescueMode, getWindowActorRescueMode, type WindowActorRes
 const _liveEffects: Set<any> = new Set();
 
 export let blurCacheDefault = true;
+export let nestedRoiDefault = true;
 
 const RING_MAX = 4000;
 const _ring: string[] = [];
@@ -134,6 +135,8 @@ function _dumpRow(fx: any, now: number): string {
     blurRuns: fx._blurRuns,
     blurSkips: fx._blurSkips,
     blurCacheHits: fx._blurCacheHits,
+    nestedRoiClamps: fx._nestedRoiClamps,
+    nestedRoiSkips: fx._nestedRoiSkips,
     snapshotAgeMs: Math.round((now - fx._diagLastSnapshotAt) / 1000),
     ..._dumpLiveState(fx),
   });
@@ -350,6 +353,12 @@ function _registerGlassDebugHooks(): void {
       console.log(msg);
       return msg;
     },
+    cullBms: (enabled: boolean) => {
+      setCullSiteEnabled('bms', enabled);
+      const msg = `[Liquid Glass] cull site bms (BMS replicas out of reach) ${enabled ? 'ON' : 'OFF'}`;
+      console.log(msg);
+      return msg;
+    },
     cullUi: (enabled: boolean) => {
       setCullSiteEnabled('ui', enabled);
       const msg = `[Liquid Glass] cull site ui (uiGroup clones) ${enabled ? 'ON' : 'OFF'}`;
@@ -391,10 +400,21 @@ function _registerGlassDebugHooks(): void {
       return out;
     },
 
+    geom: (owner?: string) => {
+      const out: { owner: string, x: number, y: number, w: number, h: number }[] = [];
+      for (const fx of _liveEffects) {
+        if (owner && fx._owner !== owner) continue;
+        const u = fx._uniforms?.values;
+        out.push({ owner: fx._owner, x: u?.get('dock_x') ?? 0, y: u?.get('dock_y') ?? 0,
+          w: u?.get('dock_w') ?? 0, h: u?.get('dock_h') ?? 0 });
+      }
+      return out;
+    },
     cullSites: () => ({
       app: isCullSiteEnabled('app'),
       windows: isCullSiteEnabled('windows'),
       ui: isCullSiteEnabled('ui'),
+      bms: isCullSiteEnabled('bms'),
     }),
 
     cullReport: () => {
@@ -451,6 +471,16 @@ function _registerGlassDebugHooks(): void {
         try { fx.setCropPassEnabled(enabled); n++; } catch { }
       }
       const msg = `[Liquid Glass] crop pass ${enabled ? 'ENABLED' : 'DISABLED'} on ${n} instance(s)`;
+      console.log(msg);
+      return msg;
+    },
+    nestedRoi: (enabled: boolean) => {
+      nestedRoiDefault = !!enabled;
+      let n = 0;
+      for (const fx of _liveEffects) {
+        try { fx.setNestedRoiEnabled(enabled); n++; } catch { }
+      }
+      const msg = `[Liquid Glass] nested composite ROI ${enabled ? 'ENABLED' : 'DISABLED'} on ${n} instance(s)`;
       console.log(msg);
       return msg;
     },

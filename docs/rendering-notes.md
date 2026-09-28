@@ -387,3 +387,7 @@ API with its own per-call bookkeeping (walking to the effect's actor
 and invalidating it), so the per-call overhead here was real, not just
 theoretical — this was the direct cause the FPS counter's rising
 average frame time pointed at.
+
+## Lens band and defaults
+
+The lens acts over a fixed band (`EDGE_LENS_BAND`, 22 px) along the edge, whatever the corner radius or the size of the element, as measured on macOS 27. The optical settings (displacement, maximum depth, profile shape) shape the lens inside that band, and an element thinner than the band gets the same lens scaled down. Displacement is in pixels on both axes and is clamped to `EDGE_LENS_REACH` (96 px), which `GlassGeometry` also uses for the blur and capture margins. Chroma and sheen default to `0`, as macOS's glass shows neither, and the inner shadow falls only where the rim light does not.

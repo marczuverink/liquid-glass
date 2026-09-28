@@ -47,7 +47,16 @@ function addSurface(page, controls, surface, title) {
     const key = `${surface}-enable-adaptive-text-color`;
     controls.toggle(group, 'Automatic text contrast', key);
     const row = controls.number(group, 'Contrast interval (ms)', [`${surface}-sample-interval-ms`], 100, 2000, 50);
-    controls.watch([key], () => { row.visible = controls.settings.get_boolean(key); });
+    const preferenceKey = `${surface}-adaptive-text-preference`;
+    const preference = controls.choice(group, 'Preferred text colour', [
+      {title: 'Automatic', patch: {[preferenceKey]: 'auto'}},
+      {title: 'Light', patch: {[preferenceKey]: 'light'}},
+      {title: 'Dark', patch: {[preferenceKey]: 'dark'}},
+    ], 'Decides only when both colours are equally readable', false);
+    controls.watch([key], () => {
+      row.visible = controls.settings.get_boolean(key);
+      preference.visible = row.visible;
+    });
   }
   return group;
 }
