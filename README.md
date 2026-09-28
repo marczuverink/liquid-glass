@@ -106,7 +106,9 @@ The **Glass** page in the preferences window controls the shader itself. These s
 - **Edge Smoothing** - Feathering width of the glass silhouette, used as geometry anti-aliasing.
 - **Profile Shape N** - The superellipse exponent describing the cross-section of the glass. Low values give a soft, dome-like surface; high values give a flat top with a sharp roll-off at the edge.
 - **Index of Refraction** - Optical density of the material. Real glass is roughly 1.5 to 2.4.
-- **Chroma Strength** - Amount of RGB separation (chromatic aberration) in the refracted image.
+- **Chroma Strength** - Amount of RGB separation (chromatic aberration) in the refracted image. `0` by default: macOS's glass shows none.
+
+The lens acts over a fixed band (22 px) along the edge, whatever the corner radius or the size of the element, as measured on macOS; the settings above shape the lens inside that band. An element thinner than the band gets the same lens scaled down.
 
 ### Lighting & Reflections
 - **Specular Intensity** / **Shininess** - Brightness and sharpness of the specular highlights.
@@ -114,7 +116,7 @@ The **Glass** page in the preferences window controls the shader itself. These s
 - **Rim Directional Power** - How strongly the virtual light direction shapes the rim (higher values concentrate the rim on the lit side).
 - **Rim Fresnel Power** - Falloff of the Fresnel term for the rim light.
 - **Rim Light Color Intensity** - Multiplier for the rim light color.
-- **Sheen Intensity** - A broad sheen spread across the surface, sampled from the background.
+- **Sheen Intensity** - A broad sheen spread across the surface, sampled from the background. `0` by default.
 - **Light Angle (Deg)** - Direction of the virtual light source, in degrees.
 
 ### Drop Shadow
@@ -124,7 +126,7 @@ Anchors the glass on light backgrounds (a white wallpaper, for example) so it do
 
 ### Inner Edge Darkening (AO)
 A separate ambient-occlusion style darkening just inside the glass edge, independent of the outer drop shadow.
-- **AO Intensity** - How dark the inner band gets.
+- **AO Intensity** - How dark the inner band gets. With the rim light on, the darkening falls only where the rim light does not (the edges that run along the light direction), as on macOS.
 - **AO Radius (px)** - How far inward the darkening extends before fading out.
 
 ### Debug
