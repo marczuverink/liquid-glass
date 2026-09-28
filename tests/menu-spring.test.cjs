@@ -9,7 +9,7 @@ const { stepMenuSpring } = loadModule(path.join(dist, 'animation/menuSpring.js')
 function referenceStep(scaleSpring, elapsedMs) {
   const isClosing = scaleSpring.target === 0;
   let dt = elapsedMs / 1000;
-  if (dt > 0.033) dt = 0.033;
+  if (dt > 0.066) dt = 0.066;
   let stopped = false;
   let s;
   if (isClosing) {
@@ -61,4 +61,21 @@ test('opening stops as soon as the scale spring settles', () => {
   assert.equal(stepMenuSpring(settled, 16).stopped, true);
   const moving = { value: 0.5, velocity: 1, target: 1, update() { return false; } };
   assert.equal(stepMenuSpring(moving, 16).stopped, false);
+});
+
+test('a 20 fps cap opens at the same speed as every frame', () => {
+  const run = frameMs => {
+    const s = new Spring(120, 8, 1);
+    s.target = 1;
+    for (let t = 0; t < 400; t += frameMs) s.update(frameMs);
+    return s.value;
+  };
+  assert.ok(Math.abs(run(50) - run(16)) < 0.01, `20 fps ${run(50)}, 60 fps ${run(16)}`);
+});
+
+test('the stiffest spring the preferences allow stays stable at 30 fps', () => {
+  const s = new Spring(1000, 100, 1);
+  s.target = 1;
+  for (let frame = 0; frame < 60; frame++) s.update(33);
+  assert.ok(Number.isFinite(s.value) && Math.abs(s.value - 1) < 0.01, `value ${s.value}`);
 });

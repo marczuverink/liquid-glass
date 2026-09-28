@@ -1,3 +1,8 @@
+// [PERF C1] The longest frame the physics follows in full: covers the 20fps
+// cap the preferences offer, so a capped animation runs at the same speed.
+// Longer gaps (a stall) are clamped rather than jumped over.
+export const MAX_STEP_S = 0.066;
+const SUB_STEP_S = 0.002;
 export class Spring {
     stiffness;
     damping;
@@ -20,13 +25,24 @@ export class Spring {
     }
     update(elapsedMs) {
         let dt = elapsedMs / 1000;
-        if (dt > 0.033)
-            dt = 0.033;
-        let springForce = -this.stiffness * (this.value - this.target);
-        let dampingForce = -this.damping * this.velocity;
-        let acceleration = (springForce + dampingForce) / this.mass;
-        this.velocity += acceleration * dt;
-        this.value += this.velocity * dt;
+        if (dt > MAX_STEP_S)
+            dt = MAX_STEP_S;
+        // [PERF C1] Sub-stepped. The integrator is explicit (semi-implicit Euler),
+        // and with the stiffness the preferences allow a 16.7ms frame is not a
+        // stable step. The old 1ms GLib timer hid that by stepping — and repainting
+        // — a thousand times a second. Now the physics keeps its fine step while
+        // the frame driver writes the actors once per frame.
+        const mass = this.mass > 1e-3 ? this.mass : 1e-3;
+        let remaining = dt;
+        while (remaining > 1e-6) {
+            const h = Math.min(remaining, SUB_STEP_S);
+            const springForce = -this.stiffness * (this.value - this.target);
+            const dampingForce = -this.damping * this.velocity;
+            const acceleration = (springForce + dampingForce) / mass;
+            this.velocity += acceleration * h;
+            this.value += this.velocity * h;
+            remaining -= h;
+        }
         return Math.abs(this.velocity) < 0.01 && Math.abs(this.value - this.target) < 0.001;
     }
 }

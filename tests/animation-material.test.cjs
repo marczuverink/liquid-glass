@@ -4,16 +4,17 @@ const path = require('node:path');
 const { loadModule } = require('./helpers/load-module.cjs');
 const dist = path.join(__dirname, '../liquid-glass@thinkingcoding1231.gmail.com/dist');
 
-test('shared menu spring preserves Euler integration and the frame-time clamp', () => {
+test('shared menu spring sub-steps its Euler integration and clamps the frame time', () => {
   const { Spring } = loadModule(path.join(dist, 'animation/spring.js'));
   const spring = new Spring(120, 8, 1);
   spring.target = 1;
   spring.update(16);
-  assert.equal(spring.velocity, 120 * 0.016);
-  assert.equal(spring.value, spring.velocity * 0.016);
+  let x = 0, v = 0;
+  for (let i = 0; i < 8; i++) { v += (-120 * (x - 1) - 8 * v) * 0.002; x += v * 0.002; }
+  assert.ok(Math.abs(spring.velocity - v) < 1e-12 && Math.abs(spring.value - x) < 1e-12);
   const capped = new Spring(120, 8, 1), stalled = new Spring(120, 8, 1);
   capped.target = stalled.target = 1;
-  capped.update(33); stalled.update(5000);
+  capped.update(66); stalled.update(5000);
   assert.equal(capped.value, stalled.value);
   assert.equal(capped.velocity, stalled.velocity);
   for (let frame = 0; frame < 2000; frame++) spring.update(16);

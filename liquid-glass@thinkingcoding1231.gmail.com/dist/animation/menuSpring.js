@@ -1,5 +1,5 @@
+import { MAX_STEP_S } from './spring.js';
 const CLOSE_SPEED = 15.0;
-const MAX_CLOSE_STEP_S = 0.033;
 const CLOSED_BELOW = 0.005;
 const OPEN_SNAP_DISTANCE = 0.002;
 const OPEN_SNAP_VELOCITY = 0.03;
@@ -7,7 +7,7 @@ function clampOpacity(v) {
     return Math.min(255, Math.max(0, v));
 }
 function stepClosing(scale, elapsedMs) {
-    const dt = Math.min(elapsedMs / 1000, MAX_CLOSE_STEP_S);
+    const dt = Math.min(elapsedMs / 1000, MAX_STEP_S);
     const k = 1.0 - Math.exp(-CLOSE_SPEED * dt);
     scale.value += (0 - scale.value) * k;
     if (scale.value < CLOSED_BELOW)
