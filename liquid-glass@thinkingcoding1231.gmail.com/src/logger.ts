@@ -1,6 +1,5 @@
 import Gio from "gi://Gio"
 
-// Logger class. Used by other classes and initialized in extension.js.
 export class Logger {
   private _settings: Gio.Settings;
   private _outputLogs: boolean;
@@ -13,7 +12,6 @@ export class Logger {
   }
 
   _bindSettings() {
-
     const connectSetting = (key: string, callback: Function) => {
       let id = this._settings.connect(`changed::${key}`, callback.bind(this));
       this._settingsIds.push(id);

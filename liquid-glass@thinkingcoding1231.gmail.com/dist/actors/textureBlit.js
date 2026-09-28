@@ -3,14 +3,6 @@ import Clutter from 'gi://Clutter';
 import Cogl from 'gi://Cogl';
 import Shell from 'gi://Shell';
 import { getAllocatedSize, computeCaptureLayout } from './geometry.js';
-/**
- * Paints a captured texture stretched to fill its own allocation, without
- * ever triggering the source actor's own paint. Used for the "read an
- * existing OffscreenEffect's texture" fallback path (see
- * UILayerSampler._createExistingEffectBlitActor): unlike Clutter.Clone,
- * this never re-evaluates the source's effect chain, so it can't cause the
- * "two consumers" ownership conflict described on SelfExcludingSnapshotCapture.
- */
 export const TextureBlitActor = GObject.registerClass({
     GTypeName: 'LiquidGlassTextureBlitActor',
 }, class TextureBlitActor extends Clutter.Actor {
@@ -54,11 +46,6 @@ export const TextureBlitActor = GObject.registerClass({
             }
             const texW = tex.get_width();
             const texH = tex.get_height();
-            // A ClutterOffscreenEffect's captured texture is a few pixels larger
-            // than the actor's logical size, and — contrary to what this used to
-            // assume — that padding is NOT centred: it is 2px on the left/top and
-            // 1px on the right/bottom (see computeCaptureLayout()). Sample only
-            // the sub-rectangle that actually holds the source's own pixels.
             let uMin = 0, vMin = 0, uMax = 1, vMax = 1;
             const src = this._sourceActor;
             if (src) {

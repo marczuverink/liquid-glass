@@ -1,4 +1,3 @@
-// A straightforward mathematical implementation of Hooke's Law for spring physics
 export class Spring {
     stiffness;
     damping;
@@ -76,9 +75,7 @@ export class SwiftSpring {
         const zeta = this.dampingFraction;
         let x_t = 0;
         let v_t = 0;
-        // Analytical solution — no numerical explosion regardless of spring stiffness
         if (zeta < 0.999) {
-            // 1. Underdamped — standard bouncy motion
             const omegaD = omega0 * Math.sqrt(1.0 - zeta * zeta);
             const alpha = zeta * omega0;
             const exp = Math.exp(-alpha * dt);
@@ -88,7 +85,6 @@ export class SwiftSpring {
             v_t = exp * (v0 * cos - ((alpha * v0 + omega0 * omega0 * x0) / omegaD) * sin);
         }
         else if (zeta > 1.001) {
-            // 2. Overdamped — slow, viscous motion
             const beta = omega0 * Math.sqrt(zeta * zeta - 1.0);
             const gamma1 = -zeta * omega0 + beta;
             const gamma2 = -zeta * omega0 - beta;
@@ -100,7 +96,6 @@ export class SwiftSpring {
             v_t = c1 * gamma1 * exp1 + c2 * gamma2 * exp2;
         }
         else {
-            // 3. Critically damped — fastest settle without overshoot
             const exp = Math.exp(-omega0 * dt);
             x_t = exp * (x0 + (v0 + omega0 * x0) * dt);
             v_t = exp * (v0 - omega0 * (v0 + omega0 * x0) * dt);

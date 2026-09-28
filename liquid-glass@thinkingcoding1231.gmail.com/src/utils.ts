@@ -1,4 +1,3 @@
-// Compatibility entry point. New code imports directly from the owning module.
 export { setUtilsLogger, reportFrameLoopError } from './diagnostics/logging.js';
 export { ensureWindowActorAllocated, type WindowActorRescueMode, setWindowActorRescueMode, getWindowActorRescueMode, ensureGlassAllocated, setActorVisible } from './actors/allocation.js';
 export { setDiffWritesEnabled, isDiffWritesEnabled, invalidateCloneWriteCache, setTranslationIfChanged, setSizeIfChanged, setScaleIfChanged, setPivotIfChanged, setClipIfChanged, setPositionIfChanged, setCloneCulled, isCloneCulled, setOpacityIfChanged } from './actors/writes.js';
