@@ -72,23 +72,81 @@ cp -r liquid-glass/liquid-glass@thinkingcoding1231.gmail.com ~/.local/share/gnom
 5. Enable **Liquid Glass** in the "Extensions" app or Extension Manager.
 
 
+## What Can Be Made of Glass
+
+The effect can be enabled or disabled per UI element on the **Effects** page. In the **Simple** view every element shares one look (blur, corners, tint); switch the view to **Advanced** (Appearance → Settings) to tune each element on its own — tint color and strength, blur radius, corner radius, glass expand, offsets, and brightness / contrast / saturation — plus the element-specific features listed below.
+
+| Element | Notes / Special features |
+| --- | --- |
+| **Dash to Dock** | Glass behind the dock. Adds a bottom margin control so the dock can float above the screen edge. Works with the Dash to Dock / Ubuntu Dock extension. |
+| **Panel Menus** | Glass behind top panel menus and popups. Adds **custom spring animation** (stiffness / damping / mass) for opening and closing, and **adaptive text coloring**. |
+| **Notifications** | Glass behind notification banners. Supports **adaptive text coloring** and a hide safety margin to avoid flicker while the banner is dismissed. |
+| **Quick Settings** | Two modes: **Whole menu** applies one sheet of glass behind the whole panel, and **Individual buttons** turns every toggle button into its own piece of glass, keeping each toggle's own accent color (see "Button base colour"). Also supports spring animation and adaptive text coloring. |
+| **OSD** | Glass behind the on-screen displays (volume, brightness, and so on), with adaptive text coloring. |
+| **Application Windows** | Glass behind application windows, with a **window content opacity** slider so the glass shows through the window itself. Applies either to selected applications, or to all windows minus exclusions. Both lists are filled from a live picker of your currently open windows, so there is no need to look up `WM_CLASS` values by hand. |
+
+### Adaptive Text Coloring
+
+Where it is supported, the extension samples the brightness of what is behind the UI and adjusts the text color so labels stay readable on both bright and dark wallpapers. A **Preferred text colour** (Automatic / Light / Dark) decides the cases where the background favours neither. The sample interval is configurable; a shorter interval reacts faster but costs more CPU.
+
+### Quick Settings: Whole menu vs. Individual buttons
+
+- **Whole menu** applies the glass as one continuous sheet behind the whole quick settings panel. Corner radius, X/Y offset and the spring animation apply to that sheet.
+- **Individual buttons** gives each toggle button its own glass shape, tracked individually. "Button corners" sets the roundness of each shape, and "Button base colour" controls how much of the toggle's own original color (for example the blue of an active toggle) is kept, independently of the custom tint color.
+
+
 ## Preferences
 
 - **Appearance** — shared blur, corners and tint; animations, automatic text contrast and matching menu heights.
 - **Effects** — choose where glass appears: dock, menus, popups and application windows.
-- **Advanced** — rendering quality, refraction, edge lighting, shadows and diagnostics.
+- **Rendering** — rendering quality, refraction, edge lighting, shadows and diagnostics.
 
 Opening the window preserves your configuration. **Custom** means your existing
 values differ or do not match a preset. Editing a shared control applies its value
 to every surface; it does not enable disabled effects. Choose **Smooth** for
-non-bouncing menu animations.
+non-bouncing menu animations. See [Preferences](docs/preferences.md) for behavior and tests.
 
-Application glass supports either selected applications or all applications with
-exclusions. Add applications from the running-window picker; manual IDs are optional.
-Quick Settings can cover the whole menu or individual buttons under Advanced.
 
-Low-level settings remain in the schema for compatibility, but are no longer repeated
-across separate pages. See [Preferences](docs/preferences.md) for behavior and tests.
+## Glass Settings (Rendering page)
+
+The **Rendering** page controls the shader itself. These settings are global and apply to every element above at once. The Simple view shows the main ones; the Advanced view shows all of them.
+
+### Blur
+- **Method** - `Gaussian` (most accurate) or `Dual Kawase` (cheaper; the radius is not pixel-accurate). The Simple view's **Quality** preset picks the method and the resolution together.
+- **Resolution** - `Half` or `Quarter`. Quarter blurs a quarter of the pixels, at the cost of a visibly coarser blur.
+
+### Optics
+- **Thickness** - The simulated physical thickness of the glass. Higher values bend the background more strongly near the edges.
+- **Refraction** - The overall strength of the refraction distortion.
+- **Edge smoothing** - Feathering width of the glass silhouette, used as geometry anti-aliasing.
+- **Surface curvature** - The superellipse exponent describing the cross-section of the glass. Low values give a soft, dome-like surface; high values give a flat top with a sharp roll-off at the edge.
+- **Index of refraction** - Optical density of the material. Real glass is roughly 1.5 to 2.4.
+- **Colour separation** - Amount of RGB separation (chromatic aberration) in the refracted image. `0` by default: macOS's glass shows none.
+
+The lens acts over a fixed band (22 px) along the edge, whatever the corner radius or the size of the element, as measured on macOS; the settings above shape the lens inside that band. An element thinner than the band gets the same lens scaled down.
+
+### Lighting
+- **Highlights** / **Shininess** - Brightness and sharpness of the specular highlights.
+- **Edge light width** / **Edge light** - Size and brightness of the light band along the edges.
+- **Edge directionality** - How strongly the virtual light direction shapes the edge light (higher values concentrate it on the lit side).
+- **Edge falloff** - Falloff of the Fresnel term for the edge light.
+- **Edge colour strength** - Multiplier for the edge light color.
+- **Sheen** - A broad sheen spread across the surface, sampled from the background. `0` by default.
+- **Light angle** - Direction of the virtual light source, in degrees.
+
+### Shadows
+The drop shadow anchors the glass on light backgrounds (a white wallpaper, for example) so it does not visually disappear.
+- **Shadow radius** - How far the shadow extends past the glass edge. `0` disables it.
+- **Shadow strength** - How dark the shadow is.
+
+A separate ambient-occlusion style darkening sits just inside the glass edge, independent of the outer drop shadow.
+- **Inner shading** - How dark the inner band gets. With the edge light on, the darkening falls only where the edge light does not (the edges that run along the light direction), as on macOS.
+- **Inner shading radius** - How far inward the darkening extends before fading out.
+
+### Troubleshooting
+- **Logging** - Print the extension's logs to the journal / terminal. Useful when reporting a bug.
+- **Render diagnostics** - More detailed rendering state in the logs; adds overhead, so leave it off for normal use.
+- **Dump shortcut** - A global shortcut (Ctrl+Alt+L) that records the glass state for a bug report.
 
 
 ## The WebGL/Three.js Prototype (The Lab)
