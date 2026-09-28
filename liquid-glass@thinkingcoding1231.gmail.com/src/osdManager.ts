@@ -4,7 +4,7 @@ import St from 'gi://St';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import { LiquidEffect } from './liquidEffect.js';
-import { StageContrastSampler, AdaptiveContrastConfig } from './contrastSampler.js';
+import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
 import Gio from 'gi://Gio';
 import { UnpickableActor } from './actors/unpickable.js';
 import { UILayerSampler } from './capture/uiLayerSampler.js';
@@ -216,8 +216,15 @@ export class OsdManager {
       }
     });
 
+    connectSetting('osd-adaptive-text-preference', () => {
+      this._adaptiveConfig.preference = sanitizeColorPreference(
+        this._settings.get_string('osd-adaptive-text-preference'));
+    });
+
     connectSetting('osd-sample-interval-ms', () => {
       this._adaptiveConfig.sampleIntervalMs = this._settings.get_int('osd-sample-interval-ms');
+    this._adaptiveConfig.preference = sanitizeColorPreference(
+      this._settings.get_string('osd-adaptive-text-preference'));
     });
 
     connectSetting('osd-y-offset', () => {

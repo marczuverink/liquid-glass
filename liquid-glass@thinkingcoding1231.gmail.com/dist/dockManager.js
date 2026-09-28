@@ -57,6 +57,7 @@ export class DashManager {
     _outputLogs = false;
     _marginValue = 0;
     _lastHidden;
+    _liveRef = null;
     _uiSampler = null;
     _windowCloneManager = null;
     _logger;
@@ -249,6 +250,7 @@ export class DashManager {
         this.effect.setBlurRadius(blurRadius);
         this.effect.setIsDock(true);
         this.liquidBox.add_effect(this.effect);
+        this.effect.setLiveGeometryHook(() => this._syncGlassGeometryLive());
         this._windowCloneManager = new WindowCloneManager(this.liquidBox, this._cloneContainer, 'lg-dock');
         this._uiSampler = new UILayerSampler(this.bgActor, this.liquidBox, [dockRoot, global.windowGroup, global.window_group], this._cloneContainer, 'dock', [this.targetActor]);
         this.bgActor.show();
@@ -316,6 +318,17 @@ export class DashManager {
             startFrameSync();
         }
     }
+    _syncGlassGeometryLive() {
+        const ref = this._liveRef;
+        if (!ref || !this.effect)
+            return;
+        if (!ref.actor?.mapped)
+            return;
+        const [nx, ny] = ref.actor.get_transformed_position();
+        if (!Number.isFinite(nx) || !Number.isFinite(ny))
+            return;
+        this.effect.setGlassGeometry(ref.rect[0] + (nx - ref.rawX), ref.rect[1] + (ny - ref.rawY), ref.rect[2], ref.rect[3]);
+    }
     _syncGeometry() {
         if (!this.bgActor || !this.targetActor || !this.targetActor.mapped)
             return;
@@ -331,6 +344,8 @@ export class DashManager {
         let [absX, absY] = sourceActor.get_transformed_position();
         if (Number.isNaN(absX) || Number.isNaN(absY))
             return;
+        const rawSrcX = absX;
+        const rawSrcY = absY;
         if (sourceActor !== this.targetActor) {
             let [tX, tY] = this.targetActor.get_transformed_position();
             let [tW, tH] = this.targetActor.get_size();
@@ -575,6 +590,11 @@ export class DashManager {
         this.effect?.setShadowMaxRadius(SHADOW_MAX_RADIUS);
         this.effect?.setResolution(screenW, screenH);
         this.effect?.setGlassGeometry(localBgX, localBgY, bgW, bgH);
+        this._liveRef = {
+            actor: sourceActor,
+            rawX: rawSrcX, rawY: rawSrcY,
+            rect: [localBgX, localBgY, bgW, bgH],
+        };
         this._windowCloneManager?.setOffset(-monitor.x, -monitor.y);
         syncGlassCaptureClip({
             cloneContainer: this._cloneContainer,
@@ -661,6 +681,7 @@ export class DashManager {
     }
     cleanup() {
         this._torndown = true;
+        this._liveRef = null;
         this._stopFrameSync();
         this._teardownStep('removeEffect', () => this._removeEffect());
         this._teardownStep('settingsSignals', () => {

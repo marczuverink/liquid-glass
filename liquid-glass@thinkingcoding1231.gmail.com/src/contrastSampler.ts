@@ -5,6 +5,9 @@ import GdkPixbuf from 'gi://GdkPixbuf';
 import { getTransformedRect } from './actors/geometry.js';
 
 const SWITCH_ADVANTAGE = 1.2;
+const SWITCH_ADVANTAGE_TOWARD_PREFERRED = 1.02;
+const SWITCH_ADVANTAGE_AGAINST_PREFERRED = 1.6;
+const AMBIGUOUS_RATIO = 1.15;
 const MIN_READABLE_CONTRAST = 4.5;
 const BACKDROP_COVERS_GLASS_ALPHA = 190;
 const READABILITY_FLIP_COOLDOWN = 3;
@@ -17,7 +20,14 @@ export const AdaptiveContrastConfig = {
   sampleIntervalMs: 200,
   lightTextColor: '#f2f2f2',
   darkTextColor: '#1a1a1a',
+  preference: 'auto' as AdaptiveColorPreference,
 };
+
+export type AdaptiveColorPreference = 'auto' | 'light' | 'dark';
+
+export function sanitizeColorPreference(value: string | null | undefined): AdaptiveColorPreference {
+  return (value === 'light' || value === 'dark') ? value : 'auto';
+}
 
 function _clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
@@ -295,18 +305,34 @@ export class StageContrastSampler {
 
     const rawLight = contrast(luminance, light);
     const rawDark = contrast(luminance, dark);
-    if (config.samplePerElement)
+    const preference = config.preference ?? 'auto';
+    const hasPreference = preference !== 'auto';
+    const preferDark = preference === 'dark';
+    const ambiguous = Math.max(rawLight, rawDark) < Math.min(rawLight, rawDark) * AMBIGUOUS_RATIO;
+    if (config.samplePerElement) {
+      if (ambiguous && hasPreference) return preferDark ? config.darkTextColor : config.lightTextColor;
       return rawDark > rawLight ? config.darkTextColor : config.lightTextColor;
+    }
 
     const smoothed = this._lastLuma === null
       ? luminance : this._lastLuma * 0.7 + luminance * 0.3;
     this._lastLuma = smoothed;
     const lightContrast = contrast(smoothed, light);
     const darkContrast = contrast(smoothed, dark);
-    let isBright = this._lastIsBright ?? (darkContrast > lightContrast);
-    const current = isBright ? darkContrast : lightContrast;
-    const alternative = isBright ? lightContrast : darkContrast;
-    if (alternative > current * SWITCH_ADVANTAGE) isBright = !isBright;
+    let isBright: boolean;
+    if (ambiguous && hasPreference) {
+      isBright = preferDark;
+    } else if (this._lastIsBright === null) {
+      isBright = darkContrast > lightContrast;
+    } else {
+      isBright = this._lastIsBright;
+      const current = isBright ? darkContrast : lightContrast;
+      const alternative = isBright ? lightContrast : darkContrast;
+      const towardPreferred = hasPreference && preferDark !== isBright;
+      const advantage = !hasPreference ? SWITCH_ADVANTAGE
+        : (towardPreferred ? SWITCH_ADVANTAGE_TOWARD_PREFERRED : SWITCH_ADVANTAGE_AGAINST_PREFERRED);
+      if (alternative > current * advantage) isBright = !isBright;
+    }
 
     const rawCurrent = isBright ? rawDark : rawLight;
     const rawAlternative = isBright ? rawLight : rawDark;

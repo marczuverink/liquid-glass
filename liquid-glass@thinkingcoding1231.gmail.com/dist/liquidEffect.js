@@ -63,6 +63,8 @@ export const LiquidEffect = GObject.registerClass({
         this._blurCacheHits = 0;
         this._blurCacheEnabled = blurCacheDefault;
         this._recaptureSerial = 0;
+        this._liveGeometryHook = null;
+        this._inLiveGeometry = false;
         ensureFrameSerialHook();
         this._diagFirstPaintLogged = false;
         this._extensionPath = extensionPath;
@@ -126,6 +128,18 @@ export const LiquidEffect = GObject.registerClass({
                 this._logger?.log(`[Liquid Glass][diag] LiquidEffect.vfunc_paint_target: heartbeat for "${actorTitle}", ` +
                     `paintCount=${this._diagPaintCount}, compositedCount=${this._diagCompositedPaintCount}`);
                 this._diagLastPaintLogAt = now;
+            }
+        }
+        if (this._liveGeometryHook) {
+            this._inLiveGeometry = true;
+            try {
+                this._liveGeometryHook();
+            }
+            catch (e) {
+                this._logger?.error(`[Liquid Glass] Live geometry hook failed: ${e}`);
+            }
+            finally {
+                this._inLiveGeometry = false;
             }
         }
         if (!this._shadersLoaded) {
@@ -385,6 +399,7 @@ export const LiquidEffect = GObject.registerClass({
         }
     }
     cleanup() {
+        this._liveGeometryHook = null;
         unregisterGlassEffect(this);
         this._material.clear();
         this._blur.clear();
@@ -501,6 +516,9 @@ export const LiquidEffect = GObject.registerClass({
         this._queueRepaintIfDirty();
     }
     static DRAG_PERF_MODE_ENABLED = true;
+    setLiveGeometryHook(fn) {
+        this._liveGeometryHook = fn;
+    }
     beginBatch() {
         if (!LiquidEffect.DRAG_PERF_MODE_ENABLED)
             return;
@@ -519,6 +537,8 @@ export const LiquidEffect = GObject.registerClass({
         }
     }
     queue_repaint() {
+        if (this._inLiveGeometry)
+            return;
         if (LiquidEffect.DRAG_PERF_MODE_ENABLED && this._batchDepth) {
             this._batchDirty = true;
             return;
