@@ -146,7 +146,8 @@ export function setCloneCulled(actor, culled, why) {
             name = actor.get_name?.() || '(unnamed)';
         }
         catch (_) { }
-        utilsLog(`[Liquid Glass][cull] ${culled ? 'CULL ' : 'SHOW '} "${name}" ${why}`);
+        const text = typeof why === 'function' ? why() : why;
+        utilsLog(`[Liquid Glass][cull] ${culled ? 'CULL ' : 'SHOW '} "${name}" ${text}`);
     }
     if (culled) {
         actor.opacity = 0;

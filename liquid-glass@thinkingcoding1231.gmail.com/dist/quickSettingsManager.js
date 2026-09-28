@@ -6,7 +6,7 @@ import St from 'gi://St';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import { LiquidEffect } from './liquidEffect.js';
-import { StageContrastSampler, AdaptiveContrastConfig } from './contrastSampler.js';
+import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
 import { UnpickableActor, LayoutOpaqueActor, UnpickableStyledWidget } from './actors/unpickable.js';
 import { UILayerSampler } from './capture/uiLayerSampler.js';
 import { WindowCloneManager } from './capture/windowClones.js';
@@ -15,6 +15,7 @@ import { ensureGlassAllocated } from './actors/allocation.js';
 import { isActorValid } from './actors/lifecycle.js';
 import { resolveMonitorGeometry, getAllocatedSize, getTransformedRect } from './actors/geometry.js';
 import { isFrameSyncFrozen } from './animation/frameSync.js';
+import { addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs } from './animation/frameTicker.js';
 import { setClipIfChanged } from './actors/writes.js';
 import { syncGlassCaptureClip } from './capture/clip.js';
 import { resolveCrossFade, adaptiveColorTweener } from './animation/colors.js';
@@ -322,6 +323,9 @@ export class QuickSettingsManager {
         connectSetting('quick-settings-enable-adaptive-text-color', () => {
             this._adaptiveConfig.enabled = this._settings.get_boolean('quick-settings-enable-adaptive-text-color');
         });
+        connectSetting('quick-settings-adaptive-text-preference', () => {
+            this._adaptiveConfig.preference = sanitizeColorPreference(this._settings.get_string('quick-settings-adaptive-text-preference'));
+        });
         connectSetting('quick-settings-sample-interval-ms', () => {
             this._adaptiveConfig.sampleIntervalMs = this._settings.get_int('quick-settings-sample-interval-ms');
         });
@@ -384,6 +388,7 @@ export class QuickSettingsManager {
             enabled: this._settings.get_boolean('quick-settings-enable-adaptive-text-color'),
             samplePerElement: SAMPLE_PER_ELEMENT,
             sampleIntervalMs: this._settings.get_int('quick-settings-sample-interval-ms'),
+            preference: sanitizeColorPreference(this._settings.get_string('quick-settings-adaptive-text-preference')),
         };
         // ── 1. bgActor: full monitor, no effect ──────────────────────────────────
         // Create the main background actor that covers the full monitor
@@ -617,6 +622,7 @@ export class QuickSettingsManager {
             enabled: this._settings.get_boolean('quick-settings-enable-adaptive-text-color'),
             samplePerElement: SAMPLE_PER_ELEMENT,
             sampleIntervalMs: this._settings.get_int('quick-settings-sample-interval-ms'),
+            preference: sanitizeColorPreference(this._settings.get_string('quick-settings-adaptive-text-preference')),
         };
         // ── 1. bgActor: full monitor, no effect ──────────────────────────────────
         this.bgActor = new UnpickableActor();
@@ -1934,7 +1940,7 @@ export class QuickSettingsManager {
     // ── Spring animation (QuickSettings-specific) ──────────────────────────────
     _startAnimation(targetValue) {
         if (this._tickId !== 0) {
-            GLib.source_remove(this._tickId);
+            removeFrameTicker(this._tickId);
             this._tickId = 0;
         }
         if (!this._enableAnimation) {
@@ -1957,7 +1963,10 @@ export class QuickSettingsManager {
         this._springPos.target = targetValue;
         if (this._tickId === 0) {
             let lastTime = GLib.get_monotonic_time();
-            this._tickId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, this._animationInterval, () => {
+            // [PERF C1] Stepped by the frame clock, once per frame at most — see
+            // addFrameTicker(). The spring itself sub-steps, so the motion is as
+            // fine as the old 1ms timer's while the actors are written once a frame.
+            this._tickId = addFrameTicker(() => {
                 if (!this.bgActor || !this.targetActor) {
                     this._tickId = 0;
                     return GLib.SOURCE_REMOVE;
@@ -1967,8 +1976,8 @@ export class QuickSettingsManager {
                 lastTime = currentTime;
                 let isClosing = (this._springScale.target === 0);
                 let dt = elapsedMs / 1000;
-                if (dt > 0.033)
-                    dt = 0.033;
+                if (dt > 0.066)
+                    dt = 0.066; // [PERF C1] covers a 20fps cap; the physics sub-steps, so no blow-up
                 let stopped = false;
                 let s, p;
                 if (isClosing) {
@@ -2029,7 +2038,7 @@ export class QuickSettingsManager {
                     return GLib.SOURCE_REMOVE;
                 }
                 return GLib.SOURCE_CONTINUE;
-            });
+            }, normalizeAnimationIntervalMs(this._animationInterval));
         }
     }
     // ── Submenu position fix (QuickSettings-specific) ──────────────────────────

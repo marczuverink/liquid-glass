@@ -134,7 +134,7 @@ export function setPositionIfChanged(actor: any, x: number, y: number): boolean 
  * setOpacityIfChanged(): un-culling drops the cached value so the write
  * cannot be skipped.
  */
-export function setCloneCulled(actor: any, culled: boolean, why?: string): void {
+export function setCloneCulled(actor: any, culled: boolean, why?: string | (() => string)): void {
   if (!actor) return;
   const wasCulled = !!actor._lgCulled;
   if (wasCulled === !!culled) return;
@@ -149,7 +149,8 @@ export function setCloneCulled(actor: any, culled: boolean, why?: string): void 
   if (why) {
     let name = '(?)';
     try { name = actor.get_name?.() || '(unnamed)'; } catch (_) { }
-    utilsLog(`[Liquid Glass][cull] ${culled ? 'CULL ' : 'SHOW '} "${name}" ${why}`);
+    const text = typeof why === 'function' ? why() : why;
+    utilsLog(`[Liquid Glass][cull] ${culled ? 'CULL ' : 'SHOW '} "${name}" ${text}`);
   }
   if (culled) {
     actor.opacity = 0;

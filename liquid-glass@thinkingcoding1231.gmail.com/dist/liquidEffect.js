@@ -67,6 +67,8 @@ export const LiquidEffect = GObject.registerClass({
         this._blurRuns = 0;
         this._blurSkips = 0;
         this._recaptureSerial = 0;
+        this._liveGeometryHook = null;
+        this._inLiveGeometry = false;
         ensureFrameSerialHook();
         this._diagFirstPaintLogged = false;
         this._extensionPath = extensionPath;
@@ -166,6 +168,18 @@ export const LiquidEffect = GObject.registerClass({
             }
         }
         // ── Wait for async shaders ──────────────────────────────────────────────
+        if (this._liveGeometryHook) {
+            this._inLiveGeometry = true;
+            try {
+                this._liveGeometryHook();
+            }
+            catch (e) {
+                this._logger?.error(`[Liquid Glass] Live geometry hook failed: ${e}`);
+            }
+            finally {
+                this._inLiveGeometry = false;
+            }
+        }
         if (!this._shadersLoaded) {
             super.vfunc_paint_target(_paintNode, paintContext);
             return;
@@ -530,6 +544,7 @@ export const LiquidEffect = GObject.registerClass({
     }
     // ─── Public API (compatible with the previous ShaderEffect-based interface) ──
     cleanup() {
+        this._liveGeometryHook = null;
         // The frame-serial hook is one signal shared by every instance; drop it
         // once nothing is left to use it, so disabling the extension leaves
         // nothing connected to the stage.
@@ -746,6 +761,9 @@ export const LiquidEffect = GObject.registerClass({
     // byte-for-byte; only flip to true to test the combined effect. Flip
     // this one line, nothing else, to compare.
     static DRAG_PERF_MODE_ENABLED = true;
+    setLiveGeometryHook(fn) {
+        this._liveGeometryHook = fn;
+    }
     beginBatch() {
         if (!LiquidEffect.DRAG_PERF_MODE_ENABLED)
             return;
@@ -770,6 +788,8 @@ export const LiquidEffect = GObject.registerClass({
     // sites transparently goes through here without needing to change any
     // of them individually) the inherited Clutter.Effect.queue_repaint().
     queue_repaint() {
+        if (this._inLiveGeometry)
+            return;
         if (LiquidEffect.DRAG_PERF_MODE_ENABLED && this._batchDepth) {
             this._batchDirty = true;
             return;
