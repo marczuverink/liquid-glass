@@ -53,7 +53,7 @@ function fixture(monitor) {
   target.set_position(monitor.x + 300, monitor.y + monitor.height - 90);
   class Effect {
     setPadding() {} setTintColor() {} setTintStrength() {} setCornerRadius() {}
-    setBrightness() {} setContrast() {} setSaturation() {} setBlurRadius() {}
+    setBrightness() {} setContrast() {} setSaturation() {} setBlurRadius() {} setLiveGeometryHook() {}
     setIsDock() {} setShadowMaxRadius() {} setResolution() {} setGlassGeometry() {}
     cleanup() { this.cleaned = true; }
   }
