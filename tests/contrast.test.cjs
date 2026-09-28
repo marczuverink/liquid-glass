@@ -5,12 +5,13 @@ const path = require('node:path');
 const root = path.join(__dirname, '../liquid-glass@thinkingcoding1231.gmail.com/dist');
 function load(file, exports, bindings = {}) {
   const code = fs.readFileSync(path.join(root, file), 'utf8')
-    .replace(/^import[\s\S]*?;\n/gm, '').replace(/export (class|const) /g, '$1 ');
+    .replace(/^import[\s\S]*?;\n/gm, '').replace(/export (class|const|function) /g, '$1 ');
   return new Function(...Object.keys(bindings), `${code}\nreturn {${exports}};`)(...Object.values(bindings));
 }
 const { StageContrastSampler: Sampler, AdaptiveContrastConfig: config, _getActorRect } = load(
   'contrastSampler.js', 'StageContrastSampler, AdaptiveContrastConfig, _getActorRect', {
     Shell: { Screenshot: class {} }, getTransformedRect: actor => actor.rect,
+    GLib: { get_monotonic_time: () => 0 },
     global: { stage: { width: 3840, height: 2160 } },
   });
 const linear = byte => byte / 255 <= 0.04045 ? byte / 255 / 12.92 : ((byte / 255 + 0.055) / 1.055) ** 2.4;
