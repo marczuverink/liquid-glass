@@ -261,7 +261,7 @@ function _readSignature(paintSignature) {
 function _skipKey(rects, config) {
     return rects
         .map(r => `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}`)
-        .join(';') + `|${config.samplePerElement ? 'e' : 'm'}|${config.lightTextColor}|${config.darkTextColor}`;
+        .join(';') + `|${config.samplePerElement ? 'e' : 'm'}|${config.preference ?? 'auto'}|${config.lightTextColor}|${config.darkTextColor}`;
 }
 function _pixelLuminance(data, idx, channels) {
     if (channels <= 3)

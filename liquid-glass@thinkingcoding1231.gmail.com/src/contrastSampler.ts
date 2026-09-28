@@ -292,7 +292,7 @@ function _readSignature(paintSignature?: () => number): number | null {
 function _skipKey(rects: SampleRect[], config: typeof AdaptiveContrastConfig): string {
   return rects
     .map(r => `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}`)
-    .join(';') + `|${config.samplePerElement ? 'e' : 'm'}|${config.lightTextColor}|${config.darkTextColor}`;
+    .join(';') + `|${config.samplePerElement ? 'e' : 'm'}|${config.preference ?? 'auto'}|${config.lightTextColor}|${config.darkTextColor}`;
 }
 
 type LuminanceShot = { data: ArrayLike<number>, width: number, height: number, stride: number, channels: number, step: number };

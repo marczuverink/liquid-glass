@@ -408,6 +408,29 @@ test('an unrepainted glass skips the capture once the decision has settled', asy
   assert.equal(captures, settled + 1);
 });
 
+for (const samplePerElement of [false, true]) {
+  test(`changing preferred text colour resamples idle glass (per element: ${samplePerElement})`, async () => {
+    const sampler = new Sampler();
+    const root = {mapped: true, rect: [0, 0, 300, 400]};
+    const rows = [{mapped: true, rect: [10, 10, 100, 20]}];
+    const settings = {...config, samplePerElement, preference: 'light'};
+    let captures = 0;
+    sampler.sampleLuminance = async () => { captures++; return 0.19; };
+    const choose = () => sampler.chooseColorsForActors(rows, settings, root, () => 7);
+    assert.equal((await choose()).get(rows[0]), config.lightTextColor);
+    for (let i = 0; i < 20; i++) await choose();
+    const settled = captures;
+    assert.equal((await choose()).size, 0);
+    assert.equal(captures, settled);
+
+    settings.preference = 'dark';
+    assert.equal((await choose()).get(rows[0]), config.darkTextColor);
+    assert.equal(captures, settled + 1);
+    settings.preference = 'light';
+    assert.equal((await choose()).get(rows[0]), config.lightTextColor);
+  });
+}
+
 test('the skip baseline is dropped when the region, config or screen changes', async () => {
   const sampler = new Sampler();
   const root = { mapped: true, rect: [0, 0, 300, 400] };
