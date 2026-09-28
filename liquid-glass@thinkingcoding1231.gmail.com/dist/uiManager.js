@@ -209,12 +209,32 @@ export class UIManager {
             this._applyEffect();
         }
     }
-    _applySystemAccentColor() {
-        if (!this._ownsAccentCss || !this.targetActor)
-            return;
+    /**
+     * The accent colour and its foreground as [background, foreground] hex.
+     *
+     * [FIX] Asked of St directly, not read off a themed dummy. The dummy
+     * (`.calendar > .calendar-day.calendar-today`) only answers with the accent
+     * when the shell theme paints today in it unconditionally, as Adwaita does.
+     * MacTahoe paints an unselected today in `rgba(222, 222, 222, 0.1)` and
+     * keeps the accent for `:selected`, so the dummy read back #dedede (its
+     * alpha dropped) and the rule below then forced that pale grey onto today
+     * in every state — a white circle instead of the accent. Which answer came
+     * back depended on whether the user theme had been loaded yet when this
+     * ran. The dummy stays as the fallback for a shell without
+     * get_accent_color(), marked :selected so such themes resolve the accent.
+     */
+    _resolveAccentColors() {
+        try {
+            const [accent, accentFg] = St.ThemeContext.get_for_stage(global.stage).get_accent_color();
+            if (accent && accentFg)
+                return [this._rgbToHex(accent.red, accent.green, accent.blue),
+                    this._rgbToHex(accentFg.red, accentFg.green, accentFg.blue)];
+        }
+        catch { }
         // 1. 親要素と子要素を作成して、GNOMEテーマが要求する正しい階層を再現
         const parent = new UnpickableWidget({ style_class: 'calendar' });
         const child = new UnpickableWidget({ style_class: 'calendar-day calendar-today' });
+        child.add_style_pseudo_class('selected');
         parent.add_child(child);
         // 2. UIグループに追加してスタイルを強制計算させる
         Main.layoutManager.uiGroup.add_child(parent);
@@ -226,16 +246,22 @@ export class UIManager {
         Main.layoutManager.uiGroup.remove_child(parent);
         parent.destroy();
         // 5. HEXに変換
-        const colorStr = this._rgbToHex(bgColor.red, bgColor.green, bgColor.blue);
+        return [this._rgbToHex(bgColor.red, bgColor.green, bgColor.blue), '#ffffff'];
+    }
+    _applySystemAccentColor() {
+        if (!this._ownsAccentCss || !this.targetActor)
+            return;
+        const [colorStr, fgStr] = this._resolveAccentColors();
         // console.log(`[Liquid Glass] Set system accent color to ${colorStr}`);
         const cssContent = `
       .liquid-glass-menu-root .calendar-today,
       .liquid-glass-menu-root .calendar-today:hover,
       .liquid-glass-menu-root .calendar-today:active,
       .liquid-glass-menu-root .calendar-today:checked,
+      .liquid-glass-menu-root .calendar-today:selected,
       .liquid-glass-menu-root .calendar-today:focus {
         background-color: ${colorStr} !important;
-        color: white !important;
+        color: ${fgStr} !important;
       }
     `;
         try {
