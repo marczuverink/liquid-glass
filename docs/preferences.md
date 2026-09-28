@@ -1,9 +1,11 @@
 # Preferences
 
-The preferences window has three pages: Appearance, Effects and Advanced.
-Appearance has seven shared controls, rather than repeating the same controls for
-each surface. Low-level offsets, spring parameters and sampling intervals are no
-longer exposed in the window. Existing schema keys remain available for compatibility.
+The preferences window has three pages: Appearance, Effects and Rendering.
+Settings view switches between Simple (the default, seven shared appearance controls)
+and Advanced (individual surfaces, offsets, springs, sampling and optical controls).
+The view is remembered independently of the effects: switching never applies a preset
+or resets existing values. Advanced surface controls are created on demand and reused.
+Both views use short English labels and native libadwaita controls.
 
 Opening preferences must not write any settings. Different existing values are
 shown as Custom and are retained until an explicit edit. A shared edit updates only
@@ -14,6 +16,8 @@ Smooth motion sets critically damped springs; it does not run automatically.
 `preferences/pages.js` defines the visible choices. `model.js` defines which existing
 keys those choices own. `controls.js` owns grouped writes, mixed-value readouts and
 subscriptions. `windows.js` owns the application picker and its D-Bus lifetime.
+`advanced-model.js` describes individual controls; `advanced.js` builds the advanced
+view and `panel-menus.js` manages switches for detected top bar menus.
 The preferences entry point only loads this window; it does not import Shell modules.
 
 Verification:

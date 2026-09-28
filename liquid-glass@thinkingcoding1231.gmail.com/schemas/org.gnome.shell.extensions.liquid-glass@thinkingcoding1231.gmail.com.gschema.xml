@@ -2,6 +2,12 @@
 <schemalist>
   <schema id="org.gnome.shell.extensions.liquid-glass@thinkingcoding1231.gmail.com" path="/org/gnome/shell/extensions/liquid-glass/">
 
+    <key name="preferences-advanced" type="b">
+      <default>false</default>
+      <summary>Show advanced preferences</summary>
+      <description>Choose between shared controls and individual surface settings.</description>
+    </key>
+
     <key name="enable-dock-glass" type="b">
       <default>true</default>
       <summary>Enable glass effect for Dock</summary>

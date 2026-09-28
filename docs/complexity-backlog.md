@@ -1,6 +1,6 @@
 # Complexity backlog
 
-SonarJS (`eslint-plugin-sonarjs` 4.2.1, `recommended`) no longer reports any function over the cognitive-complexity limit of 15. What is left is listed below.
+SonarJS (`eslint-plugin-sonarjs` 4.2.1) no longer reports any function over the cognitive-complexity limit of 15 in `src/**/*.ts`. The earlier scan did not include `preferences/**/*.js`; checking that directory finds `showWindows` in `preferences/windows.js` at 23. What is left is listed below.
 
 ## Rules for this work
 
@@ -22,6 +22,7 @@ SonarJS is not a project dependency. To run it without touching the repo, instal
 
 ## Open items
 
+- **Preferences window picker.** `showWindows` in `preferences/windows.js` has cognitive complexity 23. This predates the Simple/Advanced view and was outside the original TypeScript scan. The new preferences functions stay at or below 15.
 - **Per-frame allocations.** The geometry helpers in `uiManager.ts` and `quickSettingsManager.ts` (`_measureMenu`/`_measurePanel`, the origin and scale tuples, `ToggleRegionLayout`, the submenu `gap` object) allocate on every animation tick. Splitting `LiquidEffect.vfunc_paint_target` added a `PaintCapture` object, the `_blurReuse` result and several destructurings on every paint of every glass. The per-frame `DockBounds` objects in the dock geometry and the tuple arrays passed to `_syncCaptureOffset` in `applicationManager.ts` are the same problem. Measure GC pressure on a live session first; if it shows, reuse a scratch object on the instance.
 - **Frame-sync loop copies.** `QuickSettingsManager` uses `_startFrameSync`/`_stopFrameSync`/`_buildClones`, but `uiManager.ts`, `notificationManager.ts`, `osdManager.ts` and `dockManager.ts` still carry their own BEFORE_REDRAW loop and exclusion scan. The copies have drifted (`child.name` vs `child.get_name?.()`, `?? 0` or not, freeze re-queue vs return). Move that code into one shared helper next to `animation/frameSync.ts`.
 - **Bounds helpers copied three times.** `UIManager._applyGlassBounds`, `QuickSettingsManager._applyPanelBounds` and `_applyToggleBounds` repeat the same transition removal, resize and padded clip sequence; `_resolveMenuOrigin`/`_resolvePanelOrigin`, `_applyGlassScale` and `_syncCaptureLayers` are also duplicated between the two managers. The copies already differ (`liquidBox.remove_clip()`, the order of `refresh` and `syncGlassCaptureClip`), so check each difference on a live session before merging them into one helper.

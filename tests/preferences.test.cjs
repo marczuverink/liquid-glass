@@ -5,7 +5,7 @@ const path = require('node:path');
 const {createModuleLoader} = require('./helpers/load-module.cjs');
 const root = path.join(__dirname, '../liquid-glass@thinkingcoding1231.gmail.com');
 
-function fixture(overrides = {}) {
+function fixture(overrides = {}, dbusResponses = []) {
   const values = new Map();
   const types = new Map();
   const xml = fs.readFileSync(path.join(root, 'schemas/org.gnome.shell.extensions.liquid-glass@thinkingcoding1231.gmail.com.gschema.xml'), 'utf8');
@@ -55,23 +55,39 @@ function fixture(overrides = {}) {
     get selected() { return this._selected; }
     set value(value) { this._value = value; this.emit('notify::value'); }
     get value() { return this._value; }
+    set active(value) { this._active = value; this.emit('notify::active'); }
+    get active() { return this._active; }
   }
   class RGBA { parse() { this.red = this.green = this.blue = 1; } }
   const Adw = Object.fromEntries(['PreferencesPage', 'PreferencesGroup', 'SwitchRow', 'ComboRow', 'SpinRow', 'ActionRow', 'EntryRow', 'ExpanderRow'].map(name => [name, class extends Widget {}]));
   const Gtk = {Adjustment: Widget, ColorDialogButton: Widget, ColorDialog: Widget, Button: Widget, ListBox: Widget,
     StringList: {new: titles => titles}, Align: {CENTER: 0}, SelectionMode: {NONE: 0}};
-  const load = createModuleLoader({Adw, Gtk, Gio: {Settings, SettingsBindFlags: {GET: 1, DEFAULT: 0}}, Gdk: {RGBA}, GLib: {Variant}});
+  const dbusCalls = [];
+  const Gio = {Settings, SettingsBindFlags: {GET: 1, DEFAULT: 0}, DBusCallFlags: {NONE: 0},
+    Cancellable: class { cancel() { this.cancelled = true; } },
+    DBus: {session: {
+      call(_name, _path, _interface, method, _args, _type, _flags, _timeout, cancellable, callback) {
+        dbusCalls.push(method);
+        const response = dbusResponses.shift();
+        queueMicrotask(() => callback({call_finish() {
+          if (cancellable.cancelled) throw Error('Cancelled');
+          if (response instanceof Error) throw response;
+          return {deep_unpack: () => [response]};
+        }}, {}));
+      },
+    }}};
+  const load = createModuleLoader({Adw, Gtk, Gio, Gdk: {RGBA}, GLib: {Variant}});
   const settings = new Settings(); const window = new Widget();
   const {buildPreferences} = load(path.join(root, 'preferences/pages.js'));
   const controls = buildPreferences(window, settings);
-  return {settings, window, controls, writes, values, widgets, load, listeners,
+  return {settings, window, controls, writes, values, widgets, load, listeners, dbusCalls,
     row: title => widgets.find(widget => widget.title === title)};
 }
 
 test('preferences expose three pages and seven shared appearance controls', () => {
   const f = fixture();
-  assert.deepEqual(f.window.children.map(page => page.title), ['Appearance', 'Effects', 'Advanced']);
-  assert.equal(f.window.children[0].children.flatMap(group => group.children).length, 7);
+  assert.deepEqual(f.window.children.map(page => page.title), ['Appearance', 'Effects', 'Rendering']);
+  assert.equal(f.window.children[0].children.filter(group => group.title !== 'Settings' && group.visible !== false).flatMap(group => group.children).length, 7);
   assert.equal(f.widgets.filter(widget => /Spring|Sample Interval|X Offset|Y Offset/.test(widget.title ?? '')).length, 0);
   assert.equal(f.window.search_enabled, true);
 });
@@ -144,4 +160,62 @@ test('closing disconnects manually owned settings subscriptions', () => {
   f.window.emit('close-request');
   assert.ok(ownedIds.every(id => !f.listeners.has(id)));
   f.controls.dispose();
+});
+
+test('switching preference views preserves effect settings and reuses advanced widgets', () => {
+  const f = fixture({'dock-blur-radius': 3, 'menu-blur-radius': 20, 'menu-scale': 0.83});
+  const before = new Map(f.values);
+  assert.deepEqual(f.row('Settings view').model, ['Simple', 'Advanced']);
+  f.row('Settings view').selected = 1;
+  const count = f.widgets.length;
+  assert.equal(f.row('Glass').visible, false);
+  f.row('Settings view').selected = 0;
+  assert.equal(f.row('Glass').visible, true);
+  f.row('Settings view').selected = 1;
+  assert.equal(f.widgets.length, count);
+  for (const [key, value] of before) if (key !== 'preferences-advanced') assert.deepEqual(f.values.get(key), value, key);
+  assert.ok(f.writes.every(patch => Object.keys(patch).join() === 'preferences-advanced'));
+});
+
+test('persisted advanced view opens without writes and exposes every surface', () => {
+  const f = fixture({'preferences-advanced': true});
+  const selector = f.row('Surface');
+  for (let i = 0; i < selector.model.length; i++) selector.selected = i;
+  assert.equal(f.writes.length, 0);
+  const ownedIds = [...f.controls._ids];
+  f.controls.dispose();
+  assert.ok(ownedIds.every(id => !f.listeners.has(id)));
+});
+
+test('advanced surface edit changes only its own setting', () => {
+  const f = fixture({'preferences-advanced': true});
+  f.row('Surface').selected = 1;
+  const group = f.window.children[0].children.find(group => group.title === 'Calendar');
+  group.children.find(row => row.title === 'Blur').value = 17;
+  assert.deepEqual(f.writes, [{'menu-blur-radius': 17}]);
+  assert.match(f.row('Blur').subtitle, /Custom/);
+  f.row('Surface').selected = 0;
+  assert.equal(group.visible, false);
+});
+
+test('detected menus preserve exclusions and support legacy Vitals controls', () => {
+  const f = fixture({'preferences-advanced': true, 'detected-extra-menus': ['vitalsMenu', 'exampleMenu'],
+    'disabled-extra-menus': ['missingMenu', 'exampleMenu']});
+  assert.equal(f.row('example Menu').active, false);
+  f.row('example Menu').active = true;
+  assert.deepEqual(f.values.get('disabled-extra-menus'), ['missingMenu']);
+  f.row('Vitals').active = false;
+  assert.equal(f.values.get('enable-vitals-menu-glass'), false);
+  f.controls.write({'detected-extra-menus': []});
+  assert.equal(f.row('No additional menus detected').visible, true);
+});
+
+test('advanced groups sit above the always-visible groups on each page', () => {
+  const f = fixture({'preferences-advanced': true});
+  const titles = name => f.window.children.find(page => page.title === name).children
+    .filter(group => group.visible !== false).map(group => group.title);
+  const effects = titles('Effects'), rendering = titles('Rendering');
+  assert.ok(effects.indexOf('Individual effects') < effects.indexOf('Application windows'), effects.join(' | '));
+  assert.ok(rendering.indexOf('Blur') < rendering.indexOf('Compatibility'), rendering.join(' | '));
+  assert.ok(rendering.indexOf('Shadows') < rendering.indexOf('Troubleshooting'), rendering.join(' | '));
 });

@@ -59,15 +59,15 @@ export class PreferenceControls {
     return row;
   }
 
-  choice(group, title, choices, subtitle = '') {
+  choice(group, title, choices, subtitle = '', custom = true) {
     const row = new Adw.ComboRow({title, subtitle,
-      model: Gtk.StringList.new([...choices.map(choice => choice.title), 'Custom'])});
+      model: Gtk.StringList.new([...choices.map(choice => choice.title), ...(custom ? ['Custom'] : [])])});
     group.add(row);
     let syncing = false;
     const refresh = () => {
       syncing = true;
       const index = choices.findIndex(choice => matches(this.settings, choice.patch));
-      row.selected = index < 0 ? choices.length : index;
+      row.selected = index < 0 ? (custom ? choices.length : 0) : index;
       syncing = false;
     };
     row.connect('notify::selected', () => {

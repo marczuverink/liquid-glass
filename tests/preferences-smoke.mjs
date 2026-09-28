@@ -35,6 +35,25 @@ for (const surface of ['dock', 'menu', 'panel-menu', 'notification', 'quick-sett
 find('Animations').selected = 1;
 if (settings.get_double('menu-spring-damping') !== 22) throw Error('Smooth motion did not apply');
 if (settings.get_double('menu-scale') !== 0.83) throw Error('An unrelated setting changed');
+const effectsSnapshot = () => JSON.stringify(schema.list_keys().sort().filter(key => key !== 'preferences-advanced')
+  .map(key => [key, settings.get_value(key).print(true)]));
+const beforeMode = effectsSnapshot();
+find('Settings view').selected = 1;
+if (effectsSnapshot() !== beforeMode) throw Error('Switching mode changed effect values');
+const groupTitles = [...walk(window)].filter(widget => widget instanceof Adw.PreferencesGroup && widget.visible).map(widget => widget.title);
+for (const [first, later] of [['Individual effects', 'Application windows'], ['Shadows', 'Compatibility'], ['Shadows', 'Troubleshooting']]) {
+  if (groupTitles.lastIndexOf(first) > groupTitles.indexOf(later)) throw Error(`${first} is below ${later}: ${groupTitles.join(' | ')}`);
+}
+const surface = [...walk(window)].find(row => row instanceof Adw.ComboRow && row.title === 'Surface');
+for (let i = 0; i < 8; i++) surface.selected = i;
+surface.selected = 1;
+const calendar = [...walk(window)].find(widget => widget instanceof Adw.PreferencesGroup && widget.title === 'Calendar');
+const calendarBlur = [...walk(calendar)].find(widget => widget instanceof Adw.SpinRow && widget.title === 'Blur');
+calendarBlur.value = 17;
+if (settings.get_int('menu-blur-radius') !== 17 || settings.get_int('dock-blur-radius') !== 12)
+  throw Error('Individual blur changed the wrong surface');
+find('Settings view').selected = 0;
+if (!find('Blur').subtitle.includes('Custom')) throw Error('Simple view lost individual differences');
 controls.dispose();
 window.destroy();
-print(JSON.stringify({nativeGtk: 'passed', rows: rows.length, openingWrites: 0, sharedBlur: 'passed', smoothMotion: 'passed'}));
+print(JSON.stringify({nativeGtk: 'passed', rows: rows.length, openingWrites: 0, sharedBlur: 'passed', smoothMotion: 'passed', advanced: 'passed'}));
