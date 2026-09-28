@@ -61,8 +61,8 @@ export function buildPreferences(window, settings) {
   controls.number(rendering, 'Edge light', ['glass-rim-intensity'], 0, 5, 0.1);
   controls.choice(rendering, 'Shadows', [
     {title: 'Off', patch: {'shadow-intensity': 0}},
-    {title: 'Soft', patch: {'shadow-radius': 24, 'shadow-intensity': 0.2}},
-    {title: 'Strong', patch: {'shadow-radius': 30, 'shadow-intensity': 0.5}},
+    {title: 'Soft', patch: {'shadow-radius': 50, 'shadow-intensity': 0.22}},
+    {title: 'Strong', patch: {'shadow-radius': 50, 'shadow-intensity': 0.5}},
   ]);
   controls.number(rendering, 'Edge shading', ['glass-ao-intensity'], 0, 1, 0.05);
 

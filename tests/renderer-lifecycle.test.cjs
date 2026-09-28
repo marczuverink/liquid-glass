@@ -60,6 +60,33 @@ test('geometry clipping remains conservative for shadows, blur reach and multipl
   assert.ok(geometry.captureClip(15), 'capture clipping is independent of blur clipping');
 });
 
+test('refraction margins cover the shader sampling reach on both axes and nothing more', () => {
+  const { GlassGeometry } = loadModule(path.join(dist, 'rendering/geometry.js'));
+  const reach = GlassGeometry.EDGE_LENS_REACH + GlassGeometry.EDGE_FOOTPRINT_SPREAD;
+  const margins = extra => {
+    const uniforms = new Map(Object.entries({ resolution_x: 3840, resolution_y: 2160,
+      padding: 0, shadow_radius: 0, shadow_max_radius: 0, shadow_intensity: 0,
+      edge_smoothing: 0.5, displacement_scale: 10.5, ior: 2.4, chroma_strength: 0, ...extra }));
+    const geometry = new GlassGeometry(uniforms);
+    geometry.rect = [1800, 1000, 120, 80];
+    const blur = geometry.blurRect(), capture = geometry.captureClip(0);
+    return { blurX: 1800 - blur[0], blurY: 1000 - blur[1], captureX: 1800 - capture[0], captureY: 1000 - capture[1] };
+  };
+  const base = margins({});
+  assert.equal(base.captureX, base.captureY, 'the same capture margin horizontally and vertically');
+  assert.ok(base.blurX >= reach && base.blurY >= reach, `blur margin ${base.blurX}x${base.blurY} covers ${reach}`);
+  assert.ok(base.captureX >= reach, `capture margin ${base.captureX} covers ${reach}`);
+  assert.deepEqual(margins({ ior: 1.2, displacement_scale: 200 }), base, 'refraction settings cannot grow the margin past the shader clamp');
+  assert.ok(margins({ chroma_strength: 8 }).captureX >= base.captureX + 8 - 1, 'chroma offset is covered');
+});
+
+test('the lens reach constant matches the shader clamp', () => {
+  const { GlassGeometry } = loadModule(path.join(dist, 'rendering/geometry.js'));
+  const shader = require('node:fs').readFileSync(path.join(dist, '../shaders/glass.frag'), 'utf8');
+  assert.equal(Number(shader.match(/#define EDGE_LENS_REACH ([\d.]+)/)[1]), GlassGeometry.EDGE_LENS_REACH);
+  assert.match(shader, /min\(footprintPx, 64\.0\) \* 0\.5/, 'footprint spread still caps at 32 px');
+});
+
 test('invalid, empty and almost-fullscreen geometry falls back to the full capture', () => {
   const { GlassGeometry } = loadModule(path.join(dist, 'rendering/geometry.js'));
   const uniforms = new Map();

@@ -45,11 +45,12 @@ function materialFixture(settings) {
   return { state, material, events };
 }
 
-test('material fallback preserves the old optical defaults without settings', () => {
+test('material fallback uses the macOS 27 optical defaults without settings', () => {
   const { state, material } = materialFixture(undefined);
   for (const [name, value] of Object.entries({ resolution_x: 0, pointer_x: -100, corner_radius: 60,
     padding: 20, shadow_max_radius: 180, surface_light_enabled: 1, multi_region_mode: 0,
-    early_exit_enabled: 1, displacement_scale: 78.5, ior: 2.4, shadow_radius: 8, ao_radius: 7.5 }))
+    early_exit_enabled: 1, edge_taps_enabled: 1, blur_tex_w: 0, displacement_scale: 10.5, max_z: 88,
+    ior: 2.4, shadow_radius: 50, ao_radius: 1 }))
     assert.equal(state.values.get(name), value, name);
   assert.equal(material.setAnimationScale(0.5), false);
   material.clear();

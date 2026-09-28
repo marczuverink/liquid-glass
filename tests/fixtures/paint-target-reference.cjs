@@ -175,6 +175,8 @@ module.exports = ({ Clutter, Cogl, GLib, computeCaptureLayout, frameClock, confi
         this._uniforms.set('blur_rect_w', activeRect ? activeRect[2] : 0.0);
         this._uniforms.set('blur_rect_h', activeRect ? activeRect[3] : 0.0);
         const layer0Tex = haveBlur ? this._blur.result : effectiveTex;
+        this._uniforms.set('blur_tex_w', layer0Tex.get_width());
+        this._uniforms.set('blur_tex_h', layer0Tex.get_height());
         compPipeline.set_layer_texture(0, layer0Tex);
         configureSamplerLayer(compPipeline, 0);
         const layer0UV = haveBlur ? [0, 0, 1, 1] : inputUV;
@@ -243,6 +245,7 @@ module.exports = ({ Clutter, Cogl, GLib, computeCaptureLayout, frameClock, confi
                     isDock: this._uniforms.values.get('isDock'),
                     multiRegion: this._uniforms.values.get('multi_region_mode'),
                     earlyExit: this._uniforms.values.get('early_exit_enabled'),
+                    edgeTaps: this._uniforms.values.get('edge_taps_enabled'),
                     dockRect: [
                         this._uniforms.values.get('dock_x'),
                         this._uniforms.values.get('dock_y'),

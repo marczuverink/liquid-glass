@@ -305,6 +305,8 @@ export const LiquidEffect = GObject.registerClass({
         this._uniforms.set('blur_rect_w', activeRect ? activeRect[2] : 0.0);
         this._uniforms.set('blur_rect_h', activeRect ? activeRect[3] : 0.0);
         const layer0Tex = haveBlur ? this._blur.result : effectiveTex;
+        this._uniforms.set('blur_tex_w', layer0Tex.get_width());
+        this._uniforms.set('blur_tex_h', layer0Tex.get_height());
         compPipeline.set_layer_texture(0, layer0Tex);
         configureSamplerLayer(compPipeline, 0);
         const layer0UV = haveBlur ? [0, 0, 1, 1] : inputUV;
@@ -381,6 +383,7 @@ export const LiquidEffect = GObject.registerClass({
                     isDock: this._uniforms.values.get('isDock'),
                     multiRegion: this._uniforms.values.get('multi_region_mode'),
                     earlyExit: this._uniforms.values.get('early_exit_enabled'),
+                    edgeTaps: this._uniforms.values.get('edge_taps_enabled'),
                     dockRect: [
                         this._uniforms.values.get('dock_x'),
                         this._uniforms.values.get('dock_y'),
@@ -448,6 +451,10 @@ export const LiquidEffect = GObject.registerClass({
     setCompositeRectEnabled(enabled) {
         this._geometry.compositeEnabled = enabled;
         this.queue_repaint();
+    }
+    setEdgeTapsEnabled(enabled) {
+        this._uniforms.set('edge_taps_enabled', enabled ? 1.0 : 0.0);
+        this._queueRepaintIfDirty();
     }
     setEarlyExitEnabled(enabled) {
         this._uniforms.set('early_exit_enabled', enabled ? 1.0 : 0.0);

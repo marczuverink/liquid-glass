@@ -526,6 +526,19 @@ function _registerGlassDebugHooks() {
             console.log(msg);
             return msg;
         },
+        edgeTaps: (enabled) => {
+            let n = 0;
+            for (const fx of _liveEffects) {
+                try {
+                    fx.setEdgeTapsEnabled(enabled);
+                    n++;
+                }
+                catch { }
+            }
+            const msg = `[Liquid Glass] edge footprint taps ${enabled ? 'ENABLED' : 'DISABLED'} on ${n} instance(s)`;
+            console.log(msg);
+            return msg;
+        },
         earlyExit: (enabled) => {
             let n = 0;
             for (const fx of _liveEffects) {

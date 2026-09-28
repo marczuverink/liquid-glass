@@ -219,3 +219,8 @@ test('advanced groups sit above the always-visible groups on each page', () => {
   assert.ok(rendering.indexOf('Blur') < rendering.indexOf('Compatibility'), rendering.join(' | '));
   assert.ok(rendering.indexOf('Shadows') < rendering.indexOf('Troubleshooting'), rendering.join(' | '));
 });
+
+test('a fresh install shows the default shadow as the Soft preset, not Custom', () => {
+  const f = fixture();
+  assert.equal(f.row('Shadows').selected, 1);
+});
