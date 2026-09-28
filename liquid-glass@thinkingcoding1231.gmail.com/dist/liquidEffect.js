@@ -305,8 +305,28 @@ export function noteStrandEntry(label, detail) {
 // for a fault which is now mitigated has no business running on every desktop.
 // global._lgGlass.ring(true) arms it; Ctrl+Alt+L then flushes whatever it holds.
 let _ringArmed = false;
+let _ringSamplerEnabled = false;
+let _ringSamplerId = 0;
+let _ringSamplerInterval = 50;
+function syncGlassRingSampler() {
+    if (!_ringArmed || !_ringSamplerEnabled) {
+        if (_ringSamplerId)
+            GLib.Source.remove(_ringSamplerId);
+        _ringSamplerId = 0;
+    }
+    else if (!_ringSamplerId) {
+        _ringSamplerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT_IDLE, _ringSamplerInterval, () => {
+            try {
+                _ringSampleOnce();
+            }
+            catch (_) { }
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+}
 export function setGlassRingArmed(armed) {
     _ringArmed = !!armed;
+    syncGlassRingSampler();
     if (!_ringArmed) {
         _ring.length = 0;
         _ringLast = new Map();
@@ -316,17 +336,14 @@ export function setGlassRingArmed(armed) {
 export function isGlassRingArmed() {
     return _ringArmed;
 }
-/** Starts the sampler. Returns the GLib source id so disable() can stop it. */
 export function startGlassRingSampler(intervalMs = 50) {
-    return GLib.timeout_add(GLib.PRIORITY_DEFAULT_IDLE, intervalMs, () => {
-        if (!_ringArmed)
-            return GLib.SOURCE_CONTINUE;
-        try {
-            _ringSampleOnce();
-        }
-        catch (_) { /* never let this kill the source */ }
-        return GLib.SOURCE_CONTINUE;
-    });
+    _ringSamplerInterval = intervalMs;
+    _ringSamplerEnabled = true;
+    syncGlassRingSampler();
+}
+export function stopGlassRingSampler() {
+    _ringSamplerEnabled = false;
+    setGlassRingArmed(false);
 }
 /** Writes the ring buffer out and clears it. */
 export function flushGlassRing() {
@@ -1075,6 +1092,9 @@ export const LiquidEffect = GObject.registerClass({
                 `getting this repaint request actually flushed to the display.`);
             // 読み込み完了後に再描画をリクエストし、パイプラインを初期化させる
             this.queue_repaint();
+            const actor = this.get_actor();
+            actor?.queue_redraw();
+            actor?.get_parent()?.queue_redraw();
         }
         catch (e) {
             this._logger?.error(`[Liquid Glass] Failed to load shaders asynchronously: ${e}`);

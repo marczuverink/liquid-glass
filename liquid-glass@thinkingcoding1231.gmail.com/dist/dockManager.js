@@ -3,7 +3,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import { LiquidEffect } from './liquidEffect.js';
-import { UnpickableActor, UILayerSampler, WindowCloneManager, reportFrameLoopError, ensureGlassAllocated, isFrameSyncFrozen, setClipIfChanged, syncGlassCaptureClip } from './utils.js';
+import { UnpickableActor, UILayerSampler, WindowCloneManager, reportFrameLoopError, ensureGlassAllocated, isFrameSyncFrozen, setClipIfChanged, syncGlassCaptureClip, isActorValid } from './utils.js';
 // Padding to allow the shader to draw effects (like refraction and blur) outside the actor's strict bounds.
 const SHADER_PADDING = 20;
 // Utility: Convert HEX color string (e.g., "#ffffff") to normalized RGB array [1.0, 1.0, 1.0]
@@ -198,6 +198,14 @@ export class DashManager {
         if (this._isEffectActive)
             return;
         this._isEffectActive = true;
+        this._lastScreenW = this._lastScreenH = undefined;
+        this._lastBgW = this._lastBgH = undefined;
+        this._lastBgX = this._lastBgY = undefined;
+        this._lastBaseW = this._lastBaseH = undefined;
+        this._lastAbsX = this._lastAbsY = undefined;
+        this._lastTW = this._lastTH = undefined;
+        this._stableDeltaW = this._stableDeltaH = undefined;
+        this._lastHidden = undefined;
         this.targetActor.add_style_class_name('liquid-glass-transparent');
         this._dockParent = this.targetActor.get_parent();
         if (this._dockParent) {
@@ -354,6 +362,7 @@ export class DashManager {
             }
             else {
                 if (this._frameSyncId !== 0) {
+                    global.compositor.get_laters().remove(this._frameSyncId);
                     this._frameSyncId = 0;
                 }
             }
@@ -658,7 +667,8 @@ export class DashManager {
         // Detect any change in dock geometry OR monitor size to trigger a rebuild.
         if (this._lastBgW !== bgW || this._lastBgH !== bgH ||
             this._lastBgX !== bgX || this._lastBgY !== bgY ||
-            this._lastScreenW !== screenW || this._lastScreenH !== screenH) {
+            this._lastScreenW !== screenW || this._lastScreenH !== screenH ||
+            this.bgActor.x !== monitor.x || this.bgActor.y !== monitor.y) {
             this.bgActor.remove_transition('size');
             this.bgActor.remove_transition('position');
             this.bgActor.set_position(monitor.x, monitor.y);
@@ -741,68 +751,49 @@ export class DashManager {
             return;
         this._isEffectActive = false;
         this._currentMarginStyle = undefined;
-        // Safely try to remove styles/signals. If targetActor is already destroyed, 
-        // this will fail safely without breaking the rest of the cleanup.
-        try {
-            for (let sigId of this._signals) {
-                this.targetActor.disconnect(sigId);
-            }
-            this.targetActor.remove_style_class_name('liquid-glass-transparent');
-            if (this._originalStyle !== undefined) {
-                this.targetActor.set_style(this._originalStyle);
-                this._originalStyle = undefined;
-            }
-            let children = this.targetActor.get_children();
-            for (let i = 0; i < children.length; i++) {
-                if (children[i].has_style_class_name('dash-background')) {
-                    children[i].opacity = 255;
-                }
-            }
-        }
-        catch (e) {
-            // Actor was likely destroyed, safe to ignore
+        this._teardownStep('frameSync', () => {
+            const id = this._frameSyncId;
+            this._frameSyncId = 0;
+            if (id)
+                global.compositor?.get_laters().remove(id);
+        });
+        for (const id of this._signals) {
+            this._teardownStep('targetSignal', () => {
+                if (isActorValid(this.targetActor))
+                    this.targetActor.disconnect(id);
+            });
         }
         this._signals = [];
-        this.targetActor.remove_style_class_name('liquid-glass-transparent');
-        try {
-            if (this._dockParent) {
+        this._teardownStep('targetStyle', () => {
+            if (!isActorValid(this.targetActor))
+                return;
+            this.targetActor.remove_style_class_name('liquid-glass-transparent');
+            if (this._originalStyle !== undefined)
+                this.targetActor.set_style(this._originalStyle);
+            for (const child of this.targetActor.get_children()) {
+                if (child.has_style_class_name('dash-background'))
+                    child.opacity = 255;
+            }
+        });
+        this._originalStyle = undefined;
+        this._teardownStep('parentStyle', () => {
+            if (isActorValid(this._dockParent))
                 this._dockParent.remove_style_class_name('liquid-glass-transparent');
-            }
-        }
-        catch (e) { }
+        });
         this._dockParent = null;
-        if (this._originalStyle !== undefined) {
-            this.targetActor.set_style(this._originalStyle);
-            this._originalStyle = undefined; // 次回オンになった時に再取得できるようクリア
-        }
-        let children = this.targetActor.get_children();
-        for (let i = 0; i < children.length; i++) {
-            if (children[i].has_style_class_name('dash-background')) {
-                children[i].opacity = 255;
-            }
-        }
-        if (this._frameSyncId !== 0) {
-            if (global.compositor?.get_laters) {
-                global.compositor.get_laters().remove(this._frameSyncId);
-            }
-            else {
-                // Meta.later_remove(this._frameSyncId);
-            }
-            this._frameSyncId = 0;
-        }
-        if (this.effect) {
-            this.effect.cleanup();
-            this.effect = null;
-        }
-        if (this.bgActor) {
-            this.bgActor.destroy();
-            this.bgActor = null;
-        }
-        // liquidBox is a child of bgActor and is already destroyed by bgActor.destroy().
-        // Just clear the reference here.
+        this._teardownStep('effect', () => this.effect?.cleanup());
+        this.effect = null;
+        this._teardownStep('uiSampler', () => this._uiSampler?.destroy());
+        this._uiSampler = null;
+        this._teardownStep('windowClones', () => this._windowCloneManager?.destroy());
+        this._windowCloneManager = null;
+        this._teardownStep('background', () => {
+            if (isActorValid(this.bgActor))
+                this.bgActor.destroy();
+        });
+        this.bgActor = null;
         this.liquidBox = null;
-        this._uiSampler?.destroy();
-        this._windowCloneManager?.destroy();
+        this._cloneContainer = null;
     }
     // 拡張機能全体が無効化される時の最終クリーンアップ
     // [FIX] Teardown must not be all-or-nothing.
