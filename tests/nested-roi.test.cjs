@@ -5,7 +5,7 @@ const { loadModule } = require('./helpers/load-module.cjs');
 const dist = path.join(__dirname, '../liquid-glass@thinkingcoding1231.gmail.com/dist');
 
 class Offscreen { constructor(texture) { this.texture = texture; } get_texture() { return this.texture; } }
-const roi = loadModule(path.join(dist, 'rendering/nestedRoi.js'), { Cogl: { Offscreen } });
+const roi = loadModule(path.join(dist, 'rendering/nestedRoi.js'), { Cogl: { Offscreen }, isLiveGlassEffect: fx => !fx.dead });
 const context = texture => ({ get_framebuffer: () => new Offscreen(texture) });
 const actor = (dx, dy) => ({ transform_stage_point: (x, y) => [true, x - dx, y - dy] });
 
@@ -44,4 +44,11 @@ test('the composite rect is clamped to the region, skipped outside it and left a
   assert.deepEqual(roi.clampToRoi(null, [10, 20, 60, 80], 100, 100), { rect: [10, 20, 50, 60], skip: false, clamped: true });
   assert.deepEqual(roi.clampToRoi([40, 40, 10, 10], [0, 0, 100, 100], 100, 100), { rect: [40, 40, 10, 10], skip: false, clamped: false });
   assert.equal(roi.clampToRoi([0, 0, 10, 10], [50, 50, 60, 60], 100, 100).skip, true);
+});
+
+test('a glass that is no longer live cannot act as the enclosing glass', () => {
+  const outer = { _lgCaptureScreenRect: [0, 0, 10, 10], dead: true }, capture = {};
+  roi.registerCaptureOwner(outer, capture, null);
+  assert.equal(roi.nestedCompositeRoi({}, actor(0, 0), context(capture), 100, 100), null);
+  roi.unregisterCaptureOwner(outer, capture);
 });

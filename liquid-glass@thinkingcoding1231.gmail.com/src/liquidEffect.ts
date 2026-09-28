@@ -14,7 +14,7 @@ import GLib from 'gi://GLib';
 import type { Logger } from './logger.js';
 import { RenderPasses } from './rendering/passes.js';
 import { computeCaptureLayout } from './actors/geometry.js';
-import { registerGlassEffect, unregisterGlassEffect, blurCacheDefault, nestedRoiDefault } from './diagnostics/glass.js';
+import { registerGlassEffect, unregisterGlassEffect, isLiveGlassEffect, blurCacheDefault, nestedRoiDefault } from './diagnostics/glass.js';
 import { registerCaptureOwner, unregisterCaptureOwner, nestedCompositeRoi, clampToRoi } from './rendering/nestedRoi.js';
 import { frameSerial, ensureFrameSerialHook, frameSerialIsLive } from './rendering/frameClock.js';
 export { noteStrandEntry, setGlassRingArmed, isGlassRingArmed, startGlassRingSampler, stopGlassRingSampler, flushGlassRing } from './diagnostics/glass.js';
@@ -218,7 +218,8 @@ export const LiquidEffect = GObject.registerClass({
       super.vfunc_paint_target(_paintNode, paintContext);
       return;
     }
-    this._registeredCaptureTex = registerCaptureOwner(this, srcTex, this._registeredCaptureTex);
+    if (isLiveGlassEffect(this))
+      this._registeredCaptureTex = registerCaptureOwner(this, srcTex, this._registeredCaptureTex);
     const capture = this._captureLayout(srcTex);
     const { blurRect, blurW, blurH, blurSrcUV, srcUV } = capture;
     const { reuseBlur, reuseCrossFrame, blurInputKey } = this._blurReuse(srcTex, capture, firstPaintThisFrame);
@@ -449,7 +450,6 @@ export const LiquidEffect = GObject.registerClass({
 
     const spacesExact = resW === effectiveW && resH === effectiveH;
     let compRect = spacesExact ? this._geometry.compositeRect() : null;
-    this._compositeRect = compRect;
     const roi = spacesExact && this._nestedRoiEnabled
       ? nestedCompositeRoi(this, actor, paintContext, resW, resH) : null;
     if (roi) {
@@ -461,6 +461,7 @@ export const LiquidEffect = GObject.registerClass({
       if (clamp.clamped) this._nestedRoiClamps++;
       compRect = clamp.rect;
     }
+    this._compositeRect = compRect;
 
     let drawRect = layout.dest;
     let drawUV = layer0UV;
@@ -592,6 +593,7 @@ export const LiquidEffect = GObject.registerClass({
 
   setNestedRoiEnabled(enabled: boolean): void {
     this._nestedRoiEnabled = !!enabled;
+    this.queue_repaint();
   }
 
   setBlurCacheEnabled(enabled: boolean): void {

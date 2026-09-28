@@ -711,10 +711,9 @@ export class UILayerSampler {
       scaledW > 0 && scaledH > 0 &&
       Number.isFinite(absX) && Number.isFinite(absY);
     if (cullable && !rectsIntersect(absX, absY, scaledW, scaledH, cull!)) {
-      if (replica) {
-        const pr = replica.panelRect;
+      const pr = replica?.panelRect;
+      if (pr && pr[2] > 0 && pr[3] > 0)
         this._bmsScreenRects.push([absX + pr[0], absY + pr[1], pr[2], pr[3]]);
-      }
       setCloneCulled(sourceClone, true, () =>
         `src=(${Math.round(absX)},${Math.round(absY)},${Math.round(scaledW)}x${Math.round(scaledH)}) ` +
         `cullRect=[${cull!.map(Math.round)}] label=${this._label}`);

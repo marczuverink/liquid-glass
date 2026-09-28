@@ -596,6 +596,9 @@ function _registerGlassDebugHooks() {
         },
     };
 }
+export function isLiveGlassEffect(effect) {
+    return _liveEffects.has(effect);
+}
 export function registerGlassEffect(effect) {
     _liveEffects.add(effect);
     _registerGlassDebugHooks();

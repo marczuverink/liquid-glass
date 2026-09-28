@@ -521,6 +521,10 @@ function _registerGlassDebugHooks(): void {
     },
   };
 }
+export function isLiveGlassEffect(effect: any): boolean {
+  return _liveEffects.has(effect);
+}
+
 export function registerGlassEffect(effect: any): void {
   _liveEffects.add(effect);
   _registerGlassDebugHooks();

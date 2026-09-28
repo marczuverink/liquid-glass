@@ -1,4 +1,5 @@
 import Cogl from 'gi://Cogl';
+import { isLiveGlassEffect } from '../diagnostics/glass.js';
 const ROI_PAD = 2;
 const _captureOwners = new Map();
 export function registerCaptureOwner(owner, texture, previous) {
@@ -19,7 +20,7 @@ function enclosingOwner(self, paintContext) {
         if (!(fb instanceof Cogl.Offscreen))
             return null;
         const owner = _captureOwners.get(fb.get_texture()) ?? null;
-        return owner && owner !== self ? owner : null;
+        return owner && owner !== self && isLiveGlassEffect(owner) ? owner : null;
     }
     catch (_) {
         return null;
