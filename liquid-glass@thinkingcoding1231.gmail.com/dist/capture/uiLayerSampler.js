@@ -222,22 +222,7 @@ export class UILayerSampler {
     _syncBmsReplica(source, replica) {
         try {
             const parts = replica.parts;
-            let panelRect = null;
-            for (const { src, clone } of parts) {
-                if (!isActorValid(src) || !isActorValid(clone))
-                    continue;
-                const [w, h] = getAllocatedSize(src);
-                if (!(w > 0) || !(h > 0)) {
-                    setActorVisible(clone, false);
-                    continue;
-                }
-                setPositionIfChanged(clone, src.x, src.y);
-                setSizeIfChanged(clone, w, h);
-                setOpacityIfChanged(clone, src.opacity);
-                setActorVisible(clone, src.visible && src.mapped);
-                if (!panelRect)
-                    panelRect = [src.x, src.y, w, h];
-            }
+            const panelRect = this._syncReplicaParts(parts);
             const blurWidget = replica.blurWidget;
             if (isActorValid(blurWidget) && panelRect) {
                 replica.panelRect = panelRect;
@@ -246,31 +231,53 @@ export class UILayerSampler {
                 setSizeIfChanged(blurWidget, panelRect[2], panelRect[3]);
                 setActorVisible(blurWidget, true);
                 const src = replica.bmsTarget;
-                let ours = blurWidget.get_effects()[0];
-                if (ours && isActorValid(src)) {
-                    const theirs = (src.get_effects() ?? []).find((e) => typeof e?.radius === 'number');
-                    if (theirs) {
-                        if (Object.getPrototypeOf(ours)?.constructor !==
-                            Object.getPrototypeOf(theirs)?.constructor) {
-                            try {
-                                blurWidget.remove_effect(ours);
-                                blurWidget.add_effect(this._buildReplicaBlurEffect(src));
-                                ours = blurWidget.get_effects()[0];
-                            }
-                            catch { }
-                        }
-                        if (ours.radius !== theirs.radius)
-                            ours.radius = theirs.radius;
-                        if (ours.brightness !== theirs.brightness)
-                            ours.brightness = theirs.brightness;
-                    }
-                }
+                this._syncReplicaBlur(blurWidget, src);
             }
             this._reportReplicaGeometry(source, replica);
         }
         catch (e) {
             reportFrameLoopError('UILayerSampler._syncBmsReplica', e);
         }
+    }
+    _syncReplicaParts(parts) {
+        let panelRect = null;
+        for (const { src, clone } of parts) {
+            if (!isActorValid(src) || !isActorValid(clone))
+                continue;
+            const [w, h] = getAllocatedSize(src);
+            if (!(w > 0) || !(h > 0)) {
+                setActorVisible(clone, false);
+                continue;
+            }
+            setPositionIfChanged(clone, src.x, src.y);
+            setSizeIfChanged(clone, w, h);
+            setOpacityIfChanged(clone, src.opacity);
+            setActorVisible(clone, src.visible && src.mapped);
+            if (!panelRect)
+                panelRect = [src.x, src.y, w, h];
+        }
+        return panelRect;
+    }
+    _syncReplicaBlur(blurWidget, src) {
+        let ours = blurWidget.get_effects()[0];
+        if (!ours || !isActorValid(src))
+            return;
+        const theirs = (src.get_effects() ?? []).find((e) => typeof e?.radius === 'number');
+        if (!theirs)
+            return;
+        if (Object.getPrototypeOf(ours)?.constructor !==
+            Object.getPrototypeOf(theirs)?.constructor) {
+            try {
+                blurWidget.remove_effect(ours);
+                blurWidget.add_effect(this._buildReplicaBlurEffect(src));
+                ours = blurWidget.get_effects()[0];
+            }
+            catch { }
+        }
+        if (ours.radius !== theirs.radius)
+            ours.radius = theirs.radius;
+        if (ours.brightness !== theirs.brightness)
+            ours.brightness = theirs.brightness;
     }
     _reportReplicaGeometry(source, replica) {
         if (!utilsLogEnabled())
@@ -467,6 +474,24 @@ export class UILayerSampler {
             if (!first)
                 this._reevaluateBmsClones();
         }
+        const dynamicExclusions = this._dynamicExclusions();
+        for (const child of children) {
+            try {
+                if (!this._isCloneCandidate(child, dynamicExclusions))
+                    continue;
+                seen.add(child);
+                if (!this._clones.has(child) && !this._addSourceClone(child))
+                    seen.delete(child);
+            }
+            catch (e) {
+                reportFrameLoopError('UILayerSampler.refresh', e);
+            }
+        }
+        this._pruneSourceClones(seen);
+        this._reportClonedSet();
+        this._reportClonedWindowGroups();
+    }
+    _dynamicExclusions() {
         const dynamicExclusions = new Set();
         for (const src of this._ancestorExclusionSources) {
             try {
@@ -478,88 +503,88 @@ export class UILayerSampler {
             }
             catch { }
         }
-        for (const child of children) {
-            try {
-                if (child._isDisposed)
-                    continue;
-                if (!isActorValid(child))
-                    continue;
-                if (child === this._dragActor)
-                    continue;
-                if (child === this._selfActor || child === this._selfRoot)
-                    continue;
-                if (child === Main.layoutManager._backgroundGroup)
-                    continue;
-                if (child === getSharedBackgroundSource())
-                    continue;
-                if (this._extraExclusions.has(child))
-                    continue;
-                if (dynamicExclusions.has(child))
-                    continue;
-                if (!child.visible || !child.mapped)
-                    continue;
-                if (!this._clones.has(child) && this._containsOtherLiquidGlassRoot(child)) {
-                    utilsLog(`[Liquid Glass][ui-sampler] permanent exclusion of uiGroup child ` +
-                        `name="${child.name ?? '(unnamed)'}" ` +
-                        `type=${child.constructor?.name} ` +
-                        `(nested liquid-glass root found during deep scan)`);
-                    this.addExclusion(child);
-                    continue;
-                }
-                seen.add(child);
-                if (!this._clones.has(child)) {
-                    const bmsTarget = this._findBmsDescendant(child);
-                    if (bmsTarget && _bmsMode === BMS_MODE.SKIP) {
-                        seen.delete(child);
-                        continue;
-                    }
-                    let sourceClone = null;
-                    if (bmsTarget && _bmsMode === BMS_MODE.REPLICATE) {
-                        sourceClone = this._createBmsReplicaActor(child);
-                        if (!sourceClone) {
-                            utilsLog(`[Liquid Glass][ui-sampler:${this._label}] BMS replica ` +
-                                `could not be built for name="${child.name ?? '(unnamed)'}"; ` +
-                                `leaving it out of the glass rather than cloning BMS's target`);
-                            seen.delete(child);
-                            continue;
-                        }
-                    }
-                    if (!sourceClone && bmsTarget && _bmsMode === BMS_MODE.SNAPSHOT) {
-                        sourceClone = this._createSelfExcludingSnapshotActor(child);
-                        if (!sourceClone && this._useCaptureFixForBms) {
-                            sourceClone = this._createExistingEffectBlitActor(child);
-                        }
-                    }
-                    if (!sourceClone) {
-                        sourceClone = new UnpickableClone({ source: child });
-                    }
-                    this._bmsStateAtClone.set(child, !!bmsTarget);
-                    sourceClone.set_name(`${child.name}-sourceClone`);
-                    sourceClone.connect('destroy', () => {
-                        this._clones.delete(child);
-                    });
-                    this._uiClonesContainer?.add_child(sourceClone);
-                    this._clones.set(child, sourceClone);
-                    if (!this._sourceDestroyIds.has(child)) {
-                        this._sourceDestroyIds.set(child, child.connect('destroy', () => {
-                            this._sourceDestroyIds.delete(child);
-                            this._bmsStateAtClone.delete(child);
-                            this._existingEffectCache.delete(child);
-                            const clone = this._clones.get(child);
-                            this._clones.delete(child);
-                            try {
-                                clone?.destroy();
-                            }
-                            catch { }
-                        }));
-                    }
-                    this._insertCloneInZOrder(child, sourceClone);
-                }
-            }
-            catch (e) {
-                reportFrameLoopError('UILayerSampler.refresh', e);
+        return dynamicExclusions;
+    }
+    _isCloneCandidate(child, dynamicExclusions) {
+        if (child._isDisposed)
+            return false;
+        if (!isActorValid(child))
+            return false;
+        if (child === this._dragActor)
+            return false;
+        if (child === this._selfActor || child === this._selfRoot)
+            return false;
+        if (child === Main.layoutManager._backgroundGroup)
+            return false;
+        if (child === getSharedBackgroundSource())
+            return false;
+        if (this._extraExclusions.has(child))
+            return false;
+        if (dynamicExclusions.has(child))
+            return false;
+        if (!child.visible || !child.mapped)
+            return false;
+        if (!this._clones.has(child) && this._containsOtherLiquidGlassRoot(child)) {
+            utilsLog(`[Liquid Glass][ui-sampler] permanent exclusion of uiGroup child ` +
+                `name="${child.name ?? '(unnamed)'}" ` +
+                `type=${child.constructor?.name} ` +
+                `(nested liquid-glass root found during deep scan)`);
+            this.addExclusion(child);
+            return false;
+        }
+        return true;
+    }
+    _addSourceClone(child) {
+        const bmsTarget = this._findBmsDescendant(child);
+        if (bmsTarget && _bmsMode === BMS_MODE.SKIP) {
+            return null;
+        }
+        let sourceClone = null;
+        if (bmsTarget && _bmsMode === BMS_MODE.REPLICATE) {
+            sourceClone = this._createBmsReplicaActor(child);
+            if (!sourceClone) {
+                utilsLog(`[Liquid Glass][ui-sampler:${this._label}] BMS replica ` +
+                    `could not be built for name="${child.name ?? '(unnamed)'}"; ` +
+                    `leaving it out of the glass rather than cloning BMS's target`);
+                return null;
             }
         }
+        if (!sourceClone && bmsTarget && _bmsMode === BMS_MODE.SNAPSHOT) {
+            sourceClone = this._createSelfExcludingSnapshotActor(child);
+            if (!sourceClone && this._useCaptureFixForBms) {
+                sourceClone = this._createExistingEffectBlitActor(child);
+            }
+        }
+        if (!sourceClone) {
+            sourceClone = new UnpickableClone({ source: child });
+        }
+        this._bmsStateAtClone.set(child, !!bmsTarget);
+        sourceClone.set_name(`${child.name}-sourceClone`);
+        sourceClone.connect('destroy', () => {
+            this._clones.delete(child);
+        });
+        this._uiClonesContainer?.add_child(sourceClone);
+        this._clones.set(child, sourceClone);
+        this._trackSourceDestroy(child);
+        this._insertCloneInZOrder(child, sourceClone);
+        return sourceClone;
+    }
+    _trackSourceDestroy(child) {
+        if (!this._sourceDestroyIds.has(child)) {
+            this._sourceDestroyIds.set(child, child.connect('destroy', () => {
+                this._sourceDestroyIds.delete(child);
+                this._bmsStateAtClone.delete(child);
+                this._existingEffectCache.delete(child);
+                const clone = this._clones.get(child);
+                this._clones.delete(child);
+                try {
+                    clone?.destroy();
+                }
+                catch { }
+            }));
+        }
+    }
+    _pruneSourceClones(seen) {
         for (const [actor, sourceClone] of this._clones) {
             if (!seen.has(actor)) {
                 try {
@@ -580,8 +605,6 @@ export class UILayerSampler {
             this._bmsStateAtClone.delete(actor);
             this._existingEffectCache.delete(actor);
         }
-        this._reportClonedSet();
-        this._reportClonedWindowGroups();
     }
     static _stageToLocal(actor, stageX, stageY) {
         try {

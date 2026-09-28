@@ -7,6 +7,30 @@ const transparent = {red: 0, green: 0, blue: 0, alpha: 0};
 const dark = {red: 51, green: 51, blue: 51, alpha: 204};
 const bright = {red: 240, green: 240, blue: 240, alpha: 255};
 
+test('button alpha keeps a coloured toggle child visible and makes its container transparent', () => {
+  const f = fixture();
+  f.button.has_style_class_name = name => name === 'quick-toggle';
+  const child = new f.Button(bright, f.button);
+  f.manager._styledButtons.set(f.button, f.button.get_style());
+  f.manager._styledButtons.set(child, child.get_style());
+  f.manager._updateSingleButtonAlpha(child, 0.4);
+  assert.match(child.get_style(), /rgba\(240, 240, 240, 0.4\)/);
+  assert.match(f.button.get_style(), /background-color: transparent !important/);
+  assert.equal(f.button._isUpdatingAlpha, false);
+  assert.equal(child._isUpdatingAlpha, false);
+});
+
+test('button alpha restores adaptive foreground and clears its guard after theme failure', () => {
+  const f = fixture();
+  f.button.style = 'padding: 4px; color: white; -st-icon-foreground-color: white;';
+  f.manager._styledActors.set(f.button, 'padding: 4px;');
+  f.button.get_theme_node = () => { throw new Error('disposed'); };
+  assert.throws(() => f.manager._updateSingleButtonAlpha(f.button, 0.5), /disposed/);
+  assert.match(f.button.get_style(), /color: white/);
+  assert.match(f.button.get_style(), /-st-icon-foreground-color: white/);
+  assert.equal(f.button._isUpdatingAlpha, false);
+});
+
 function fixture(background = dark, luma = 0.7) {
   let reads = 0;
   let nextId = 1;

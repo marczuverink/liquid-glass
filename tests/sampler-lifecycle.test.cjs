@@ -4,7 +4,7 @@ const path = require('node:path');
 const dist = path.join(__dirname, '../liquid-glass@thinkingcoding1231.gmail.com/dist');
 const { loadModule } = require('./helpers/load-module.cjs');
 
-function fixture() {
+function fixture(mode) {
   class Actor {
     constructor(params = {}) { this._init(params); }
     _init(params = {}) {
@@ -42,6 +42,7 @@ function fixture() {
     GLib: { get_monotonic_time: () => 0 }, Meta: {},
   };
   const utils = loadModule(path.join(dist, 'utils.js'), bindings);
+  if (mode !== undefined) utils.setBmsMode(mode);
   const classes = Object.fromEntries(['UILayerSampler', 'UnpickableActor', 'UnpickableClone',
     'UnpickableWidget', 'UnpickableStyledWidget', 'TextureBlitActor', 'LayoutOpaqueActor']
     .map(name => [name, utils[name]]));
@@ -52,8 +53,43 @@ function fixture() {
   sampler._insertCloneInZOrder = () => {};
   sampler._reportClonedSet = () => {};
   sampler._reportClonedWindowGroups = () => {};
-  return { sampler, content, monitors, classes };
+  return { sampler, content, monitors, classes, Actor, uiGroup };
 }
+
+test('BMS clone selection preserves skip, replica failure and snapshot fallbacks', () => {
+  for (const [mode, replica, snapshot, blit, expected] of [
+    [2, false, false, false, null], [3, false, false, false, null],
+    [3, true, false, false, 'replica'], [0, false, true, false, 'snapshot'],
+    [0, false, false, true, 'blit'], [0, false, false, false, 'clone'],
+    [1, false, false, false, 'clone'],
+  ]) {
+    const { sampler, content, Actor } = fixture(mode);
+    sampler._findBmsDescendant = () => content;
+    sampler._createBmsReplicaActor = () => replica ? new Actor({ kind: 'replica' }) : null;
+    sampler._createSelfExcludingSnapshotActor = () => snapshot ? new Actor({ kind: 'snapshot' }) : null;
+    sampler._createExistingEffectBlitActor = () => blit ? new Actor({ kind: 'blit' }) : null;
+    sampler.refresh();
+    const clone = sampler._clones.get(content);
+    assert.equal(clone ? clone.kind ?? 'clone' : null, expected);
+    assert.equal(content.handlers.size, expected ? 1 : 0);
+    sampler.destroy();
+    assert.equal(content.handlers.size, 0);
+  }
+});
+
+test('one broken uiGroup child does not prevent later clones or stale clone cleanup', () => {
+  const { sampler, content, Actor, uiGroup } = fixture();
+  sampler.refresh();
+  content.visible = false;
+  const broken = new Actor(), healthy = new Actor();
+  Object.defineProperty(broken, '_isDisposed', { get() { throw new Error('gone'); } });
+  uiGroup.add_child(broken); uiGroup.add_child(healthy);
+  sampler.refresh();
+  assert.equal(sampler._clones.has(content), false);
+  assert.equal(sampler._clones.has(healthy), true);
+  assert.equal(content.handlers.size, 0);
+  sampler.destroy();
+});
 
 test('100 menu hide/show cycles do not accumulate source destroy handlers', () => {
   const { sampler, content, monitors } = fixture();

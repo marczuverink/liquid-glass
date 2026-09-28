@@ -1351,58 +1351,46 @@ export class QuickSettingsManager {
     return foundButtons;
   }
 
+  private _hasColoredToggleChild(button: CustomBannerActor): boolean {
+    if (!(button instanceof St.Widget) || !button.has_style_class_name('quick-toggle')) return false;
+    const children = typeof button.get_children === 'function' ? button.get_children() : [];
+    for (const child of children) {
+      if (!(child instanceof St.Widget)) continue;
+      const childTheme = child.get_theme_node();
+      const childBg = childTheme?.get_background_color();
+      if (childBg && childBg.alpha > 0) return true;
+    }
+    return false;
+  }
+
+  private _applyButtonAlpha(button: CustomBannerActor, targetAlpha: number): void {
+    const origStyle = this._styledButtons.get(button) || '';
+    button.set_style(origStyle || null);
+    button.ensure_style();
+    const bgColor = button.get_theme_node()?.get_background_color();
+    if (!bgColor) return;
+
+    if (this._hasColoredToggleChild(button)) {
+      button.set_style(origStyle
+        ? `${origStyle} background-color: transparent !important;`
+        : 'background-color: transparent !important;');
+      return;
+    }
+    if (bgColor.alpha === 0) return;
+    const rgbaStr = `rgba(${bgColor.red}, ${bgColor.green}, ${bgColor.blue}, ${targetAlpha})`;
+    button.set_style(origStyle ? `${origStyle} background-color: ${rgbaStr};` : `background-color: ${rgbaStr};`);
+    const parent = typeof button.get_parent === 'function' ? button.get_parent() : null;
+    if (parent && parent instanceof St.Widget && parent.has_style_class_name('quick-toggle'))
+      this._updateSingleButtonAlpha(parent as CustomBannerActor, targetAlpha);
+  }
+
   _updateSingleButtonAlpha(button: CustomBannerActor, targetAlpha: number) {
     if (!button || button._isUpdatingAlpha) return;
     button._isUpdatingAlpha = true;
     const foreground = this._styledActors.has(button) ? (button.get_style() || '').split(';')
       .filter(rule => /^\s*(color|-st-icon-foreground-color)\s*:/.test(rule)).join(';') : '';
     try {
-      let origStyle = this._styledButtons.get(button) || '';
-      button.set_style(origStyle || null);
-      button.ensure_style();
-
-      let themeNode = button.get_theme_node();
-      if (themeNode) {
-        let bgColor = themeNode.get_background_color();
-
-        if (bgColor) {
-          let isToggleContainer = button instanceof St.Widget && button.has_style_class_name('quick-toggle');
-
-          if (isToggleContainer) {
-            let hasColoredChild = false;
-            let children = typeof button.get_children === 'function' ? button.get_children() : [];
-            for (let i = 0; i < children.length; i++) {
-              let child = children[i];
-              if (child instanceof St.Widget) {
-                let childTheme = child.get_theme_node();
-                if (childTheme) {
-                  let childBg = childTheme.get_background_color();
-                  if (childBg && childBg.alpha > 0) { hasColoredChild = true; break; }
-                }
-              }
-            }
-            if (hasColoredChild) {
-              let newStyle = origStyle
-                ? `${origStyle} background-color: transparent !important;`
-                : `background-color: transparent !important;`;
-              button.set_style(newStyle);
-              return;
-            }
-          }
-
-          if (bgColor.alpha === 0) {
-          } else {
-            let rgbaStr = `rgba(${bgColor.red}, ${bgColor.green}, ${bgColor.blue}, ${targetAlpha})`;
-            let newStyle = origStyle ? `${origStyle} background-color: ${rgbaStr};` : `background-color: ${rgbaStr};`;
-            button.set_style(newStyle);
-
-            let parent = typeof button.get_parent === 'function' ? button.get_parent() : null;
-            if (parent && parent instanceof St.Widget && parent.has_style_class_name('quick-toggle')) {
-              this._updateSingleButtonAlpha(parent as CustomBannerActor, targetAlpha);
-            }
-          }
-        }
-      }
+      this._applyButtonAlpha(button, targetAlpha);
     } finally {
       if (foreground) {
         const base = (button.get_style() || '').split(';')

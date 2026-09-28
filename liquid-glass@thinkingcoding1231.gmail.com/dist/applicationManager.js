@@ -17,6 +17,7 @@ import { setTranslationIfChanged, setSizeIfChanged, setScaleIfChanged, setOpacit
 import { isCullSiteEnabled } from './capture/options.js';
 import { createBackgroundMirror } from './capture/background.js';
 import { reportClonedWindowActors, releaseClonedWindowActors } from './capture/windowCulling.js';
+import { syncDamageHooks } from './capture/damageHooks.js';
 const GLASS_MIN_MARGIN = 10;
 const SHADOW_MARGIN_HEADROOM = 20;
 const GLASS_MAX_MARGIN = 100 + SHADOW_MARGIN_HEADROOM;
@@ -937,33 +938,11 @@ export class ApplicationManager {
             hooks = new Map();
             state.damageHooks = hooks;
         }
-        for (const src of state.clones.keys()) {
-            if (hooks.has(src))
-                continue;
-            if (!isActorValid(src) || !innerGlassEffectOf(src))
-                continue;
-            try {
-                const id = src.connect('damaged', () => {
-                    const bg = state.bgActor;
-                    if (bg && isActorValid(bg) && bg.mapped && bg.visible)
-                        bg.queue_redraw();
-                });
-                hooks.set(src, id);
-            }
-            catch { }
-        }
-        if (hooks.size > state.clones.size) {
-            for (const [src, id] of [...hooks]) {
-                if (state.clones.has(src))
-                    continue;
-                try {
-                    if (isActorValid(src))
-                        src.disconnect(id);
-                }
-                catch { }
-                hooks.delete(src);
-            }
-        }
+        syncDamageHooks(hooks, state.clones, () => {
+            const bg = state.bgActor;
+            if (bg && isActorValid(bg) && bg.mapped && bg.visible)
+                bg.queue_redraw();
+        });
     }
     _releaseDamageHooks(state) {
         if (!state.damageHooks)

@@ -15,6 +15,9 @@ import { setClipIfChanged } from './actors/writes.js';
 import { syncGlassCaptureClip } from './capture/clip.js';
 import { isActorValid } from './actors/lifecycle.js';
 
+import { clipDockBounds, dockEdges, balanceDockBounds, insetDockBounds, visibleDockSize,
+  type DockBounds, type DockEdges, type DockMonitor } from './actors/dockGeometry.js';
+
 import { Logger } from './logger.js';
 
 const SHADER_PADDING = 20;
@@ -380,7 +383,42 @@ export class DashManager {
 
   _syncGeometry() {
     if (!this.bgActor || !this.targetActor || !this.targetActor.mapped) return;
+    let bounds = this._readDockBounds();
+    if (!bounds) return;
+    let monitorIndex = Main.layoutManager.findIndexForActor(this.targetActor);
+    if (monitorIndex < 0) {
+      monitorIndex = Main.layoutManager.primaryIndex;
+    }
+    let monitor = Main.layoutManager.monitors[monitorIndex] || Main.layoutManager.primaryMonitor;
 
+    const edges = dockEdges(bounds, monitor);
+    bounds = this._stabilizeDockBounds(bounds, edges);
+    const refActor = this._findReferenceActor(this.targetActor);
+    if (refActor) bounds = balanceDockBounds(bounds, this._actorBounds(refActor), edges);
+    bounds = this._applyDockMargin(bounds, monitor, edges);
+    const { baseW, baseH } = bounds;
+
+    if (baseW <= 9 || baseH <= 9) {
+      this.bgActor.hide();
+      this._lastBgW = undefined;
+      this._lastBgH = undefined;
+      this._lastBgX = undefined;
+      this._lastBgY = undefined;
+      return;
+    }
+    this.bgActor.show();
+    this.bgActor.opacity = this.targetActor.opacity;
+    this._syncDockVisibility(bounds, monitor);
+    this._syncDockCapture(bounds, monitor);
+  }
+
+  private _actorBounds(actor: Clutter.Actor): DockBounds {
+    const [baseW, baseH] = actor.get_size();
+    const [absX, absY] = actor.get_transformed_position();
+    return { absX, absY, baseW, baseH };
+  }
+
+  private _readDockBounds(): DockBounds | null {
     let sourceActor = this.targetActor;
     let children = this.targetActor.get_children() as St.Widget[];
     for (let i = 0; i < children.length; i++) {
@@ -392,40 +430,14 @@ export class DashManager {
 
     let [baseW, baseH] = sourceActor.get_size();
     let [absX, absY] = sourceActor.get_transformed_position();
-    if (Number.isNaN(absX) || Number.isNaN(absY)) return;
+    if (Number.isNaN(absX) || Number.isNaN(absY)) return null;
+    const bounds = { absX, absY, baseW, baseH };
+    return sourceActor === this.targetActor ? bounds : clipDockBounds(bounds, this._actorBounds(this.targetActor));
+  }
 
-    if (sourceActor !== this.targetActor) {
-      let [tX, tY] = this.targetActor.get_transformed_position();
-      let [tW, tH] = this.targetActor.get_size();
-
-      if (absX < tX) { baseW -= (tX - absX); absX = tX; }
-      if (absY < tY) { baseH -= (tY - absY); absY = tY; }
-      if (absX + baseW > tX + tW) { baseW = (tX + tW) - absX; }
-      if (absY + baseH > tY + tH) { baseH = (tY + tH) - absY; }
-    }
-
-    let monitorIndex = Main.layoutManager.findIndexForActor(this.targetActor);
-    if (monitorIndex < 0) {
-      monitorIndex = Main.layoutManager.primaryIndex;
-    }
-    let monitor = Main.layoutManager.monitors[monitorIndex] || Main.layoutManager.primaryMonitor;
-    let minCenterDist = -1;
-    let distLeftCenter: number = 0;
-    let distRightCenter: number = 0;
-    let distTopCenter: number = 0;
-    let distBottomCenter: number = 0;
-
-    if (monitor) {
-      let dockCenterX = absX + (baseW / 2);
-      let dockCenterY = absY + (baseH / 2);
-
-      distLeftCenter = dockCenterX - monitor.x;
-      distRightCenter = (monitor.x + monitor.width) - dockCenterX;
-      distTopCenter = dockCenterY - monitor.y;
-      distBottomCenter = (monitor.y + monitor.height) - dockCenterY;
-
-      minCenterDist = Math.min(distLeftCenter, distRightCenter, distTopCenter, distBottomCenter);
-    }
+  private _stabilizeDockBounds(bounds: DockBounds, edges: DockEdges): DockBounds {
+    let { baseW, baseH } = bounds;
+    const { minCenterDist, distTopCenter, distBottomCenter } = edges;
     if (this._lastBaseW !== undefined && this._lastBaseH !== undefined) {
       let isHorizontalDock = (minCenterDist === distTopCenter || minCenterDist === distBottomCenter);
 
@@ -441,149 +453,43 @@ export class DashManager {
     }
     this._lastBaseW = baseW;
     this._lastBaseH = baseH;
-    let refActor = this._findReferenceActor(this.targetActor);
-    if (refActor) {
-      let [refW, refH] = refActor.get_size();
-      let [refX, refY] = refActor.get_transformed_position();
+    return { ...bounds, baseW, baseH };
+  }
 
-      if (!Number.isNaN(refX) && !Number.isNaN(refY) && refW > 0 && refH > 0) {
-        let topGap = refY - absY;
-        let bottomGap = (absY + baseH) - (refY + refH);
-
-        if (topGap < 0 || bottomGap < 0) {
-          let trueRefY = refY - refH;
-          topGap = trueRefY - absY;
-          bottomGap = (absY + baseH) - (trueRefY + refH);
-        }
-
-        let leftGap = refX - absX;
-        let rightGap = (absX + baseW) - (refX + refW);
-
-        if (leftGap < 0 || rightGap < 0) {
-          let trueRefX = refX - refW;
-          leftGap = trueRefX - absX;
-          rightGap = (absX + baseW) - (trueRefX + refW);
-        }
-
-        if (baseW >= baseH) {
-          let diff = Math.abs(bottomGap - topGap);
-
-          if (diff > 0 && diff < baseH / 2) {
-            if (bottomGap > topGap) {
-              baseH -= diff;
-            } else {
-              absY += diff;
-              baseH -= diff;
-            }
-          }
-        } else {
-          let diff = Math.abs(rightGap - leftGap);
-
-          if (diff > 0 && diff < baseW / 2) {
-            if (minCenterDist === distLeftCenter) {
-              if (rightGap > leftGap) {
-                baseW -= diff;
-              }
-            } else {
-              if (rightGap > leftGap) {
-                baseW -= diff;
-              } else {
-                absX += diff;
-                baseW -= diff;
-              }
-            }
-          }
-        }
-      }
-    }
-    let marginValue = this._marginValue || 0;
-
-    if (monitor && marginValue > 0) {
-      let isMoving = false;
-      if (this._lastAbsX !== undefined && this._lastAbsY !== undefined) {
-        let diffX = Math.abs(absX - this._lastAbsX);
-        let diffY = Math.abs(absY - this._lastAbsY);
-        if (diffX > 1.0 || diffY > 1.0) {
-          isMoving = true;
-        }
-      }
-
-      this._lastAbsX = absX;
-      this._lastAbsY = absY;
-
-      let [tW, tH] = this.targetActor.get_size();
-      if (this._stableDeltaW === undefined || this._lastTW !== tW) {
-        this._stableDeltaW = baseW - tW;
-        this._lastTW = tW;
-      }
-      if (this._stableDeltaH === undefined || this._lastTH !== tH) {
-        this._stableDeltaH = baseH - tH;
-        this._lastTH = tH;
-      }
-
-      let stableBaseW = tW + this._stableDeltaW;
-      let stableBaseH = tH + this._stableDeltaH;
-
-      if (!isMoving) {
-        if (minCenterDist === distBottomCenter) {
-          let expectedBottom = monitor.y + monitor.height - marginValue;
-          if (absY + baseH > expectedBottom) {
-            let overflow = (absY + baseH) - expectedBottom;
-            baseH -= overflow;
-          }
-          if (baseH > stableBaseH) baseH = stableBaseH;
-        } else if (minCenterDist === distTopCenter) {
-          let expectedTop = monitor.y + marginValue;
-          if (absY < expectedTop) {
-            let diff = expectedTop - absY;
-            absY = expectedTop;
-            baseH -= diff;
-          }
-          if (baseH > stableBaseH) baseH = stableBaseH;
-        } else if (minCenterDist === distRightCenter) {
-          let expectedRight = monitor.x + monitor.width - marginValue;
-          if (absX + baseW > expectedRight) {
-            let overflow = (absX + baseW) - expectedRight;
-            baseW -= overflow;
-          }
-          if (baseW > stableBaseW) baseW = stableBaseW;
-        } else {
-          let expectedLeft = monitor.x + marginValue;
-          if (absX < expectedLeft) {
-            let diff = expectedLeft - absX;
-            absX = expectedLeft;
-            baseW -= diff;
-          }
-          if (baseW > stableBaseW) baseW = stableBaseW;
-        }
+  private _applyDockMargin(bounds: DockBounds, monitor: DockMonitor | null, edges: DockEdges): DockBounds {
+    const marginValue = this._marginValue || 0;
+    if (!monitor || !(marginValue > 0)) return bounds;
+    const { absX, absY, baseW, baseH } = bounds;
+    let isMoving = false;
+    if (this._lastAbsX !== undefined && this._lastAbsY !== undefined) {
+      let diffX = Math.abs(absX - this._lastAbsX);
+      let diffY = Math.abs(absY - this._lastAbsY);
+      if (diffX > 1.0 || diffY > 1.0) {
+        isMoving = true;
       }
     }
 
-    let w = Math.max(1.0, baseW);
-    let h = Math.max(1.0, baseH);
+    this._lastAbsX = absX;
+    this._lastAbsY = absY;
 
-    if (baseW <= 9 || baseH <= 9) {
-      this.bgActor.hide();
-      this._lastBgW = undefined;
-      this._lastBgH = undefined;
-      this._lastBgX = undefined;
-      this._lastBgY = undefined;
-      return;
-    } else {
-      this.bgActor.show();
+    let [tW, tH] = this.targetActor.get_size();
+    if (this._stableDeltaW === undefined || this._lastTW !== tW) {
+      this._stableDeltaW = baseW - tW;
+      this._lastTW = tW;
+    }
+    if (this._stableDeltaH === undefined || this._lastTH !== tH) {
+      this._stableDeltaH = baseH - tH;
+      this._lastTH = tH;
     }
 
-    this.bgActor.opacity = this.targetActor.opacity;
+    let stableBaseW = tW + this._stableDeltaW;
+    let stableBaseH = tH + this._stableDeltaH;
+    return isMoving ? bounds : insetDockBounds(bounds, monitor, edges, marginValue, stableBaseW, stableBaseH);
+  }
 
-    let visibleW = baseW;
-    let visibleH = baseH;
-    if (monitor) {
-      if (absX < monitor.x) visibleW -= (monitor.x - absX);
-      if (absY < monitor.y) visibleH -= (monitor.y - absY);
-      if (absX + baseW > monitor.x + monitor.width) visibleW -= ((absX + baseW) - (monitor.x + monitor.width));
-      if (absY + baseH > monitor.y + monitor.height) visibleH -= ((absY + baseH) - (monitor.y + monitor.height));
-    }
-
+  private _syncDockVisibility(bounds: DockBounds, monitor: DockMonitor | null): void {
+    const { absX, absY, baseW, baseH } = bounds;
+    const [visibleW, visibleH] = visibleDockSize(bounds, monitor);
     if (visibleW <= 1 || visibleH <= 1) {
       if (this._lastHidden !== true) {
         this._lastHidden = true;
@@ -593,15 +499,19 @@ export class DashManager {
           `monitor=(${monitor?.x},${monitor?.y},${monitor?.width}x${monitor?.height}) ` +
           `margin=${this._marginValue}`);
       }
-      this.bgActor.opacity = 0;
+      this.bgActor!.opacity = 0;
     } else {
       if (this._lastHidden === true) {
         this._lastHidden = false;
         this._logger.log('[Liquid Glass][dock] glass visible again');
       }
-      this.bgActor.opacity = this.targetActor.opacity;
+      this.bgActor!.opacity = this.targetActor.opacity;
     }
+  }
 
+  private _syncDockCapture(bounds: DockBounds, monitor: DockMonitor): void {
+    const { absX, absY, baseW, baseH } = bounds;
+    const w = Math.max(1.0, baseW), h = Math.max(1.0, baseH);
     let bgW = Math.max(1.0, w + (SHADER_PADDING * 2) + (this._glassExpand * 2));
     let bgH = Math.max(1.0, h + (SHADER_PADDING * 2) + (this._glassExpand * 2));
     let bgX = absX - SHADER_PADDING - this._glassExpand;
@@ -616,13 +526,13 @@ export class DashManager {
     if (this._lastBgW !== bgW || this._lastBgH !== bgH ||
       this._lastBgX !== bgX || this._lastBgY !== bgY ||
       this._lastScreenW !== screenW || this._lastScreenH !== screenH ||
-      this.bgActor.x !== monitor.x || this.bgActor.y !== monitor.y) {
-      this.bgActor.remove_transition('size');
-      this.bgActor.remove_transition('position');
-      this.bgActor.set_position(monitor.x, monitor.y);
-      this.bgActor.set_size(screenW, screenH);
-      this.bgActor.remove_transition('size');
-      this.bgActor.remove_transition('position');
+      this.bgActor!.x !== monitor.x || this.bgActor!.y !== monitor.y) {
+      this.bgActor!.remove_transition('size');
+      this.bgActor!.remove_transition('position');
+      this.bgActor!.set_position(monitor.x, monitor.y);
+      this.bgActor!.set_size(screenW, screenH);
+      this.bgActor!.remove_transition('size');
+      this.bgActor!.remove_transition('position');
 
       this.liquidBox?.set_position(0, 0);
       this.liquidBox?.set_size(screenW, screenH);

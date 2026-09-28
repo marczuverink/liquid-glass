@@ -27,6 +27,36 @@ interface WindowEntry {
   normal: boolean;
 }
 
+function readWindow(metaWindow: Meta.Window) {
+  try {
+    const wmClass = metaWindow.get_wm_class() ?? '';
+    const windowType = metaWindow.get_window_type();
+    const title = metaWindow.get_title() ?? '';
+    if (!wmClass || windowType === Meta.WindowType.DESKTOP ||
+      windowType === Meta.WindowType.DOCK || windowType === Meta.WindowType.SPLASHSCREEN)
+      return null;
+    const normal = windowType === Meta.WindowType.NORMAL ||
+      windowType === Meta.WindowType.DIALOG || windowType === Meta.WindowType.MODAL_DIALOG;
+    return { wmClass, title, normal };
+  } catch {
+    return null;
+  }
+}
+
+function readApplication(entry: WindowEntry, metaWindow: Meta.Window, tracker: Shell.WindowTracker | null) {
+  if (!tracker)
+    return;
+  try {
+    const app = tracker.get_window_app(metaWindow);
+    if (!app)
+      return;
+    entry.appName = app.get_name() ?? '';
+    const icon = app.get_app_info()?.get_icon();
+    if (icon)
+      entry.iconName = icon.to_string() ?? '';
+  } catch { }
+}
+
 export class WindowListService {
   private _logger: Logger;
   private _dbusImpl: any = null;
@@ -154,29 +184,10 @@ export class WindowListService {
     const byClass: Map<string, WindowEntry> = new Map();
 
     for (const metaWindow of this._listMetaWindows()) {
-      let wmClass = '';
-      let windowType: Meta.WindowType | null = null;
-      let title = '';
-      try {
-        wmClass = metaWindow.get_wm_class() ?? '';
-        windowType = metaWindow.get_window_type();
-        title = metaWindow.get_title() ?? '';
-      } catch {
+      const window = readWindow(metaWindow);
+      if (!window)
         continue;
-      }
-
-      if (!wmClass)
-        continue;
-
-      if (windowType === Meta.WindowType.DESKTOP ||
-        windowType === Meta.WindowType.DOCK ||
-        windowType === Meta.WindowType.SPLASHSCREEN)
-        continue;
-
-      const isNormal = windowType === Meta.WindowType.NORMAL ||
-        windowType === Meta.WindowType.DIALOG ||
-        windowType === Meta.WindowType.MODAL_DIALOG;
-
+      const { wmClass, title, normal } = window;
       let entry = byClass.get(wmClass);
       if (!entry) {
         entry = { wmClass, appName: '', iconName: '', titles: [], count: 0, normal: false };
@@ -184,23 +195,12 @@ export class WindowListService {
       }
 
       entry.count += 1;
-      entry.normal = entry.normal || isNormal;
+      entry.normal = entry.normal || normal;
       if (title && entry.titles.length < 8 && !entry.titles.includes(title))
         entry.titles.push(title);
 
-      const trackerRef = entry.appName ? null : getTracker();
-      if (trackerRef) {
-        try {
-          const app = trackerRef.get_window_app(metaWindow);
-          if (app) {
-            entry.appName = app.get_name() ?? '';
-            const appInfo = app.get_app_info();
-            const icon = appInfo?.get_icon();
-            if (icon)
-              entry.iconName = icon.to_string() ?? '';
-          }
-        } catch { }
-      }
+      if (!entry.appName)
+        readApplication(entry, metaWindow, getTracker());
     }
 
     const entries = [...byClass.values()];

@@ -2,6 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { loadModule } = require('./helpers/load-module.cjs');
 
 function fixture(monitor) {
   const pending = new Map();
@@ -74,10 +75,8 @@ function fixture(monitor) {
     reportFrameLoopError(_, error) { errors.push(error); }, syncGlassCaptureClip() {},
     setClipIfChanged(actor, ...args) { actor.set_clip(...args); },
   };
-  const code = fs.readFileSync(path.join(__dirname,
-    '../liquid-glass@thinkingcoding1231.gmail.com/dist/dockManager.js'), 'utf8')
-    .replace(/^import[\s\S]*?;\n/gm, '').replace('export class DashManager', 'class DashManager');
-  const Manager = new Function(...Object.keys(bindings), `${code}; return DashManager;`)(...Object.values(bindings));
+  const { DashManager: Manager } = loadModule(path.join(__dirname,
+    '../liquid-glass@thinkingcoding1231.gmail.com/dist/dockManager.js'), bindings);
   const settings = Object.assign(new Actor(), { get_int: () => 0, get_double: () => 0,
     get_string: () => '#ffffff', get_boolean: () => false });
   const manager = new Manager('/ext', target, settings, { log() {}, error() {} });

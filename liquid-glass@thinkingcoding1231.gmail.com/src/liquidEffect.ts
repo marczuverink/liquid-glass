@@ -18,6 +18,22 @@ import { registerGlassEffect, unregisterGlassEffect, blurCacheDefault } from './
 import { frameSerial, ensureFrameSerialHook, frameSerialIsLive } from './rendering/frameClock.js';
 export { noteStrandEntry, setGlassRingArmed, isGlassRingArmed, startGlassRingSampler, stopGlassRingSampler, flushGlassRing } from './diagnostics/glass.js';
 
+interface PaintCapture {
+  actor: Clutter.Actor | null;
+  srcW: number;
+  srcH: number;
+  effectiveW: number;
+  effectiveH: number;
+  layout: ReturnType<typeof computeCaptureLayout>;
+  srcUV: number[];
+  resW: number;
+  resH: number;
+  blurRect: number[] | null;
+  blurW: number;
+  blurH: number;
+  blurSrcUV: number[];
+}
+
 interface LiquidEffectParams {
   extensionPath?: string;
   settings?: Gio.Settings;
@@ -172,6 +188,48 @@ export const LiquidEffect = GObject.registerClass({
   }
 
   vfunc_paint_target(_paintNode: Clutter.PaintNode, paintContext: Clutter.PaintContext): void {
+    this._notePaint();
+    if (!this._preparePaint()) {
+      super.vfunc_paint_target(_paintNode, paintContext);
+      return;
+    }
+
+    if (!frameSerialIsLive()) ensureFrameSerialHook();
+    const serialIsLive = frameSerialIsLive();
+    const firstPaintThisFrame = !serialIsLive || this._blurFrameSerial !== frameSerial;
+    if (serialIsLive) this._blurFrameSerial = frameSerial;
+
+    const srcTex = this.get_texture() as Cogl.Texture2D | null;
+    if (!srcTex) {
+      super.vfunc_paint_target(_paintNode, paintContext);
+      return;
+    }
+    const capture = this._captureLayout(srcTex);
+    const { blurRect, blurW, blurH, blurSrcUV, srcUV } = capture;
+    const { reuseBlur, reuseCrossFrame, blurInputKey } = this._blurReuse(srcTex, capture, firstPaintThisFrame);
+    const effectiveTex = this._cropSource(_paintNode, srcTex, capture, reuseBlur);
+    const inputUV = effectiveTex === srcTex ? srcUV : [0, 0, 1, 1];
+    const blurInputUV = blurRect ? blurSrcUV : inputUV;
+
+    if (!this._resizeBlur(blurW, blurH, reuseBlur)) {
+      super.vfunc_paint_target(_paintNode, paintContext);
+      return;
+    }
+    if (reuseBlur) {
+      this._blurSkips++;
+      if (reuseCrossFrame) this._blurCacheHits++;
+    } else {
+      this._blurRectUsed = blurRect;
+      if (this._blur.passCount > 0) this._blurRuns++;
+      this._blur.render(_paintNode, effectiveTex, blurInputUV, blurInputKey);
+    }
+
+    const layer0UV = this._bindCompositeLayers(effectiveTex, inputUV, blurRect);
+    const paintOpacity = this._compositePaint(_paintNode, capture, layer0UV);
+    this._snapshotPaint(srcTex, effectiveTex, capture, paintOpacity);
+  }
+
+  private _notePaint(): void {
     this._diagPaintCount++;
     if (this._diagEnabled) {
       const now = GLib.get_monotonic_time();
@@ -192,10 +250,11 @@ export const LiquidEffect = GObject.registerClass({
         this._diagLastPaintLogAt = now;
       }
     }
+  }
 
+  private _preparePaint(): boolean {
     if (!this._shadersLoaded) {
-      super.vfunc_paint_target(_paintNode, paintContext);
-      return;
+      return false;
     }
     if (!this._pipelines.composite) {
       try {
@@ -205,14 +264,12 @@ export const LiquidEffect = GObject.registerClass({
         this._uniforms.attach(this._pipelines.composite);
       } catch (e) {
         this._logger?.error(`[Liquid Glass] Pipeline initialization failed: ${e}`);
-        super.vfunc_paint_target(_paintNode, paintContext);
-        return;
+        return false;
       }
     }
 
     if (!this._pipelines.composite || !this._pipelines.downsample || !this._pipelines.upsample) {
-      super.vfunc_paint_target(_paintNode, paintContext);
-      return;
+      return false;
     }
 
     if (this._blur.needsCompile) {
@@ -224,19 +281,10 @@ export const LiquidEffect = GObject.registerClass({
         this._logger?.error(`[Liquid Glass] Failed to build Gaussian pipelines: ${e}`);
       }
     }
+    return true;
+  }
 
-    if (!frameSerialIsLive()) ensureFrameSerialHook();
-
-    const serialIsLive = frameSerialIsLive();
-    const firstPaintThisFrame = !serialIsLive || this._blurFrameSerial !== frameSerial;
-    if (serialIsLive) this._blurFrameSerial = frameSerial;
-
-    const srcTex = this.get_texture() as Cogl.Texture2D | null;
-    if (!srcTex) {
-      super.vfunc_paint_target(_paintNode, paintContext);
-      return;
-    }
-
+  private _captureLayout(srcTex: Cogl.Texture2D): PaintCapture {
     const srcW = srcTex.get_width();
     const srcH = srcTex.get_height();
 
@@ -276,7 +324,11 @@ export const LiquidEffect = GObject.registerClass({
         srcUV[1] + ((blurRect[1] + blurRect[3]) / effectiveH) * (srcUV[3] - srcUV[1]),
       ]
       : srcUV;
+    return { actor, srcW, srcH, effectiveW, effectiveH, layout, srcUV, resW, resH, blurRect, blurW, blurH, blurSrcUV };
+  }
 
+  private _blurReuse(srcTex: Cogl.Texture2D, capture: PaintCapture, firstPaintThisFrame: boolean) {
+    const { blurRect, blurW, blurH, blurSrcUV, srcUV } = capture;
     const a = this._blurRectUsed;
     const rectUnchanged = (a === null)
       ? (blurRect === null)
@@ -294,7 +346,12 @@ export const LiquidEffect = GObject.registerClass({
     const reuseCrossFrame = !reuseSameFrame && poolMatches && this._blurCacheEnabled &&
       this._blur.canReuse(blurInputKey);
     const reuseBlur = reuseSameFrame || reuseCrossFrame;
+    return { reuseBlur, reuseCrossFrame, blurInputKey };
+  }
 
+  private _cropSource(_paintNode: Clutter.PaintNode, srcTex: Cogl.Texture2D,
+    capture: PaintCapture, reuseBlur: boolean): Cogl.Texture {
+    const { blurRect, srcW, srcH, effectiveW, effectiveH, layout } = capture;
     let effectiveTexOut: Cogl.Texture = srcTex;
     if (this._cropPassEnabled && !blurRect && !reuseBlur &&
       (srcW !== effectiveW || srcH !== effectiveH)) {
@@ -309,11 +366,10 @@ export const LiquidEffect = GObject.registerClass({
         this._logger?.error(`[Liquid Glass] Crop pass node failed; continuing with the padded texture: ${e}`);
       }
     }
+    return effectiveTexOut;
+  }
 
-    const effectiveTex: Cogl.Texture = effectiveTexOut;
-    const inputUV: number[] = (effectiveTex === srcTex) ? srcUV : [0, 0, 1, 1];
-    const blurInputUV: number[] = blurRect ? blurSrcUV : inputUV;
-
+  private _resizeBlur(blurW: number, blurH: number, reuseBlur: boolean): boolean {
     if (!reuseBlur && (blurW !== this._blur.width || blurH !== this._blur.height)) {
       try {
         const ctx = this._getCoglContext();
@@ -322,25 +378,14 @@ export const LiquidEffect = GObject.registerClass({
         this._blur.resize(ctx, blurW, blurH);
       } catch (e) {
         this._logger?.error(`[Liquid Glass] Failed to rebuild the texture pool: ${e}`);
-        super.vfunc_paint_target(_paintNode, paintContext);
-        return;
+        return false;
       }
     }
 
-    if (!this._blur.ready) {
-      super.vfunc_paint_target(_paintNode, paintContext);
-      return;
-    }
+    return this._blur.ready;
+  }
 
-    if (reuseBlur) {
-      this._blurSkips++;
-      if (reuseCrossFrame) this._blurCacheHits++;
-    } else {
-      this._blurRectUsed = blurRect;
-      if (this._blur.passCount > 0) this._blurRuns++;
-      this._blur.render(_paintNode, effectiveTex, blurInputUV, blurInputKey);
-    }
-
+  private _bindCompositeLayers(effectiveTex: Cogl.Texture, inputUV: number[], blurRect: number[] | null): number[] {
     const compPipeline = this._pipelines.composite!;
 
     const haveBlur = this._blur.passCount > 0 && this._blur.result !== null;
@@ -360,7 +405,11 @@ export const LiquidEffect = GObject.registerClass({
     configureSamplerLayer(compPipeline, 1);
 
     this._uniforms.flush();
+    return layer0UV;
+  }
 
+  private _compositePaint(_paintNode: Clutter.PaintNode, capture: PaintCapture, layer0UV: number[]): number {
+    const { actor, resW, resH, effectiveW, effectiveH, layout } = capture;
     const paintOpacity = actor ? actor.get_paint_opacity() : 255;
     const color = new Cogl.Color();
     const paintOpacity_f = paintOpacity / 255;
@@ -393,7 +442,12 @@ export const LiquidEffect = GObject.registerClass({
     }
 
     this._passes.composite(_paintNode, this._pipelines.composite!, drawRect, drawUV, drawUV);
+    return paintOpacity;
+  }
 
+  private _snapshotPaint(srcTex: Cogl.Texture2D, effectiveTex: Cogl.Texture,
+    capture: PaintCapture, paintOpacity: number): void {
+    const { srcW, srcH, effectiveW, effectiveH, layout } = capture;
     this._diagCompositedPaintCount++;
 
     const diagNow = GLib.get_monotonic_time();
@@ -403,7 +457,7 @@ export const LiquidEffect = GObject.registerClass({
         owner: this._owner,
         actor: (() => { try { return (this.get_actor() as any)?.get_name?.() ?? '?'; } catch { return '?'; } })(),
         src: `${srcW}x${srcH}`,
-        alloc: `${allocW}x${allocH}`,
+        alloc: `${effectiveW}x${effectiveH}`,
         uv: layout.uv.map(v => +v.toFixed(5)),
         dest: layout.dest.map(v => +v.toFixed(2)),
         ...this._blur.describe(),

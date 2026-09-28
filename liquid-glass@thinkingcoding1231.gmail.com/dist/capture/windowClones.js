@@ -3,7 +3,8 @@ import { createBackgroundMirror } from './background.js';
 import { UnpickableActor, UnpickableClone } from '../actors/unpickable.js';
 import { isActorValid } from '../actors/lifecycle.js';
 import { setTranslationIfChanged, setClipIfChanged, setCloneCulled, setSizeIfChanged, setScaleIfChanged, setPivotIfChanged, setOpacityIfChanged, isDiffWritesEnabled } from '../actors/writes.js';
-import { getNestedGlassFix, innerGlassEffectOf } from './nestedGlass.js';
+import { getNestedGlassFix } from './nestedGlass.js';
+import { syncDamageHooks } from './damageHooks.js';
 import { reportClonedWindowActors, releaseClonedWindowActors } from './windowCulling.js';
 import { getWindowActors } from '../actors/windows.js';
 import { getAllocatedSize, rectsIntersect } from '../actors/geometry.js';
@@ -95,32 +96,10 @@ export class WindowCloneManager {
             this._releaseDamageHooks();
             return;
         }
-        for (const src of this._windowClones.keys()) {
-            if (this._damageHooks.has(src))
-                continue;
-            if (!isActorValid(src) || !innerGlassEffectOf(src))
-                continue;
-            try {
-                const id = src.connect('damaged', () => {
-                    if (isActorValid(container) && container.mapped && container.visible)
-                        container.queue_redraw();
-                });
-                this._damageHooks.set(src, id);
-            }
-            catch { }
-        }
-        if (this._damageHooks.size > this._windowClones.size) {
-            for (const [src, id] of [...this._damageHooks]) {
-                if (this._windowClones.has(src))
-                    continue;
-                try {
-                    if (isActorValid(src))
-                        src.disconnect(id);
-                }
-                catch { }
-                this._damageHooks.delete(src);
-            }
-        }
+        syncDamageHooks(this._damageHooks, this._windowClones, () => {
+            if (isActorValid(container) && container.mapped && container.visible)
+                container.queue_redraw();
+        });
     }
     _releaseDamageHooks() {
         if (this._damageHooks.size === 0)

@@ -104,6 +104,48 @@ export const LiquidEffect = GObject.registerClass({
         super.vfunc_paint(node, paintContext, flags);
     }
     vfunc_paint_target(_paintNode, paintContext) {
+        this._notePaint();
+        if (!this._preparePaint()) {
+            super.vfunc_paint_target(_paintNode, paintContext);
+            return;
+        }
+        if (!frameSerialIsLive())
+            ensureFrameSerialHook();
+        const serialIsLive = frameSerialIsLive();
+        const firstPaintThisFrame = !serialIsLive || this._blurFrameSerial !== frameSerial;
+        if (serialIsLive)
+            this._blurFrameSerial = frameSerial;
+        const srcTex = this.get_texture();
+        if (!srcTex) {
+            super.vfunc_paint_target(_paintNode, paintContext);
+            return;
+        }
+        const capture = this._captureLayout(srcTex);
+        const { blurRect, blurW, blurH, blurSrcUV, srcUV } = capture;
+        const { reuseBlur, reuseCrossFrame, blurInputKey } = this._blurReuse(srcTex, capture, firstPaintThisFrame);
+        const effectiveTex = this._cropSource(_paintNode, srcTex, capture, reuseBlur);
+        const inputUV = effectiveTex === srcTex ? srcUV : [0, 0, 1, 1];
+        const blurInputUV = blurRect ? blurSrcUV : inputUV;
+        if (!this._resizeBlur(blurW, blurH, reuseBlur)) {
+            super.vfunc_paint_target(_paintNode, paintContext);
+            return;
+        }
+        if (reuseBlur) {
+            this._blurSkips++;
+            if (reuseCrossFrame)
+                this._blurCacheHits++;
+        }
+        else {
+            this._blurRectUsed = blurRect;
+            if (this._blur.passCount > 0)
+                this._blurRuns++;
+            this._blur.render(_paintNode, effectiveTex, blurInputUV, blurInputKey);
+        }
+        const layer0UV = this._bindCompositeLayers(effectiveTex, inputUV, blurRect);
+        const paintOpacity = this._compositePaint(_paintNode, capture, layer0UV);
+        this._snapshotPaint(srcTex, effectiveTex, capture, paintOpacity);
+    }
+    _notePaint() {
         this._diagPaintCount++;
         if (this._diagEnabled) {
             const now = GLib.get_monotonic_time();
@@ -128,9 +170,10 @@ export const LiquidEffect = GObject.registerClass({
                 this._diagLastPaintLogAt = now;
             }
         }
+    }
+    _preparePaint() {
         if (!this._shadersLoaded) {
-            super.vfunc_paint_target(_paintNode, paintContext);
-            return;
+            return false;
         }
         if (!this._pipelines.composite) {
             try {
@@ -142,13 +185,11 @@ export const LiquidEffect = GObject.registerClass({
             }
             catch (e) {
                 this._logger?.error(`[Liquid Glass] Pipeline initialization failed: ${e}`);
-                super.vfunc_paint_target(_paintNode, paintContext);
-                return;
+                return false;
             }
         }
         if (!this._pipelines.composite || !this._pipelines.downsample || !this._pipelines.upsample) {
-            super.vfunc_paint_target(_paintNode, paintContext);
-            return;
+            return false;
         }
         if (this._blur.needsCompile) {
             try {
@@ -161,17 +202,9 @@ export const LiquidEffect = GObject.registerClass({
                 this._logger?.error(`[Liquid Glass] Failed to build Gaussian pipelines: ${e}`);
             }
         }
-        if (!frameSerialIsLive())
-            ensureFrameSerialHook();
-        const serialIsLive = frameSerialIsLive();
-        const firstPaintThisFrame = !serialIsLive || this._blurFrameSerial !== frameSerial;
-        if (serialIsLive)
-            this._blurFrameSerial = frameSerial;
-        const srcTex = this.get_texture();
-        if (!srcTex) {
-            super.vfunc_paint_target(_paintNode, paintContext);
-            return;
-        }
+        return true;
+    }
+    _captureLayout(srcTex) {
         const srcW = srcTex.get_width();
         const srcH = srcTex.get_height();
         const actor = this.get_actor();
@@ -206,6 +239,10 @@ export const LiquidEffect = GObject.registerClass({
                 srcUV[1] + ((blurRect[1] + blurRect[3]) / effectiveH) * (srcUV[3] - srcUV[1]),
             ]
             : srcUV;
+        return { actor, srcW, srcH, effectiveW, effectiveH, layout, srcUV, resW, resH, blurRect, blurW, blurH, blurSrcUV };
+    }
+    _blurReuse(srcTex, capture, firstPaintThisFrame) {
+        const { blurRect, blurW, blurH, blurSrcUV, srcUV } = capture;
         const a = this._blurRectUsed;
         const rectUnchanged = (a === null)
             ? (blurRect === null)
@@ -223,6 +260,10 @@ export const LiquidEffect = GObject.registerClass({
         const reuseCrossFrame = !reuseSameFrame && poolMatches && this._blurCacheEnabled &&
             this._blur.canReuse(blurInputKey);
         const reuseBlur = reuseSameFrame || reuseCrossFrame;
+        return { reuseBlur, reuseCrossFrame, blurInputKey };
+    }
+    _cropSource(_paintNode, srcTex, capture, reuseBlur) {
+        const { blurRect, srcW, srcH, effectiveW, effectiveH, layout } = capture;
         let effectiveTexOut = srcTex;
         if (this._cropPassEnabled && !blurRect && !reuseBlur &&
             (srcW !== effectiveW || srcH !== effectiveH)) {
@@ -236,9 +277,9 @@ export const LiquidEffect = GObject.registerClass({
                 this._logger?.error(`[Liquid Glass] Crop pass node failed; continuing with the padded texture: ${e}`);
             }
         }
-        const effectiveTex = effectiveTexOut;
-        const inputUV = (effectiveTex === srcTex) ? srcUV : [0, 0, 1, 1];
-        const blurInputUV = blurRect ? blurSrcUV : inputUV;
+        return effectiveTexOut;
+    }
+    _resizeBlur(blurW, blurH, reuseBlur) {
         if (!reuseBlur && (blurW !== this._blur.width || blurH !== this._blur.height)) {
             try {
                 const ctx = this._getCoglContext();
@@ -249,25 +290,12 @@ export const LiquidEffect = GObject.registerClass({
             }
             catch (e) {
                 this._logger?.error(`[Liquid Glass] Failed to rebuild the texture pool: ${e}`);
-                super.vfunc_paint_target(_paintNode, paintContext);
-                return;
+                return false;
             }
         }
-        if (!this._blur.ready) {
-            super.vfunc_paint_target(_paintNode, paintContext);
-            return;
-        }
-        if (reuseBlur) {
-            this._blurSkips++;
-            if (reuseCrossFrame)
-                this._blurCacheHits++;
-        }
-        else {
-            this._blurRectUsed = blurRect;
-            if (this._blur.passCount > 0)
-                this._blurRuns++;
-            this._blur.render(_paintNode, effectiveTex, blurInputUV, blurInputKey);
-        }
+        return this._blur.ready;
+    }
+    _bindCompositeLayers(effectiveTex, inputUV, blurRect) {
         const compPipeline = this._pipelines.composite;
         const haveBlur = this._blur.passCount > 0 && this._blur.result !== null;
         const activeRect = (haveBlur && blurRect) ? blurRect : null;
@@ -283,6 +311,10 @@ export const LiquidEffect = GObject.registerClass({
         compPipeline.set_layer_texture(1, layer0Tex);
         configureSamplerLayer(compPipeline, 1);
         this._uniforms.flush();
+        return layer0UV;
+    }
+    _compositePaint(_paintNode, capture, layer0UV) {
+        const { actor, resW, resH, effectiveW, effectiveH, layout } = capture;
         const paintOpacity = actor ? actor.get_paint_opacity() : 255;
         const color = new Cogl.Color();
         const paintOpacity_f = paintOpacity / 255;
@@ -312,6 +344,10 @@ export const LiquidEffect = GObject.registerClass({
             ];
         }
         this._passes.composite(_paintNode, this._pipelines.composite, drawRect, drawUV, drawUV);
+        return paintOpacity;
+    }
+    _snapshotPaint(srcTex, effectiveTex, capture, paintOpacity) {
+        const { srcW, srcH, effectiveW, effectiveH, layout } = capture;
         this._diagCompositedPaintCount++;
         const diagNow = GLib.get_monotonic_time();
         if (this._diagEnabled || diagNow - this._diagLastSnapshotAt > 1000 * 1000) {
@@ -325,7 +361,7 @@ export const LiquidEffect = GObject.registerClass({
                     return '?';
                 } })(),
                 src: `${srcW}x${srcH}`,
-                alloc: `${allocW}x${allocH}`,
+                alloc: `${effectiveW}x${effectiveH}`,
                 uv: layout.uv.map(v => +v.toFixed(5)),
                 dest: layout.dest.map(v => +v.toFixed(2)),
                 ...this._blur.describe(),
