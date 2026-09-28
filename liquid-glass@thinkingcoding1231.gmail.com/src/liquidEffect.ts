@@ -92,6 +92,8 @@ export const LiquidEffect = GObject.registerClass({
   declare private _blurCacheEnabled: boolean;
 
   declare private _recaptureSerial: number;
+  declare private _liveGeometryHook: (() => void) | null;
+  declare private _inLiveGeometry: boolean;
 
   declare private _material: MaterialSettings;
 
@@ -140,6 +142,8 @@ export const LiquidEffect = GObject.registerClass({
     this._blurCacheHits = 0;
     this._blurCacheEnabled = blurCacheDefault;
     this._recaptureSerial = 0;
+    this._liveGeometryHook = null;
+    this._inLiveGeometry = false;
     ensureFrameSerialHook();
     this._diagFirstPaintLogged = false;
 
@@ -189,6 +193,7 @@ export const LiquidEffect = GObject.registerClass({
 
   vfunc_paint_target(_paintNode: Clutter.PaintNode, paintContext: Clutter.PaintContext): void {
     this._notePaint();
+    this._runLiveGeometryHook();
     if (!this._preparePaint()) {
       super.vfunc_paint_target(_paintNode, paintContext);
       return;
@@ -249,6 +254,18 @@ export const LiquidEffect = GObject.registerClass({
           `paintCount=${this._diagPaintCount}, compositedCount=${this._diagCompositedPaintCount}`);
         this._diagLastPaintLogAt = now;
       }
+    }
+  }
+
+  private _runLiveGeometryHook(): void {
+    if (!this._liveGeometryHook) return;
+    this._inLiveGeometry = true;
+    try {
+      this._liveGeometryHook();
+    } catch (e) {
+      this._logger?.error(`[Liquid Glass] Live geometry hook failed: ${e}`);
+    } finally {
+      this._inLiveGeometry = false;
     }
   }
 
@@ -526,6 +543,7 @@ export const LiquidEffect = GObject.registerClass({
   }
 
   cleanup(): void {
+    this._liveGeometryHook = null;
     unregisterGlassEffect(this);
 
     this._material.clear();
@@ -676,6 +694,10 @@ export const LiquidEffect = GObject.registerClass({
   private declare _batchDepth: number;
   private declare _batchDirty: boolean;
 
+  setLiveGeometryHook(fn: (() => void) | null): void {
+    this._liveGeometryHook = fn;
+  }
+
   beginBatch(): void {
     if (!LiquidEffect.DRAG_PERF_MODE_ENABLED) return;
     this._batchDepth = (this._batchDepth || 0) + 1;
@@ -693,6 +715,7 @@ export const LiquidEffect = GObject.registerClass({
   }
 
   queue_repaint(): void {
+    if (this._inLiveGeometry) return;
     if (LiquidEffect.DRAG_PERF_MODE_ENABLED && this._batchDepth) {
       this._batchDirty = true;
       return;

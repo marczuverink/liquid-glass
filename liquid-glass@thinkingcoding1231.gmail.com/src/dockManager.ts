@@ -81,6 +81,12 @@ export class DashManager {
   private _marginValue: number = 0;
   private _lastHidden: boolean | undefined;
 
+  private _liveRef: {
+    actor: Clutter.Actor;
+    rawX: number; rawY: number;
+    rect: [number, number, number, number];
+  } | null = null;
+
   private _uiSampler: UILayerSampler | null = null;
   private _windowCloneManager: WindowCloneManager | null = null;
 
@@ -303,6 +309,8 @@ export class DashManager {
     this.effect.setIsDock(true);
     this.liquidBox.add_effect(this.effect);
 
+    this.effect.setLiveGeometryHook(() => this._syncGlassGeometryLive());
+
     this._windowCloneManager = new WindowCloneManager(this.liquidBox, this._cloneContainer, 'lg-dock');
     this._uiSampler = new UILayerSampler(
       this.bgActor, this.liquidBox,
@@ -356,6 +364,20 @@ export class DashManager {
     }
   }
 
+  _syncGlassGeometryLive() {
+    const ref = this._liveRef;
+    if (!ref || !this.effect) return;
+    if (!ref.actor?.mapped) return;
+
+    const [nx, ny] = ref.actor.get_transformed_position();
+    if (!Number.isFinite(nx) || !Number.isFinite(ny)) return;
+
+    this.effect.setGlassGeometry(
+      ref.rect[0] + (nx - ref.rawX),
+      ref.rect[1] + (ny - ref.rawY),
+      ref.rect[2], ref.rect[3]);
+  }
+
   _syncGeometry() {
     if (!this.bgActor || !this.targetActor || !this.targetActor.mapped) return;
     let bounds = this._readDockBounds();
@@ -393,6 +415,8 @@ export class DashManager {
     return { absX, absY, baseW, baseH };
   }
 
+  private _liveSource: { actor: any, rawX: number, rawY: number } | null = null;
+
   private _readDockBounds(): DockBounds | null {
     let sourceActor = this.targetActor;
     let children = this.targetActor.get_children() as St.Widget[];
@@ -406,6 +430,7 @@ export class DashManager {
     let [baseW, baseH] = sourceActor.get_size();
     let [absX, absY] = sourceActor.get_transformed_position();
     if (Number.isNaN(absX) || Number.isNaN(absY)) return null;
+    this._liveSource = { actor: sourceActor, rawX: absX, rawY: absY };
     const bounds = { absX, absY, baseW, baseH };
     return sourceActor === this.targetActor ? bounds : clipDockBounds(bounds, this._actorBounds(this.targetActor));
   }
@@ -531,6 +556,13 @@ export class DashManager {
 
     this.effect?.setGlassGeometry(localBgX, localBgY, bgW, bgH);
 
+    const source = this._liveSource;
+    this._liveRef = source ? {
+      actor: source.actor,
+      rawX: source.rawX, rawY: source.rawY,
+      rect: [localBgX, localBgY, bgW, bgH],
+    } : null;
+
     this._windowCloneManager?.setOffset(-monitor.x, -monitor.y);
 
     syncGlassCaptureClip({
@@ -613,6 +645,7 @@ export class DashManager {
 
   cleanup() {
     this._torndown = true;
+    this._liveRef = null;
 
     this._stopFrameSync();
 
