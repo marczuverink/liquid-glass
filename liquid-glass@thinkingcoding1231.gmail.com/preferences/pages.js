@@ -38,10 +38,10 @@ export function buildPreferences(window, settings) {
     {title: 'Advanced', patch: {'preferences-advanced': true}},
   ], '', false);
   const glass = controls.group(appearance, 'Glass', 'One look for all effects. Existing differences stay until you change a control.');
-  controls.number(glass, 'Blur', sharedKeys('blur-radius'), 0, 30, 1);
-  controls.number(glass, 'Corners', [...sharedKeys('corner-radius'), 'quick-settings-toggle-corner-radius'], 0, 200, 1);
+  controls.number(glass, 'Blur', sharedKeys('blur-radius'), 0, 30, 1, '', {slider: true});
+  controls.number(glass, 'Corners', [...sharedKeys('corner-radius'), 'quick-settings-toggle-corner-radius'], 0, 200, 1, '', {slider: true});
   controls.color(glass, 'Tint', sharedKeys('tint-color'));
-  controls.number(glass, 'Tint strength', sharedKeys('tint-strength'), 0, 1, 0.05);
+  controls.number(glass, 'Tint strength', sharedKeys('tint-strength'), 0, 1, 0.05, '', {slider: true});
 
   const behavior = controls.group(appearance, 'Behavior');
   controls.choice(behavior, 'Animations', MOTION);
@@ -52,19 +52,19 @@ export function buildPreferences(window, settings) {
 
   const surfaces = controls.group(effects, 'Show glass on');
   controls.toggle(surfaces, 'Dock', 'enable-dock-glass');
-  controls.choice(surfaces, 'Menus', booleanChoices(MENU_KEYS), 'Calendar, quick settings, top bar and desktop');
+  controls.choice(surfaces, 'Menus', booleanChoices(MENU_KEYS), 'Calendar, quick settings, other top bar menus and desktop');
   controls.choice(surfaces, 'Popups', booleanChoices(POPUP_KEYS), 'Notifications and volume / brightness indicators');
 
   const rendering = controls.group(advanced, 'Rendering');
   controls.choice(rendering, 'Quality', QUALITY);
-  controls.number(rendering, 'Refraction', ['glass-displacement-scale'], 0, 200, 1);
-  controls.number(rendering, 'Edge light', ['glass-rim-intensity'], 0, 5, 0.1);
+  controls.number(rendering, 'Refraction', ['glass-displacement-scale'], 0, 200, 1, '', {slider: true});
+  controls.number(rendering, 'Edge light', ['glass-rim-intensity'], 0, 5, 0.1, '', {slider: true});
   controls.choice(rendering, 'Shadows', [
     {title: 'Off', patch: {'shadow-intensity': 0}},
     {title: 'Soft', patch: {'shadow-radius': 50, 'shadow-intensity': 0.22}},
     {title: 'Strong', patch: {'shadow-radius': 50, 'shadow-intensity': 0.5}},
   ]);
-  controls.number(rendering, 'Edge shading', ['glass-ao-intensity'], 0, 1, 0.05);
+  controls.number(rendering, 'Edge shading', ['glass-ao-intensity'], 0, 1, 0.05, '', {slider: true});
 
   const effectsTail = collectGroups(effects, () => {
     new WindowRules(settings, controls).add(effects);

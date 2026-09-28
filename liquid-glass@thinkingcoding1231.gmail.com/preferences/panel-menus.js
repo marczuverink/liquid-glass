@@ -6,7 +6,8 @@ const LEGACY = {
 };
 
 export function addPanelMenus(page, controls) {
-  const group = controls.group(page, 'Detected top bar menus');
+  const group = controls.group(page, 'Detected top bar menus',
+    'Menus of the other top bar indicators. The calendar and quick settings have their own settings.');
   const empty = new Adw.ActionRow({title: 'No additional menus detected'});
   group.add(empty);
   const rows = new Map();

@@ -74,12 +74,12 @@ cp -r liquid-glass/liquid-glass@thinkingcoding1231.gmail.com ~/.local/share/gnom
 
 ## What Can Be Made of Glass
 
-The effect can be enabled or disabled per UI element on the **Effects** page. In the **Simple** view every element shares one look (blur, corners, tint); switch the view to **Advanced** (Appearance → Settings) to tune each element on its own — tint color and strength, blur radius, corner radius, glass expand, offsets, and brightness / contrast / saturation — plus the element-specific features listed below.
+The effect can be enabled or disabled per UI element on the **Effects** page. In the **Simple** view every element shares one look (blur, corners, tint); switch the view to **Advanced** (Appearance → Settings) to tune each element on its own — tint color and strength, blur radius, corner radius, glass expand, offsets, and brightness / contrast / saturation — plus the element-specific features listed below. Values you tune by eye have a slider next to the number; values whose number is what matters (spring constants, intervals) are typed in.
 
 | Element | Notes / Special features |
 | --- | --- |
 | **Dash to Dock** | Glass behind the dock. Adds a bottom margin control so the dock can float above the screen edge. Works with the Dash to Dock / Ubuntu Dock extension. |
-| **Panel Menus** | Glass behind top panel menus and popups. Adds **custom spring animation** (stiffness / damping / mass) for opening and closing, and **adaptive text coloring**. |
+| **Calendar & Other Top Bar Menus** | Glass behind the calendar (clock) menu and behind the menus of the other top bar indicators — the keyboard layout and accessibility menus, and the indicators other extensions add. Each detected menu can be switched off on its own. Adds **custom spring animation** (stiffness / damping / mass) for opening and closing, and **adaptive text coloring**. |
 | **Notifications** | Glass behind notification banners. Supports **adaptive text coloring** and a hide safety margin to avoid flicker while the banner is dismissed. |
 | **Quick Settings** | Two modes: **Whole menu** applies one sheet of glass behind the whole panel, and **Individual buttons** turns every toggle button into its own piece of glass, keeping each toggle's own accent color (see "Button base colour"). Also supports spring animation and adaptive text coloring. |
 | **OSD** | Glass behind the on-screen displays (volume, brightness, and so on), with adaptive text coloring. |

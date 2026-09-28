@@ -78,10 +78,15 @@ export class PreferenceControls {
     return row;
   }
 
-  number(group, title, keys, min, max, step, subtitle = '') {
+  // `slider` adds a slider that shares the spin row's adjustment, for values
+  // that are tuned by eye while watching the glass (blur, tint, refraction,
+  // offsets, ...) rather than typed in as a number.
+  number(group, title, keys, min, max, step, subtitle = '', {slider = false} = {}) {
+    const digits = step < 1 ? 2 : 0;
     const row = new Adw.SpinRow({title, subtitle,
       adjustment: new Gtk.Adjustment({lower: min, upper: max, step_increment: step, page_increment: step * 10}),
-      digits: step < 1 ? 2 : 0});
+      digits});
+    if (slider) this._addSlider(row, digits);
     group.add(row);
     let syncing = false;
     const refresh = () => {
@@ -92,10 +97,21 @@ export class PreferenceControls {
       syncing = false;
     };
     row.connect('notify::value', () => {
-      if (!syncing) this.write(uniformPatch(keys, row.value));
+      // A dragged slider lands between steps; store what the row displays.
+      if (!syncing) this.write(uniformPatch(keys, Number(row.value.toFixed(digits))));
     });
     this.watch(keys, refresh);
     return row;
+  }
+
+  _addSlider(row, digits) {
+    const scale = new Gtk.Scale({orientation: Gtk.Orientation.HORIZONTAL, adjustment: row.adjustment,
+      draw_value: false, hexpand: true, valign: Gtk.Align.CENTER, width_request: 160, round_digits: digits});
+    row.add_suffix(scale);
+    // Adw.SpinRow packs its spin button into the suffix box first; move the
+    // slider in front of it so the row reads title, slider, number.
+    scale.get_parent?.()?.reorder_child_after?.(scale, null);
+    row._slider = scale;
   }
 
   color(group, title, keys) {

@@ -1,5 +1,6 @@
 // Native GTK smoke test. Memory backend is mandatory: never edit the user's profile.
 import Adw from 'gi://Adw';
+import Gtk from 'gi://Gtk';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import {buildPreferences} from '../liquid-glass@thinkingcoding1231.gmail.com/preferences/pages.js';
@@ -49,6 +50,12 @@ for (let i = 0; i < 8; i++) surface.selected = i;
 surface.selected = 1;
 const calendar = [...walk(window)].find(widget => widget instanceof Adw.PreferencesGroup && widget.title === 'Calendar');
 const calendarBlur = [...walk(calendar)].find(widget => widget instanceof Adw.SpinRow && widget.title === 'Blur');
+const blurSlider = [...walk(calendarBlur)].find(widget => widget instanceof Gtk.Scale);
+if (!blurSlider || blurSlider.adjustment !== calendarBlur.adjustment) throw Error('Blur has no slider on its adjustment');
+if (calendarBlur.get_first_child().get_last_child().get_first_child() !== blurSlider)
+  throw Error('The slider is not in front of the number');
+blurSlider.set_value(16.6);
+if (settings.get_int('menu-blur-radius') !== 17) throw Error('Dragging the slider did not store the rounded value');
 calendarBlur.value = 17;
 if (settings.get_int('menu-blur-radius') !== 17 || settings.get_int('dock-blur-radius') !== 12)
   throw Error('Individual blur changed the wrong surface');

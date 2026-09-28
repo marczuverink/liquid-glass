@@ -1,7 +1,8 @@
 export const SURFACE_OPTIONS = [
   ['dock', 'Dock', 'enable-dock-glass'],
   ['menu', 'Calendar', 'enable-menu-glass'],
-  ['panel-menu', 'Top bar menus', 'enable-extra-menu-glass'],
+  ['panel-menu', 'Other top bar menus', 'enable-extra-menu-glass',
+    'Menus of the other top bar indicators: keyboard layout, accessibility, extensions'],
   ['notification', 'Notifications', 'enable-notification-glass'],
   ['quick-settings', 'Quick settings', 'enable-quick-settings-glass'],
   ['osd', 'Volume and brightness', 'enable-osd-glass'],

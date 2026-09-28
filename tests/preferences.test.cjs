@@ -61,6 +61,7 @@ function fixture(overrides = {}, dbusResponses = []) {
   class RGBA { parse() { this.red = this.green = this.blue = 1; } }
   const Adw = Object.fromEntries(['PreferencesPage', 'PreferencesGroup', 'SwitchRow', 'ComboRow', 'SpinRow', 'ActionRow', 'EntryRow', 'ExpanderRow'].map(name => [name, class extends Widget {}]));
   const Gtk = {Adjustment: Widget, ColorDialogButton: Widget, ColorDialog: Widget, Button: Widget, ListBox: Widget,
+    Scale: Widget, Orientation: {HORIZONTAL: 0},
     StringList: {new: titles => titles}, Align: {CENTER: 0}, SelectionMode: {NONE: 0}};
   const dbusCalls = [];
   const Gio = {Settings, SettingsBindFlags: {GET: 1, DEFAULT: 0}, DBusCallFlags: {NONE: 0},
@@ -234,4 +235,26 @@ test('the preferred text colour writes only its own surface key, and the dump sh
   row.selected = 2;
   assert.deepEqual(f.writes.slice(before), [{'menu-adaptive-text-preference': 'dark'}]);
   assert.ok(f.row('Dump shortcut'));
+});
+
+test('visual controls get a slider on the same adjustment, spring constants do not', () => {
+  const f = fixture({'preferences-advanced': true});
+  for (const title of ['Blur', 'Corners', 'Tint strength', 'Refraction', 'Edge light', 'Edge shading'])
+    assert.ok(f.row(title)._slider, `${title} has a slider`);
+  assert.equal(f.row('Blur')._slider.adjustment, f.row('Blur').adjustment);
+  f.row('Surface').selected = 1;
+  const group = f.window.children[0].children.find(g => g.title === 'Calendar');
+  const byTitle = title => group.children.find(row => row.title === title);
+  for (const title of ['Blur', 'Brightness', 'Glass expansion', 'Horizontal offset', 'Menu scale'])
+    assert.ok(byTitle(title)._slider, `${title} has a slider`);
+  for (const title of ['Spring stiffness', 'Spring damping', 'Spring mass', 'Animation interval (ms)', 'Contrast interval (ms)'])
+    assert.equal(byTitle(title)?._slider, undefined, `${title} stays a plain number`);
+});
+
+test('a slider dragged between steps stores the value the row displays', () => {
+  const f = fixture();
+  f.row('Blur').value = 12.6;
+  assert.ok(Object.values(f.writes[0]).every(value => value === 13));
+  f.row('Tint strength').value = 0.4567;
+  assert.ok(Object.values(f.writes[1]).every(value => value === 0.46));
 });

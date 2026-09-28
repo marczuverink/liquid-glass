@@ -3,15 +3,16 @@ import Gtk from 'gi://Gtk';
 import {SURFACE_OPTIONS, APPEARANCE, LAYOUT, SPRING, OPTICS, LIGHTING, SHADOWS} from './advanced-model.js';
 import {addPanelMenus} from './panel-menus.js';
 
-function addNumbers(group, controls, specs, prefix = '') {
+function addNumbers(group, controls, specs, prefix = '', slider = true) {
   return new Map(specs.map(([key, title, min, max, step]) => [key,
-    controls.number(group, title, [`${prefix}${key}`], min, max, step)]));
+    controls.number(group, title, [`${prefix}${key}`], min, max, step, '', {slider})]));
 }
 
 function addMotion(group, controls, surface) {
   const key = `enable-${surface}-animation`;
   const toggle = controls.toggle(group, 'Animations', key);
-  const rows = addNumbers(group, controls, SPRING, `${surface}-`);
+  // Spring constants and intervals mean their number; no slider.
+  const rows = addNumbers(group, controls, SPRING, `${surface}-`, false);
   const keys = surface === 'quick-settings' ? [key, 'quick-settings-apply-to'] : [key];
   controls.watch(keys, () => {
     const panel = surface !== 'quick-settings' || controls.settings.get_value('quick-settings-apply-to').deep_unpack() === 0;
@@ -87,8 +88,8 @@ export function buildAdvancedPreferences(pages, controls) {
   selectorGroup.add(selector);
   const surfaces = new Map();
   const effects = controls.group(pages.effects, 'Individual effects');
-  for (const [surface, title, key] of SURFACE_OPTIONS) {
-    if (surface !== 'application') controls.toggle(effects, title, key);
+  for (const [surface, title, key, hint] of SURFACE_OPTIONS) {
+    if (surface !== 'application') controls.toggle(effects, title, key, hint ?? '');
   }
   const groups = [selectorGroup, effects, addPanelMenus(pages.effects, controls),
     ...addRendering(pages.rendering, controls)];
