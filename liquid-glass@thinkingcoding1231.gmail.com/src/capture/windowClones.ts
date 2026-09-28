@@ -6,7 +6,7 @@ import { UnpickableActor, UnpickableClone } from '../actors/unpickable.js';
 import { isActorValid } from '../actors/lifecycle.js';
 import { setTranslationIfChanged, setClipIfChanged, setCloneCulled, setSizeIfChanged, setScaleIfChanged, setPivotIfChanged, setOpacityIfChanged, isDiffWritesEnabled } from '../actors/writes.js';
 import { getNestedGlassFix } from './nestedGlass.js';
-import { syncDamageHooks } from './damageHooks.js';
+import { syncDamageHooks, releaseDamageHooks } from './damageHooks.js';
 import { reportClonedWindowActors, releaseClonedWindowActors } from './windowCulling.js';
 import { getWindowActors } from '../actors/windows.js';
 import { getAllocatedSize, rectsIntersect } from '../actors/geometry.js';
@@ -112,11 +112,7 @@ export class WindowCloneManager {
   }
 
   private _releaseDamageHooks(): void {
-    if (this._damageHooks.size === 0) return;
-    for (const [src, id] of this._damageHooks) {
-      try { if (isActorValid(src)) (src as any).disconnect(id); } catch { }
-    }
-    this._damageHooks.clear();
+    releaseDamageHooks(this._damageHooks);
   }
 
   sync() {
@@ -188,8 +184,6 @@ export class WindowCloneManager {
         `cullRect=[${this._cullRect!.map(Math.round)}] label=${this.label}`
       : `label=${this.label}`);
 
-    const tX = wX;
-    const tY = wY;
     const pX = w.pivot_point ? w.pivot_point.x : 0;
     const pY = w.pivot_point ? w.pivot_point.y : 0;
 
@@ -199,7 +193,7 @@ export class WindowCloneManager {
     clone.remove_transition('translation-y');
 
     if (clone.x !== 0 || clone.y !== 0) clone.set_position(0, 0);
-    setTranslationIfChanged(clone, tX, tY);
+    setTranslationIfChanged(clone, wX, wY);
 
     setSizeIfChanged(clone, width, height);
 

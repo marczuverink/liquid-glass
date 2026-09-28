@@ -17,7 +17,7 @@ import { setTranslationIfChanged, setSizeIfChanged, setScaleIfChanged, setOpacit
 import { isCullSiteEnabled } from './capture/options.js';
 import { createBackgroundMirror } from './capture/background.js';
 import { reportClonedWindowActors, releaseClonedWindowActors } from './capture/windowCulling.js';
-import { syncDamageHooks } from './capture/damageHooks.js';
+import { syncDamageHooks, releaseDamageHooks } from './capture/damageHooks.js';
 const GLASS_MIN_MARGIN = 10;
 const SHADOW_MARGIN_HEADROOM = 20;
 const GLASS_MAX_MARGIN = 100 + SHADOW_MARGIN_HEADROOM;
@@ -856,7 +856,6 @@ export class ApplicationManager {
             state.effect.setGlassGeometry(0, 0, bgW, bgH);
         }
         this._syncAnimatedCornerRadius(state, sx);
-        const anchorOffBy = anchorOffByEarly;
         this._syncCaptureOffset(state, actor, [pivotFxEarly, pivotFyEarly], [actorWEarly, actorHEarly], [sx, sy], [localX, localY]);
         this._syncClones(state);
         setActorVisible(state.cornerOverlay, CORNER_REVEAL_ENABLED);
@@ -867,7 +866,7 @@ export class ApplicationManager {
             state.cornerOverlayClone.set_position(0, 0);
             state.cornerOverlayClone.set_size(baseW, baseH);
         }
-        if (anchorOffBy > MAX_ANCHOR_DISPLACEMENT) {
+        if (anchorOffByEarly > MAX_ANCHOR_DISPLACEMENT) {
             this._setGlassStrandHidden(state, true);
             state.geomSig = undefined;
         }
@@ -900,6 +899,8 @@ export class ApplicationManager {
     }
     _repairNestedGlass(state) {
         const mode = getNestedGlassFix();
+        if (mode !== 'damage')
+            this._releaseDamageHooks(state);
         if (mode === 'off')
             return;
         const bg = state.bgActor;
@@ -935,11 +936,9 @@ export class ApplicationManager {
                 stale = true;
             }
         }
-        if (seen.size > state.clones.size) {
-            for (const src of [...seen.keys()])
-                if (!state.clones.has(src))
-                    seen.delete(src);
-        }
+        for (const src of seen.keys())
+            if (!state.clones.has(src))
+                seen.delete(src);
         return stale;
     }
     _syncDamageHooks(state) {
@@ -957,14 +956,7 @@ export class ApplicationManager {
     _releaseDamageHooks(state) {
         if (!state.damageHooks)
             return;
-        for (const [src, id] of state.damageHooks) {
-            try {
-                if (isActorValid(src))
-                    src.disconnect(id);
-            }
-            catch { }
-        }
-        state.damageHooks.clear();
+        releaseDamageHooks(state.damageHooks);
         state.damageHooks = undefined;
     }
     _syncClones(state) {

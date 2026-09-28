@@ -116,22 +116,22 @@ export const BackgroundMirror = GObject.registerClass(class BackgroundMirror ext
         this._restack();
     }
     _bindMirrorContent(srcContent, dstContent) {
-        if (dstContent) {
-            for (const prop of this._contentProps()) {
-                try {
-                    srcContent.bind_property(prop, dstContent, prop, GObject.BindingFlags.SYNC_CREATE);
-                }
-                catch (e) {
-                    utilsLog(`[bg-mirror] skipped content prop '${prop}': ${e}`);
-                }
-            }
+        if (!dstContent)
+            return;
+        for (const prop of this._contentProps()) {
             try {
-                if (!dstContent.background && srcContent.background)
-                    dstContent.set_background(srcContent.background);
+                srcContent.bind_property(prop, dstContent, prop, GObject.BindingFlags.SYNC_CREATE);
             }
             catch (e) {
-                utilsLog(`[bg-mirror] set_background failed: ${e}`);
+                utilsLog(`[bg-mirror] skipped content prop '${prop}': ${e}`);
             }
+        }
+        try {
+            if (!dstContent.background && srcContent.background)
+                dstContent.set_background(srcContent.background);
+        }
+        catch (e) {
+            utilsLog(`[bg-mirror] set_background failed: ${e}`);
         }
     }
     _removeMirror(child) {

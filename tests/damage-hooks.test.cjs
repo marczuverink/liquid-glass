@@ -31,12 +31,14 @@ test('damage subscriptions are unique, retry failed connections and ignore non-g
   assert.equal(hooks.size, 2);
 });
 
-test('damage pruning preserves the existing size gate and tolerates disposed sources', () => {
+test('damage pruning drops sources that left the clone set and tolerates disposed sources', () => {
   const a = source(), b = source();
   const hooks = new Map();
   syncDamageHooks(hooks, new Map([[a, {}]]), () => {});
   syncDamageHooks(hooks, new Map([[source({ glass: false }), {}]]), () => {});
-  assert.equal(hooks.has(a), true);
+  assert.equal(hooks.has(a), false, 'a source outside the clone set is released even when the maps are the same size');
+  assert.equal(a.callbacks.size, 0);
+  syncDamageHooks(hooks, new Map([[a, {}]]), () => {});
   syncDamageHooks(hooks, new Map([[b, {}]]), () => {});
   assert.equal(hooks.has(a), false);
   assert.equal(a.callbacks.size, 0);
@@ -96,5 +98,57 @@ test('window clone damage callbacks retain their container and release when the 
   assert.equal(manager.container.redraws, 0);
   mode = 'off';
   manager._syncDamageHooks();
+  assert.equal(a.callbacks.size, 0);
+});
+
+function isolatedFixture() {
+  const glassy = new Set();
+  const { syncDamageHooks, releaseDamageHooks } = loadModule(path.join(dist, 'capture/damageHooks.js'), {
+    isActorValid: actor => !!actor && !actor.disposed,
+    innerGlassEffectOf: actor => (glassy.has(actor) ? {} : null),
+  });
+  let next = 1;
+  const actor = name => ({ name, handlers: new Map(),
+    connect(signal, fn) { const id = next++; this.handlers.set(id, fn); return id; },
+    disconnect(id) { assert.ok(this.handlers.delete(id)); } });
+  return { syncDamageHooks, releaseDamageHooks, glassy, actor };
+}
+
+test('a nested-glass window that leaves the clone set loses its hook even when many other windows stay', () => {
+  const { syncDamageHooks, glassy, actor } = isolatedFixture();
+  const windows = Array.from({ length: 10 }, (_, i) => actor(`w${i}`));
+  glassy.add(windows[0]);
+  const sources = new Map(windows.map(w => [w, {}]));
+  const hooks = new Map();
+  syncDamageHooks(hooks, sources, () => {});
+  assert.equal(hooks.size, 1);
+  assert.equal(windows[0].handlers.size, 1);
+  sources.delete(windows[0]);
+  syncDamageHooks(hooks, sources, () => {});
+  assert.equal(hooks.size, 0);
+  assert.equal(windows[0].handlers.size, 0);
+});
+
+test('releasing hooks disconnects live sources and skips disposed ones', () => {
+  const { syncDamageHooks, releaseDamageHooks, glassy, actor } = isolatedFixture();
+  const a = actor('a'), b = actor('b');
+  glassy.add(a); glassy.add(b);
+  const hooks = new Map();
+  syncDamageHooks(hooks, new Map([[a, {}], [b, {}]]), () => {});
+  b.disposed = true;
+  releaseDamageHooks(hooks);
+  assert.equal(hooks.size, 0);
+  assert.equal(a.handlers.size, 0);
+  assert.equal(b.handlers.size, 1);
+});
+
+test('a source that keeps its clone but loses its inner glass loses its damage hook', () => {
+  const a = source();
+  const hooks = new Map(), sources = new Map([[a, {}]]);
+  syncDamageHooks(hooks, sources, () => {});
+  assert.equal(a.callbacks.size, 1);
+  a.glass = false;
+  syncDamageHooks(hooks, sources, () => {});
+  assert.equal(hooks.size, 0);
   assert.equal(a.callbacks.size, 0);
 });

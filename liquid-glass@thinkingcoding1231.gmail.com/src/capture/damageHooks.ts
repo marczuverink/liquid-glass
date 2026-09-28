@@ -10,10 +10,16 @@ export function syncDamageHooks(
       hooks.set(source, source.connect('damaged', onDamage));
     } catch { }
   }
-  if (hooks.size <= sources.size) return;
-  for (const [source, id] of [...hooks]) {
-    if (sources.has(source)) continue;
+  for (const [source, id] of hooks) {
+    if (sources.has(source) && isActorValid(source) && innerGlassEffectOf(source)) continue;
     try { if (isActorValid(source)) source.disconnect(id); } catch { }
     hooks.delete(source);
   }
+}
+
+export function releaseDamageHooks(hooks: Map<any, number>): void {
+  for (const [source, id] of hooks) {
+    try { if (isActorValid(source)) source.disconnect(id); } catch { }
+  }
+  hooks.clear();
 }
