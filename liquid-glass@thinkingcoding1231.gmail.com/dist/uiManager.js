@@ -6,8 +6,8 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import Gio from 'gi://Gio';
 import { LiquidEffect } from './liquidEffect.js';
-import { StageContrastSampler, AdaptiveContrastConfig } from './contrastSampler.js';
-import { UnpickableActor, UILayerSampler, UnpickableWidget, WindowCloneManager, reportFrameLoopError, ensureGlassAllocated, resolveMonitorGeometry, isActorValid, getAllocatedSize, isFrameSyncFrozen, setClipIfChanged, syncGlassCaptureClip, resolveCrossFade, adaptiveColorTweener } from './utils.js';
+import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
+import { UnpickableActor, UILayerSampler, UnpickableWidget, WindowCloneManager, reportFrameLoopError, ensureGlassAllocated, resolveMonitorGeometry, isActorValid, getAllocatedSize, isFrameSyncFrozen, setClipIfChanged, syncGlassCaptureClip, resolveCrossFade, adaptiveColorTweener, addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs } from './utils.js';
 // ========== Configuration Parameters ==========
 // Transparent padding outside the glass area.
 // This prevents the shader distortion or rounded corners from being clipped by the actor bounds.
@@ -594,6 +594,9 @@ export class UIManager {
         connectSetting(this._key('sample-interval-ms'), () => {
             this._adaptiveConfig.sampleIntervalMs = this._settings.get_int(this._key('sample-interval-ms'));
         });
+        connectSetting(this._key('adaptive-text-preference'), () => {
+            this._adaptiveConfig.preference = sanitizeColorPreference(this._settings.get_string(this._key('adaptive-text-preference')));
+        });
     }
     _applyEffect() {
         if (this._isEffectActive)
@@ -617,6 +620,7 @@ export class UIManager {
             enabled: this._settings.get_boolean(this._key('enable-adaptive-text-color')),
             samplePerElement: SAMPLE_PER_ELEMENT,
             sampleIntervalMs: this._settings.get_int(this._key('sample-interval-ms')),
+            preference: sanitizeColorPreference(this._settings.get_string(this._key('adaptive-text-preference'))),
         };
         // 1. bgActor: full monitor, no effect — starts 1×1, _syncGeometry expands it immediately
         this.bgActor = new UnpickableActor();
@@ -1230,7 +1234,7 @@ export class UIManager {
     _startAnimation(targetValue) {
         let isClosing = (targetValue === 0);
         if (this._tickId !== 0) {
-            GLib.source_remove(this._tickId);
+            removeFrameTicker(this._tickId);
             this._tickId = 0;
         }
         // If animation is disabled, just reset to default state
@@ -1266,7 +1270,10 @@ export class UIManager {
         }
         if (this._tickId === 0) {
             let lastTime = GLib.get_monotonic_time();
-            this._tickId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, this._animationInterval, () => {
+            // [PERF C1] Stepped by the frame clock, once per frame at most — see
+            // addFrameTicker(). The spring itself sub-steps, so the motion is as
+            // fine as the old 1ms timer's while the actors are written once a frame.
+            this._tickId = addFrameTicker(() => {
                 if (!this.bgActor || !this.targetActor) {
                     this._tickId = 0;
                     return GLib.SOURCE_REMOVE;
@@ -1276,8 +1283,8 @@ export class UIManager {
                 lastTime = currentTime;
                 let isClosing = this._swiftAnimation ? (this._swiftSpringScale.target === 0) : (this._springScale.target === 0);
                 let dt = elapsedMs / 1000;
-                if (dt > 0.033)
-                    dt = 0.033;
+                if (dt > 0.066)
+                    dt = 0.066; // [PERF C1] covers a 20fps cap; the physics sub-steps, so no blow-up
                 let stopped = false;
                 let s, p;
                 if (isClosing) {
@@ -1347,7 +1354,7 @@ export class UIManager {
                     return GLib.SOURCE_REMOVE;
                 }
                 return GLib.SOURCE_CONTINUE;
-            });
+            }, normalizeAnimationIntervalMs(this._animationInterval));
         }
     }
     _removeEffect() {
@@ -1366,7 +1373,7 @@ export class UIManager {
         }
         this._signals = [];
         if (this._tickId && this._tickId !== 0) {
-            GLib.Source.remove(this._tickId);
+            removeFrameTicker(this._tickId);
             this._tickId = 0;
         }
         // Stop the render frame loop
@@ -1518,13 +1525,24 @@ class Spring {
     }
     update(elapsedMs) {
         let dt = elapsedMs / 1000;
-        if (dt > 0.033)
-            dt = 0.033;
-        let springForce = -this.stiffness * (this.value - this.target);
-        let dampingForce = -this.damping * this.velocity;
-        let acceleration = (springForce + dampingForce) / this.mass;
-        this.velocity += acceleration * dt;
-        this.value += this.velocity * dt;
+        if (dt > 0.066)
+            dt = 0.066; // [PERF C1] covers a 20fps cap; the physics sub-steps, so no blow-up
+        // [PERF C1] Sub-stepped. The integrator is explicit (semi-implicit Euler),
+        // and with the stiffness the preferences allow a 16.7ms frame is not a
+        // stable step. The old 1ms GLib timer hid that by stepping — and repainting
+        // — a thousand times a second. Now the physics keeps its fine step while
+        // the frame driver writes the actors once per frame.
+        const mass = this.mass > 1e-3 ? this.mass : 1e-3;
+        let remaining = dt;
+        while (remaining > 1e-6) {
+            const h = Math.min(remaining, 0.002);
+            let springForce = -this.stiffness * (this.value - this.target);
+            let dampingForce = -this.damping * this.velocity;
+            let acceleration = (springForce + dampingForce) / mass;
+            this.velocity += acceleration * h;
+            this.value += this.velocity * h;
+            remaining -= h;
+        }
         return Math.abs(this.velocity) < 0.01 && Math.abs(this.value - this.target) < 0.001;
     }
 }
