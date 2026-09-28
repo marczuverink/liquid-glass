@@ -46,6 +46,18 @@ for (const [first, later] of [['Individual effects', 'Application windows'], ['S
 }
 const surface = [...walk(window)].find(row => row instanceof Adw.ComboRow && row.title === 'Surface');
 for (let i = 0; i < 8; i++) surface.selected = i;
+for (const [index, title, prefix] of [[1, 'Calendar', 'menu'], [2, 'Top bar menus', 'panel-menu'],
+  [4, 'Quick settings', 'quick-settings']]) {
+  surface.selected = index;
+  const group = [...walk(window)].find(widget => widget instanceof Adw.PreferencesGroup && widget.title === title);
+  const interval = [...walk(group)].find(widget => widget instanceof Adw.SpinRow && widget.title === 'Animation interval (ms)');
+  const key = `${prefix}-animation-interval-ms`;
+  if (!schema.get_key(key).range_check(new GLib.Variant('i', interval.adjustment.upper)))
+    throw Error(`${key} offers an invalid upper bound`);
+  interval.value = interval.adjustment.upper + 1;
+  if (interval.value !== interval.adjustment.upper || settings.get_int(key) !== interval.adjustment.upper)
+    throw Error(`${key} did not clamp and save the edit`);
+}
 surface.selected = 1;
 const calendar = [...walk(window)].find(widget => widget instanceof Adw.PreferencesGroup && widget.title === 'Calendar');
 const calendarBlur = [...walk(calendar)].find(widget => widget instanceof Adw.SpinRow && widget.title === 'Blur');

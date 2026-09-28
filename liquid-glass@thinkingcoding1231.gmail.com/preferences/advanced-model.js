@@ -37,7 +37,7 @@ export const SPRING = [
   ['spring-stiffness', 'Spring stiffness', 0, 1000, 0.1],
   ['spring-damping', 'Spring damping', 0, 1000, 0.1],
   ['spring-mass', 'Spring mass', 0, 1, 0.1],
-  ['animation-interval-ms', 'Animation interval (ms)', 0, 1000, 1],
+  ['animation-interval-ms', 'Animation interval (ms)', 0, 50, 1],
 ];
 
 export const OPTICS = [

@@ -8,11 +8,14 @@ const root = path.join(__dirname, '../liquid-glass@thinkingcoding1231.gmail.com'
 function fixture(overrides = {}, dbusResponses = []) {
   const values = new Map();
   const types = new Map();
+  const ranges = new Map();
   const xml = fs.readFileSync(path.join(root, 'schemas/org.gnome.shell.extensions.liquid-glass@thinkingcoding1231.gmail.com.gschema.xml'), 'utf8');
   for (const [, key, type, body] of xml.matchAll(/<key name="([^"]+)" type="([^"]+)">([\s\S]*?)<\/key>/g)) {
     const raw = body.match(/<default>([\s\S]*?)<\/default>/)[1].trim();
     const value = type === 'as' ? [] : type === 's' ? raw.slice(1, -1) : type === 'b' ? raw === 'true' : Number(raw);
     types.set(key, type); values.set(key, value);
+    const range = body.match(/<range min="([^"]+)" max="([^"]+)"\s*\/>/);
+    if (range) ranges.set(key, {min: Number(range[1]), max: Number(range[2])});
   }
   for (const [key, value] of Object.entries(overrides)) values.set(key, value);
   const listeners = new Map(); const widgets = []; const writes = []; let nextId = 1;
@@ -22,7 +25,13 @@ function fixture(overrides = {}, dbusResponses = []) {
     get_type_string() { return this.type; }
   }
   class Settings {
-    constructor() { this.path = '/test/'; this.settings_schema = {get_key: () => ({range_check: () => true})}; }
+    constructor() {
+      this.path = '/test/';
+      this.settings_schema = {get_key: key => ({range_check: variant => {
+        const range = ranges.get(key);
+        return !range || (variant.value >= range.min && variant.value <= range.max);
+      }})};
+    }
     get_value(key) { assert.ok(types.has(key), `unknown schema key ${key}`); return new Variant(types.get(key), values.get(key)); }
     get_boolean(key) { return this.get_value(key).deep_unpack(); }
     get_strv(key) { return this.get_value(key).deep_unpack(); }
@@ -80,7 +89,7 @@ function fixture(overrides = {}, dbusResponses = []) {
   const settings = new Settings(); const window = new Widget();
   const {buildPreferences} = load(path.join(root, 'preferences/pages.js'));
   const controls = buildPreferences(window, settings);
-  return {settings, window, controls, writes, values, widgets, load, listeners, dbusCalls,
+  return {settings, window, controls, writes, values, ranges, widgets, load, listeners, dbusCalls,
     row: title => widgets.find(widget => widget.title === title)};
 }
 
@@ -196,6 +205,22 @@ test('advanced surface edit changes only its own setting', () => {
   assert.match(f.row('Blur').subtitle, /Custom/);
   f.row('Surface').selected = 0;
   assert.equal(group.visible, false);
+});
+
+test('advanced animation intervals stay within their schema ranges on every animated surface', () => {
+  const f = fixture({'preferences-advanced': true});
+  for (const [index, title, surface] of [[1, 'Calendar', 'menu'], [2, 'Top bar menus', 'panel-menu'],
+    [4, 'Quick settings', 'quick-settings']]) {
+    f.row('Surface').selected = index;
+    const group = f.window.children[0].children.find(group => group.title === title);
+    const row = group.children.find(widget => widget.title === 'Animation interval (ms)');
+    const key = `${surface}-animation-interval-ms`;
+    assert.equal(row.adjustment.lower, f.ranges.get(key).min, key);
+    assert.equal(row.adjustment.upper, f.ranges.get(key).max, key);
+    row.value = row.adjustment.upper;
+    assert.equal(f.values.get(key), row.value);
+    assert.deepEqual(f.writes.at(-1), {[key]: row.value});
+  }
 });
 
 test('detected menus preserve exclusions and support legacy Vitals controls', () => {
