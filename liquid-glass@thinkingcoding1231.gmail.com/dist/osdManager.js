@@ -1,3 +1,4 @@
+// src/osdManager.ts
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
@@ -15,6 +16,7 @@ import { excludeOtherGlass } from './capture/glassExclusions.js';
 import { setClipIfChanged } from './actors/writes.js';
 import { syncGlassCaptureClip } from './capture/clip.js';
 import { resolveCrossFade, adaptiveColorTweener } from './animation/colors.js';
+// ========== Configuration Parameters (Defaults, overridden by settings) ==========
 const SHADER_PADDING = 20;
 export class OsdManager {
     extensionPath;
@@ -24,6 +26,9 @@ export class OsdManager {
     _frameSyncId;
     _frameSignalId = 0;
     _lastTickUs = 0;
+    // [FIX] Set by cleanup() before anything that can throw. Read by the
+    // per-frame loop so an orphaned one stops itself even if cleanup() never
+    // reached the call that stops it. See the note on DockManager's frameTick.
     _torndown = false;
     _isEffectActive;
     _osdYOffset;
@@ -133,6 +138,7 @@ export class OsdManager {
                     state.bgActor?.queue_redraw();
             }
         });
+        // ----------  Brightness / Saturation / Contrast  ----------
         connectSetting('osd-brightness', () => {
             if (this._isEffectActive) {
                 let v = this._settings.get_double('osd-brightness');
@@ -197,16 +203,30 @@ export class OsdManager {
         let osdWindows = Main.osdWindowManager._osdWindows;
         if (!osdWindows)
             return;
+        // Set up each monitor's OSD independently
         for (let osdWindow of osdWindows) {
             this._setupOsdEffect(osdWindow);
         }
+        // After all states exist, apply mutual exclusions so each UILayerSampler
+        // does not clone the other monitors' liquid-glass bgActors
         for (const state of this._osdStates)
             this._excludeOtherGlass(state);
+        // Global frame-render loop (covers all OSD states)
         const frameTick = () => {
+            // [FIX] Hard stop after teardown. A cleanup() that does not reach
+            // _stopFrameSync() — because an earlier step threw — would otherwise
+            // leave this handler running forever against destroyed actors, holding
+            // this whole manager (and its settings and logger) alive. The next
+            // enable() then builds a second set on top of a live first set, which
+            // is the "the extension can no longer be enabled" symptom. Stopping the
+            // loop is still done in cleanup(); this is the backstop that does not
+            // depend on cleanup() getting that far.
             if (this._torndown)
                 return;
             if (!this._isEffectActive)
                 return;
+            // [DIAG] See setFrameSyncFrozen() in animation/frameSync.ts. Does
+            // nothing, so the cost of this poll can be measured directly.
             if (isFrameSyncFrozen())
                 return;
             const nowUs = GLib.get_monotonic_time();
@@ -214,6 +234,10 @@ export class OsdManager {
                 return;
             this._lastTickUs = nowUs;
             for (let state of this._osdStates) {
+                // Per-state try/catch: one broken OSD must not stop the others (see
+                // DockManager's frameTick).
+                // See ensureGlassAllocated(): keeps this glass root in the
+                // stage's relayout queue so its clones can never strand.
                 ensureGlassAllocated(state.bgActor);
                 try {
                     this._syncGeometry(state);
@@ -225,6 +249,7 @@ export class OsdManager {
         };
         startStageLoop(this._frameSignalSlot, this._frameSlot, frameTick);
         this._startAdaptiveColorSampling();
+        // Rebuild everything if monitor configuration changes
         this._monitorsChangedId = Main.layoutManager.connect('monitors-changed', () => {
             this._removeEffect();
             if (this._settings.get_boolean('enable-osd-glass')) {
@@ -232,10 +257,12 @@ export class OsdManager {
             }
         });
     }
+    // Add the bgActors of all OTHER states (and every other glass) as exclusions
     _excludeOtherGlass(state) {
         excludeOtherGlass(state._uiSampler, state.bgActor);
     }
     _findOsdTarget(osdWindow) {
+        // ── Find the OSD's targetBox (the St.Widget with style methods) ───────────
         let targetBox = null;
         if (osdWindow._icon && osdWindow._icon.get_parent) {
             targetBox = osdWindow._icon.get_parent();
@@ -262,22 +289,27 @@ export class OsdManager {
         }
         targetBox.add_style_class_name('liquid-glass-transparent');
         targetBox.translation_y = -this._osdYOffset;
+        // ── 1. bgActor: full monitor size, no effect ─────────────────────────────
         let bgActor = new UnpickableActor();
         bgActor.set_name('liquid-glass-bg-actor');
         bgActor.set_size(1.0, 1.0);
         bgActor.set_pivot_point(0.0, 0.0);
+        // ── 2. liquidBox: outer layer — LiquidEffect with built-in dual-Kawase blur ─
         let liquidBox = new UnpickableActor();
         liquidBox.set_name('liquid-box');
         liquidBox.set_clip_to_allocation(true);
         bgActor.add_child(liquidBox);
+        // dummyBreaker: prevents BMS black-screen optimization bug
         let dummyBreaker = new UnpickableActor();
         dummyBreaker.set_name('optimization-breaker');
         dummyBreaker.set_size(1.0, 1.0);
         dummyBreaker.set_opacity(0);
         liquidBox.add_child(dummyBreaker);
+        // ── 3. _cloneContainer: sub-container inside liquidBox ────────────────────
         let cloneContainer = new UnpickableActor();
         cloneContainer.set_name('clone-container');
         liquidBox.add_child(cloneContainer);
+        // ── Find the OSD's ancestor that is a direct child of uiGroup ────────────
         let osdRoot = osdWindow;
         while (osdRoot.get_parent() && osdRoot.get_parent() !== Main.layoutManager.uiGroup) {
             const p = osdRoot.get_parent();
@@ -285,18 +317,21 @@ export class OsdManager {
                 break;
             osdRoot = p;
         }
+        // Insert bgActor below the OSD root in uiGroup
         if (osdRoot.get_parent() === Main.layoutManager.uiGroup) {
             Main.layoutManager.uiGroup.insert_child_below(bgActor, osdRoot);
         }
         else {
             Main.layoutManager.uiGroup.add_child(bgActor);
         }
+        // ── 4. Read effect parameters ─────────────────────────────────────────────
         let blurRadius = this._settings.get_int('osd-blur-radius');
         let tintColorStr = this._settings.get_string('osd-tint-color');
         let cornerRadius = this._settings.get_double('osd-corner-radius');
         let brightness = this._settings.get_double('osd-brightness');
         let saturation = this._settings.get_double('osd-saturation');
         let contrast = this._settings.get_double('osd-contrast');
+        // LiquidEffect on liquidBox (includes built-in dual-Kawase blur)
         let effect = new LiquidEffect({ extensionPath: this.extensionPath, settings: this._settings, owner: 'osd' });
         effect.setPadding(SHADER_PADDING);
         effect.setTintColor(...this._hexToColorArray(tintColorStr));
@@ -309,11 +344,14 @@ export class OsdManager {
         effect.setBlurRadius(blurRadius);
         liquidBox.add_effect(effect);
         bgActor.hide();
+        // ── 5. WindowCloneManager + UILayerSampler ────────────────────────────────
         let windowCloneManager = new WindowCloneManager(liquidBox, cloneContainer, 'lg-osd');
         let uiSampler = new UILayerSampler(bgActor, liquidBox, [osdRoot, global.windowGroup, global.window_group], cloneContainer, 'osd');
+        // ── 7. Build initial clones ───────────────────────────────────────────────
         windowCloneManager.rebuildClones();
         uiSampler.rebindSelf();
         uiSampler.refresh();
+        // ── 6. Compose the state object ───────────────────────────────────────────
         let state = {
             osdWindow,
             targetBox,
@@ -336,8 +374,10 @@ export class OsdManager {
             _destroyId: 0,
         };
         this._osdStates.push(state);
+        // When the OSD window itself is destroyed, clean up our matching state
         state._destroyId = osdWindow.connect('destroy', () => {
             this._osdStates = this._osdStates.filter(s => s !== state);
+            // effect must be cleaned up before bgActor.destroy()
             if (state.effect) {
                 try {
                     state.effect.cleanup();
@@ -356,6 +396,9 @@ export class OsdManager {
             state._windowCloneManager?.destroy();
         });
     }
+    // ── Per-state geometry synchronisation ─────────────────────────────────────
+    // Full-screen FBO approach: bgActor covers the full monitor, shader is told
+    // where the OSD lives within that FBO via setGlassGeometry().
     _syncGeometry(state) {
         if (!state.bgActor || !state.targetBox)
             return;
@@ -363,6 +406,9 @@ export class OsdManager {
         let [absX, absY] = state.targetBox.get_transformed_position();
         if (Number.isNaN(absX) || Number.isNaN(absY))
             return;
+        // Respect GNOME's OSD fade animation.
+        //
+        // Check visible, mapped, opacity states of the OSD window and targetBox.
         let osdWindowVisible = state.osdWindow.visible && state.osdWindow.mapped;
         let targetBoxVisible = state.targetBox.visible && state.targetBox.mapped;
         let currentOpacity = (osdWindowVisible && targetBoxVisible)
@@ -393,6 +439,7 @@ export class OsdManager {
         let bgH = visualH + (this._glassExpand * 2) + (SHADER_PADDING * 2);
         let bgX_abs = visualX - this._glassExpand - SHADER_PADDING;
         let bgY_abs = visualY - this._glassExpand - SHADER_PADDING;
+        // ── Monitor geometry ─────────────────────────────────────────────────────
         let monitorIndex = Main.layoutManager.findIndexForActor(state.osdWindow);
         if (monitorIndex < 0)
             monitorIndex = Main.layoutManager.primaryIndex;
@@ -401,24 +448,31 @@ export class OsdManager {
         let monitorY = monitor?.y ?? 0;
         let screenW = Math.max(1, monitor?.width ?? 1);
         let screenH = Math.max(1, monitor?.height ?? 1);
+        // Monitor-local shader coordinates
         let localBgX = bgX_abs - monitorX;
         let localBgY = bgY_abs - monitorY;
+        // ── Update actors only when geometry changed ─────────────────────────────
         if (state._lastBgW !== bgW || state._lastBgH !== bgH ||
             state._lastBgX !== bgX_abs || state._lastBgY !== bgY_abs ||
             state._lastScreenW !== screenW || state._lastScreenH !== screenH) {
+            // bgActor: full monitor size, positioned at monitor origin
             state.bgActor.remove_transition('size');
             state.bgActor.remove_transition('position');
             state.bgActor.set_position(monitorX, monitorY);
             state.bgActor.set_size(screenW, screenH);
             state.bgActor.remove_transition('size');
             state.bgActor.remove_transition('position');
+            // liquidBox fills the entire bgActor
             state.liquidBox?.set_position(0, 0);
             state.liquidBox?.set_size(screenW, screenH);
+            // Soft clip — limits GPU work to the OSD area + generous margin
             const CLIP_PADDING = 200;
             state.liquidBox?.remove_clip();
+            // [PERF] set_clip() queues a redraw unconditionally — see setClipIfChanged().
             setClipIfChanged(state.bgActor, localBgX - CLIP_PADDING, localBgY - CLIP_PADDING, bgW + CLIP_PADDING * 2, bgH + CLIP_PADDING * 2);
             const SHADOW_MAX_RADIUS = CLIP_PADDING - 20;
             state.effect?.setShadowMaxRadius(SHADOW_MAX_RADIUS);
+            // Inform shader of full-screen resolution and OSD position within FBO
             state.effect?.setResolution(screenW, screenH);
             state.effect?.setGlassGeometry(localBgX, localBgY, bgW, bgH);
             state._lastBgW = bgW;
@@ -428,8 +482,14 @@ export class OsdManager {
             state._lastScreenW = screenW;
             state._lastScreenH = screenH;
         }
+        // ── Sync clones every frame (dockManager pattern) ────────────────────────
         state._windowCloneManager?.setOffset(-monitorX, -monitorY);
         state._uiSampler?.refresh();
+        // [PERF ①/①b] Clip the offscreen CAPTURE to the region this glass can
+        // actually show, and hide the clones that fall outside it. Must sit
+        // between setGlassGeometry() (which makes the effect's uniforms describe
+        // this frame) and the two sync() calls below (which consume the cull
+        // rect this sets). See syncGlassCaptureClip() in capture/clip.ts.
         syncGlassCaptureClip({
             cloneContainer: state._cloneContainer,
             effect: state.effect,
@@ -442,6 +502,7 @@ export class OsdManager {
         state._windowCloneManager?.sync();
     }
     _osdVisualHeight(state, h) {
+        // OSD-specific margin-bottom bloat compensation (icon switch glitch)
         let themeNode = state.targetBox.get_theme_node();
         let mB = themeNode ? themeNode.get_margin(St.Side.BOTTOM) : 0;
         if (state._stableBaseH === undefined) {
@@ -463,6 +524,7 @@ export class OsdManager {
             state._stableBaseH = h;
         return visualH;
     }
+    // ── Effect remove / cleanup ─────────────────────────────────────────────────
     _removeEffect() {
         if (!this._isEffectActive)
             return;
@@ -481,6 +543,7 @@ export class OsdManager {
     }
     _cleanupOsdState(state) {
         this._restoreOsdTarget(state);
+        // DESTROY EFFECT FIRST (before bgActor.destroy())
         if (state.effect) {
             try {
                 state.effect.cleanup();
@@ -488,6 +551,7 @@ export class OsdManager {
             catch { }
             state.effect = null;
         }
+        // DESTROY ACTOR HIERARCHY — cascades through liquidBox → _cloneContainer
         if (state.bgActor) {
             try {
                 state.bgActor.hide();
@@ -501,6 +565,7 @@ export class OsdManager {
         }
         state.liquidBox = null;
         state._cloneContainer = null;
+        // Clean up managers
         try {
             state._uiSampler?.destroy();
         }
@@ -513,6 +578,7 @@ export class OsdManager {
         state._windowCloneManager = null;
     }
     _restoreOsdTarget(state) {
+        // Disconnect destroy watcher
         if (state.osdWindow && state._destroyId) {
             try {
                 state.osdWindow.disconnect(state._destroyId);
@@ -520,6 +586,7 @@ export class OsdManager {
             catch { }
             state._destroyId = 0;
         }
+        // Restore target box
         if (state.targetBox) {
             try {
                 state.targetBox.remove_style_class_name('liquid-glass-transparent');
@@ -528,6 +595,13 @@ export class OsdManager {
             catch { }
         }
     }
+    // [FIX] Teardown must not be all-or-nothing.
+    //
+    // These steps used to run bare, one after another, so the first one that
+    // threw skipped every step after it — signal handlers, actors, effects and
+    // (worst of all) the per-frame later chain stayed alive, and the next
+    // enable() built a second set on top. Disabling is exactly when a throw is
+    // most likely: the shell is destroying the same actors we are.
     _teardownStep(name, fn) {
         try {
             fn();
@@ -555,6 +629,7 @@ export class OsdManager {
         });
         this._teardownStep('removeEffect', () => this._removeEffect());
     }
+    // ── Adaptive text colour helpers ────────────────────────────────────────────
     _collectAdaptiveTextTargets() {
         let targets = [];
         for (let state of this._osdStates) {
@@ -591,6 +666,11 @@ export class OsdManager {
         }
         if (actor._currentTargetColor === color)
             return;
+        // A light<->dark flip used to be snapped here, because interpolating the
+        // two in RGB passes through the background's own grey and the label
+        // disappears mid-tween. _animateActorColor() now cross-dissolves that case
+        // instead (see crossFadeColorAt() in animation/colors.ts), so it is animated like any
+        // other change.
         actor._currentTargetColor = color;
         this._animateActorColor(actor, color, 380, skipAnimations, batchStart);
     }
@@ -610,6 +690,7 @@ export class OsdManager {
     _applyAdaptiveColorMap(colorMap, skipAnimations = false) {
         if (!colorMap || colorMap.size === 0)
             return;
+        // One timestamp for the whole map, so label, icon and level bar move as one.
         const batchStart = GLib.get_monotonic_time();
         for (const [actor, color] of colorMap.entries()) {
             this._setActorColor(actor, color, skipAnimations, batchStart);
@@ -665,12 +746,17 @@ export class OsdManager {
     _animateActorColor(actor, targetHexColor, durationMs = 380, skipAnimations = false, batchStart) {
         if (!actor || Object.keys(actor).length === 0)
             return;
+        // NOT cancelled here: add() below reads the entry this may already have,
+        // so that an interrupted tween restarts from the colour that is actually
+        // on screen rather than from a theme node St has not re-resolved yet.
+        // The snap path does cancel, because nothing should keep stepping after it.
         const originalStyle = (this._styledActors.get(actor) || '').trim();
         const stylePrefix = originalStyle ? `${originalStyle.replace(/;$/, '')}; ` : '';
         let themeNode = actor.get_theme_node();
         let startColor = themeNode.get_foreground_color();
         let startBgColor = themeNode.get_background_color();
         let targetRgb = this._hexToRgb(targetHexColor);
+        // OSD-specific: BarLevel progress bar colour interpolation
         let isProgressBar = actor.has_style_class_name && actor.has_style_class_name('level');
         let trackTargetRgb = targetRgb;
         if (isProgressBar) {
@@ -685,6 +771,10 @@ export class OsdManager {
                 b: Math.round(targetRgb.b + (otherRgb.b - targetRgb.b) * lerpRatio),
             };
         }
+        // The level bar keeps the plain lerp: it is a filled shape, not a glyph, so
+        // it never becomes illegible against the background it sits on, and dipping
+        // it through transparent would punch a hole in the OSD instead. Its track
+        // colour rides the same eased progress, which is why `apply` takes one.
         const apply = (r, g, b, a, progress) => {
             if (isProgressBar) {
                 const e = progress < 0.5
@@ -713,12 +803,15 @@ export class OsdManager {
         }
         const startRgb = { r: startColor.red, g: startColor.green, b: startColor.blue };
         const startAlpha = startColor.alpha / 255.0;
+        // One shared frame-clock driver, one shared start time per batch — see
+        // AdaptiveColorTweener in animation/colors.ts for why this is not a per-actor timer.
         adaptiveColorTweener.add(actor, {
             startRgb, startAlpha,
             targetRgb, targetAlpha: 1.0,
             crossFade: !isProgressBar && resolveCrossFade(startRgb, targetRgb),
             durationMs,
             apply,
+            // The bar writes a second colour the tuple does not describe.
             coalesce: !isProgressBar,
         }, batchStart);
     }

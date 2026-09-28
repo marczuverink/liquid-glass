@@ -15,6 +15,7 @@ export interface DockMonitor {
 export function clipDockBounds(bounds: DockBounds, target: DockBounds): DockBounds {
   let { absX, absY, baseW, baseH } = bounds;
   const { absX: tX, absY: tY, baseW: tW, baseH: tH } = target;
+  // 親コンテナからはみ出した分をカットし、本来のサイズに強制する
   if (absX < tX) { baseW -= (tX - absX); absX = tX; }
   if (absY < tY) { baseH -= (tY - absY); absY = tY; }
   if (absX + baseW > tX + tW) baseW = (tX + tW) - absX;
@@ -39,6 +40,10 @@ export function dockEdges(bounds: DockBounds, monitor: DockMonitor | null) {
 
 export type DockEdges = ReturnType<typeof dockEdges>;
 
+// 参照矩形との前後の隙間。軸が反転している場合は参照の開始位置を補正してから
+// 測る。For when the dock is upside down: 原点が下端にあるため、真の左上Y座標は
+// refY - refH になり、ギャップを再計算して正常化する。X 軸が反転（左右ミラー）
+// している左/右ドックも同じ検知と補正。
 function referenceGaps(start: number, size: number, refStart: number, refSize: number): [number, number] {
   let before = refStart - start;
   let after = start + size - (refStart + refSize);
@@ -57,13 +62,21 @@ export function balanceDockBounds(bounds: DockBounds, reference: DockBounds, edg
   const [topGap, bottomGap] = referenceGaps(absY, baseH, refY, refH);
   const [leftGap, rightGap] = referenceGaps(absX, baseW, refX, refW);
   if (baseW >= baseH) {
+    // ▼ 横長ドック（上・下ドック）▼
     const diff = Math.abs(bottomGap - topGap);
+    // 異常値(高さを超えるようなズレ)は無視する安全装置
     if (diff > 0 && diff < baseH / 2) {
+      // 下の隙間の方が広い -> 下を削る。
+      // 上の隙間の方が広い -> 開始位置(上)を下げて、高さも削る。
       if (!(bottomGap > topGap)) absY += diff;
       baseH -= diff;
     }
   } else {
+    // ▼ 縦長ドック（左・右ドック）▼
     const diff = Math.abs(rightGap - leftGap);
+    // 左ドック: 中央方向（右側）の余白のみ削る。leftGap > rightGap になっても
+    // absX を右にズラしてはいけない（何もしない。誤補正防止）。
+    // 右ドック: 中央方向（左側）の余白を削る。
     if (diff > 0 && diff < baseW / 2 &&
       (edges.minCenterDist !== edges.distLeftCenter || rightGap > leftGap)) {
       if (!(rightGap > leftGap)) absX += diff;
@@ -73,6 +86,8 @@ export function balanceDockBounds(bounds: DockBounds, reference: DockBounds, edg
   return { absX, absY, baseW, baseH };
 }
 
+// 画面端から margin だけ離れた位置でドックの領域を切り詰める。一番近い端が
+// 下なら下ドック、上なら上ドック、右なら右ドック、それ以外は左ドック。
 export function insetDockBounds(bounds: DockBounds, monitor: DockMonitor, edges: DockEdges,
   margin: number, stableBaseW: number, stableBaseH: number): DockBounds {
   let { absX, absY, baseW, baseH } = bounds;
@@ -95,6 +110,7 @@ function insetSpan(start: number, size: number, edge: number, stableSize: number
   } else if (start + size > edge) {
     size -= (start + size) - edge;
   }
+  // Experimental: never grow past the last stable size.
   if (size > stableSize) size = stableSize;
   return [start, size];
 }

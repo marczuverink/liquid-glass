@@ -1,3 +1,11 @@
+// utils.ts
+//
+// Shared helpers for the Liquid Glass extension, re-exported from the modules
+// that own them: actors that stay invisible to Looking Glass's picker
+// (actors/), the UI-layer sampler that clones the desktop behind the glass and
+// the special-case handling needed to render a blurred panel (from the Blur My
+// Shell extension) inside the glass without breaking the real panel's own blur
+// (capture/), and the animation drivers (animation/).
 export { setUtilsLogger, reportFrameLoopError } from './diagnostics/logging.js';
 export { ensureWindowActorAllocated, type WindowActorRescueMode, setWindowActorRescueMode, getWindowActorRescueMode, ensureGlassAllocated, setActorVisible } from './actors/allocation.js';
 export { setDiffWritesEnabled, isDiffWritesEnabled, invalidateCloneWriteCache, setTranslationIfChanged, setSizeIfChanged, setScaleIfChanged, setPivotIfChanged, setClipIfChanged, setPositionIfChanged, setCloneCulled, isCloneCulled, setOpacityIfChanged } from './actors/writes.js';

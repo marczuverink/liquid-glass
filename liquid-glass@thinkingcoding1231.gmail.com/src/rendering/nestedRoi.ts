@@ -2,6 +2,37 @@ import Cogl from 'gi://Cogl';
 import { isLiveGlassEffect } from '../diagnostics/glass.js';
 
 const ROI_PAD = 2;
+// ─── Nested-composite region of interest ─────────────────────────────────────
+//
+// [PERF B2] When a glass re-renders its capture, every window glass reached
+// through a clone inside it runs its composite pass into that capture — over
+// its WHOLE window, e.g. 2132x1246 for a maximized window — even though the
+// enclosing glass only ever samples the part of its capture it can show (its
+// cull rect: glass + refraction reach + blur reach + slack, the very rect ①b
+// culls whole windows against, published by syncGlassCaptureClip() as
+// `_lgCaptureScreenRect`). Everything composited outside it is thrown away.
+//
+// A nested composite therefore shrinks its quad to the enclosing glass's rect.
+// FINDING the enclosing glass is the subtle part. A nested paint does NOT run
+// inside the enclosing effect's vfunc_paint(): ClutterOffscreenEffect adds an
+// actor node, and that node's draw handler paints the subtree during the
+// EXECUTION phase, after every vfunc_paint of the build phase has returned
+// (see _blurFrameSerial's note). The first implementation published the rect
+// on a stack around vfunc_paint() and so never found anything — measured:
+// nested composite fill unchanged. What IS true at execution time is that the
+// enclosing effect's offscreen is the current framebuffer. So the lookup goes
+//     paintContext.get_framebuffer() -> Cogl.Offscreen.get_texture()
+//       -> the LiquidEffect whose capture that texture is
+// via this table, which each glass keeps current from its own paint_target.
+// Any other offscreen in between (another extension's effect) simply is not in
+// the table, and the composite is left whole — the safe side.
+//
+// The rect is in SCREEN coordinates, the space every clone is placed in (each
+// clone sits at its source's own screen position; the container translation
+// maps that into the capture), so the nested glass maps it into its own space
+// with its REAL stage transform, which the clone reproduces exactly.
+//
+// This shrinks geometry; it is NOT a set_clip() (memo.md 地雷17).
 const _captureOwners: Map<any, any> = new Map();
 
 export function registerCaptureOwner(owner: any, texture: any, previous: any): any {
@@ -18,6 +49,8 @@ function enclosingOwner(self: any, paintContext: any): any | null {
   if (_captureOwners.size === 0) return null;
   try {
     const fb: any = paintContext.get_framebuffer();
+    // Top-level paints draw into the stage view's (onscreen) framebuffer and
+    // stop here.
     if (!(fb instanceof Cogl.Offscreen)) return null;
     const owner = _captureOwners.get(fb.get_texture()) ?? null;
     return owner && owner !== self && isLiveGlassEffect(owner) ? owner : null;

@@ -4,6 +4,7 @@
 export const MAX_STEP_S = 0.066;
 const SUB_STEP_S = 0.002;
 
+// A straightforward mathematical implementation of Hooke's Law for spring physics
 export class Spring {
   private stiffness: number;
   private damping: number;
@@ -13,22 +14,23 @@ export class Spring {
   public target: number;
 
   constructor(stiffness: number, damping: number, mass: number) {
-    this.stiffness = stiffness;
-    this.damping = damping;
-    this.mass = mass;
+    this.stiffness = stiffness; // How rigid the spring is (higher = faster, more snappy)
+    this.damping = damping; // Friction (higher = less bounce, settles quicker)
+    this.mass = mass; // Weight of the object
 
-    this.value = 0;
-    this.velocity = 0;
-    this.target = 0;
+    this.value = 0; // Current position/scale
+    this.velocity = 0; // Current speed
+    this.target = 0; // Destination value
   }
 
   updateParams(stiffness: number, damping: number, mass: number) {
-    this.stiffness = stiffness;
-    this.damping = damping;
-    this.mass = mass;
+    this.stiffness = stiffness; // How rigid the spring is (higher = faster, more snappy)
+    this.damping = damping; // Friction (higher = less bounce, settles quicker)
+    this.mass = mass; // Weight of the object
   }
 
   update(elapsedMs: number) {
+    // Cap max delta time to prevent the spring from violently exploding during heavy CPU load
     let dt = elapsedMs / 1000;
     if (dt > MAX_STEP_S) dt = MAX_STEP_S;
 
@@ -41,15 +43,20 @@ export class Spring {
     let remaining = dt;
     while (remaining > 1e-6) {
       const h = Math.min(remaining, SUB_STEP_S);
+      // F = -k * x
       const springForce = -this.stiffness * (this.value - this.target);
+      // F = -c * v
       const dampingForce = -this.damping * this.velocity;
+      // a = F / m
       const acceleration = (springForce + dampingForce) / mass;
 
+      // Semi-implicit Euler
       this.velocity += acceleration * h;
       this.value += this.velocity * h;
       remaining -= h;
     }
 
+    // Return true if the spring has virtually stopped moving and reached its destination
     return Math.abs(this.velocity) < 0.01 && Math.abs(this.value - this.target) < 0.001;
   }
 }
@@ -106,7 +113,9 @@ export class SwiftSpring {
     let x_t = 0;
     let v_t = 0;
 
+    // Analytical solution — no numerical explosion regardless of spring stiffness
     if (zeta < 0.999) {
+      // 1. Underdamped — standard bouncy motion
       const omegaD = omega0 * Math.sqrt(1.0 - zeta * zeta);
       const alpha = zeta * omega0;
       const exp = Math.exp(-alpha * dt);
@@ -116,6 +125,7 @@ export class SwiftSpring {
       x_t = exp * (x0 * cos + ((v0 + alpha * x0) / omegaD) * sin);
       v_t = exp * (v0 * cos - ((alpha * v0 + omega0 * omega0 * x0) / omegaD) * sin);
     } else if (zeta > 1.001) {
+      // 2. Overdamped — slow, viscous motion
       const beta = omega0 * Math.sqrt(zeta * zeta - 1.0);
       const gamma1 = -zeta * omega0 + beta;
       const gamma2 = -zeta * omega0 - beta;
@@ -128,6 +138,7 @@ export class SwiftSpring {
       x_t = c1 * exp1 + c2 * exp2;
       v_t = c1 * gamma1 * exp1 + c2 * gamma2 * exp2;
     } else {
+      // 3. Critically damped — fastest settle without overshoot
       const exp = Math.exp(-omega0 * dt);
       x_t = exp * (x0 + (v0 + omega0 * x0) * dt);
       v_t = exp * (v0 - omega0 * (v0 + omega0 * x0) * dt);

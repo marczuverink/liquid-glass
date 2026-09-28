@@ -1,3 +1,4 @@
+// Logger class. Used by other classes and initialized in extension.js.
 export class Logger {
     _settings;
     _outputLogs;
@@ -16,6 +17,11 @@ export class Logger {
             this._outputLogs = this._settings.get_boolean('output-logs');
         });
     }
+    /**
+     * Whether log()/error() currently write anything. Callers that build an
+     * expensive message (or query Clutter) purely to log it should check this
+     * first — log() itself only discards the finished string.
+     */
     get enabled() {
         return this._outputLogs;
     }

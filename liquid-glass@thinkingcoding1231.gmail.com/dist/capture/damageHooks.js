@@ -9,6 +9,9 @@ export function syncDamageHooks(hooks, sources, onDamage) {
         }
         catch { }
     }
+    // Drop handlers for windows this glass no longer clones, or that lost their
+    // inner glass, so the map cannot grow with every window that has ever been
+    // behind this one (and cannot keep those actors alive).
     for (const [source, id] of hooks) {
         if (sources.has(source) && isActorValid(source) && innerGlassEffectOf(source))
             continue;

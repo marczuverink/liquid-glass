@@ -1,5 +1,6 @@
 import Gio from "gi://Gio"
 
+// Logger class. Used by other classes and initialized in extension.js.
 export class Logger {
   private _settings: Gio.Settings;
   private _outputLogs: boolean;
@@ -21,6 +22,11 @@ export class Logger {
     });
   }
 
+  /**
+   * Whether log()/error() currently write anything. Callers that build an
+   * expensive message (or query Clutter) purely to log it should check this
+   * first — log() itself only discards the finished string.
+   */
   get enabled(): boolean {
     return this._outputLogs;
   }

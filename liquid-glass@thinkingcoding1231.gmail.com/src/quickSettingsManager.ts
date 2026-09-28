@@ -2,6 +2,7 @@ import { ToggleStyles } from './quickSettings/toggleStyles.js';
 import { stepMenuSpring, applyMenuFrame, showMenuAtRest } from './animation/menuSpring.js';
 import { addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs } from './animation/frameTicker.js';
 import { Spring } from './animation/spring.js';
+// src/quickSettingsManager.ts
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
@@ -24,8 +25,13 @@ import { resolveCrossFade, adaptiveColorTweener } from './animation/colors.js';
 
 import { Logger } from './logger.js';
 
+// ========== Configuration Parameters ==========
+
+// Transparent padding outside the glass area.
+// This prevents the shader distortion or rounded corners from being clipped by the actor bounds.
 const SHADER_PADDING = 20;
 
+// Adaptive text color flags
 const SAMPLE_PER_ELEMENT = false;
 
 interface CustomBannerActor extends St.Widget {
@@ -53,9 +59,12 @@ function _recordSubmenuNeighbour(n: Clutter.Actor, gap: SubmenuGap): boolean {
   if (Number.isNaN(nodeY) || Number.isNaN(nodeW) || Number.isNaN(nodeH) ||
     nodeH <= 5 || nodeW <= 5) return false;
 
+  // Separate and evaluate elements above and below based on the submenu's "center point"
   if (nodeY + (nodeH / 2) < gap.subCenterY) {
+    // Elements above: Their bottom edge doesn't cross the submenu center, and are the lowest among them
     if (nodeY + nodeH <= gap.subCenterY && nodeY + nodeH > gap.aboveMaxY) gap.aboveMaxY = nodeY + nodeH;
   } else if (nodeY >= gap.subCenterY && nodeY < gap.belowMinY) {
+    // Elements below: Their top edge doesn't cross the submenu center, and are the highest among them
     gap.belowMinY = nodeY;
   }
   return true;
@@ -74,7 +83,13 @@ type ToggleRegionLayout = {
   minX: number; minY: number; maxX: number; maxY: number;
 };
 
+// ==============================================
 export class QuickSettingsManager {
+  // [FIX-6] How many consecutive frames Toggles mode may keep painting its
+  // last known-good region set while a structural change settles. Two frames
+  // is enough to cover a relayout landing after the BEFORE_REDRAW pass that
+  // reads geometry, and short enough to be imperceptible if it ever fires
+  // when the toggles really did disappear.
   private static readonly REGION_GRACE_FRAMES = 2;
 
   private _toggleStyles: ToggleStyles;
@@ -94,10 +109,25 @@ export class QuickSettingsManager {
   private _windowCloneManager: WindowCloneManager | null = null;
   private _uiSampler: UILayerSampler | null = null;
 
+  // [FIX] Toggles-mode structural redesign — see _ensurePanelContentClone().
+  // `_menuRoot` is the same uiGroup-direct-child ancestor of `this.menu.actor`
+  // computed once in _applyToggleEffect()/_applyBackgroundEffect(), cached
+  // here so the per-frame sync loop can clone/position it without
+  // recomputing the ancestor walk every frame.
   private _menuRoot: Clutter.Actor | null = null;
+  // A Clutter.Clone of `_menuRoot` — i.e. the panel exactly as GNOME/the
+  // theme renders it, completely untouched — inserted into _cloneContainer
+  // ON TOP of the real desktop windows/wallpaper clones from
+  // _windowCloneManager, so the glass (now painted structurally ON TOP of
+  // the real panel — see _applyToggleEffect()) has something correct to
+  // sample/refract within each toggle's own region.
   private _panelContentClone: any = null;
+  // [FIX-5] See LayoutOpaqueActor in actors/unpickable.ts — the intermediary host that
+  // actually gets inserted into animActor, so animActor's own real
+  // St.BoxLayout sizing never sees bgActor's fixed 1920x1080 size.
   private _toggleGlassHost: any = null;
 
+  // Cached monitor dimensions for change detection
   private _lastScreenW: number | undefined;
   private _lastScreenH: number | undefined;
 
@@ -112,11 +142,15 @@ export class QuickSettingsManager {
   private get _frameSlot() {
     return { get: () => this._frameSyncId, set: (id: number) => { this._frameSyncId = id; } };
   }
+  // [FIX] Set by cleanup() before anything that can throw. Read by the
+  // per-frame loop so an orphaned one stops itself even if cleanup() never
+  // reached the call that stops it. See the note on DockManager's frameTick.
   private _torndown: boolean = false;
   private _glassExpand: number;
   private _menuXoffset: number;
   private _menuYoffset: number;
 
+  // Spring physics parameters
   private _springScale: Spring;
   private _springStiffness: number;
   private _springDamping: number;
@@ -140,6 +174,7 @@ export class QuickSettingsManager {
   private _settingsSignals: number[];
   private _adaptiveConfig!: typeof AdaptiveContrastConfig;
 
+  // Used in _syncGeometry
   private _stableBaseW: number | undefined;
   private _stableBaseH: number | undefined;
   private _lastValidAnimAbsX: number | undefined;
@@ -155,18 +190,41 @@ export class QuickSettingsManager {
   private _cornerRadius: number = 0;
   private _animationInterval: number = 16;
 
+  // Flag to forcefully move submenus using translation_x, translation_y
   private _enableSubmenuFix: boolean = false;
 
-  private _cachedSubmenus: Clutter.Actor[] | null = null;
+  private _cachedSubmenus: Clutter.Actor[] | null = null; // Cache of submenus
 
+  // ── "Apply to" (Background / Toggles) ──────────────────────────────────────
+  // quick-settings-apply-to. Read into _applyTo on every settings change, but
+  // only takes effect the next time the menu opens (_activeMode records which
+  // mode is actually running right now) — see connectSetting() below.
   private _applyTo: 'background' | 'toggles' = 'background';
   private _activeMode: 'background' | 'toggles' | null = null;
 
+  // Cached [r,g,b] from quick-settings-tint-color (0..1). [FIX-8] Both modes
+  // now pass it straight to LiquidEffect.setTintColor(); Toggles mode used to
+  // pre-blend it into each region's tint instead, which is what coupled it to
+  // the custom tint strength (see _syncToggleRegions()).
   private _tintColorArray: [number, number, number] = [1.0, 1.0, 1.0];
 
+  // Toggles-mode-only parameters.
+  //
+  // [FIX-8] `quick-settings-toggle-tint-strength` (key name unchanged) is now
+  // read as "Base Color Strength": how strongly each toggle's OWN color is
+  // applied, independently of `quick-settings-tint-strength` ("Custom Color
+  // Strength"). It used to be a crossfade RATIO between the two — 0 meant
+  // "show the toggle's own color, none of the custom tint" — so the value's
+  // sense is inverted with respect to the old behaviour: 0 now means "do not
+  // apply the toggle's own color at all", 1 means "apply it fully".
   private _toggleBaseStrength: number = 0.5;
   private _toggleCornerRadius: number = 18.0;
 
+  // [FIX-6] Last successfully computed Toggles-mode region set, plus how many
+  // consecutive frames we have been falling back on it. Used to ride out the
+  // one-or-two frames after a structural change (submenu open/close, a toggle
+  // being added/removed) during which a pod can be visible but not yet
+  // allocated — see _syncToggleRegions().
   private _lastGoodRegions: {
     regions: { x: number; y: number; w: number; h: number; tintR: number; tintG: number; tintB: number; baseStrength: number }[];
     minX: number; minY: number; maxX: number; maxY: number;
@@ -178,9 +236,11 @@ export class QuickSettingsManager {
     this._settings = settings;
     this._logger = logger;
 
+    // Target the main container of the Quick Settings menu
     this.targetActor = Main.panel.statusArea.quickSettings.menu.actor;
     this.menu = Main.panel.statusArea.quickSettings.menu;
     this._toggleStyles = new ToggleStyles(logger, () => !!this.menu?.isOpen);
+    // Target for animations and visual offsets (The inner content)
     this.animActor = Main.panel.statusArea.quickSettings.menu.box;
 
     this.bgActor = null;
@@ -195,6 +255,8 @@ export class QuickSettingsManager {
     this._menuXoffset = 0;
     this._menuYoffset = 0;
 
+    // Custom spring physics parameters for the open/close animation
+    // Spring(stiffness, damping, mass)
     this._springScale = new Spring(120, 8, 1.0);
     this._springStiffness = 120;
     this._springDamping = 8;
@@ -221,12 +283,14 @@ export class QuickSettingsManager {
     if (!this._settings) return;
     this._bindSettings();
 
+    // Setup spring parameters
     this._enableAnimation = this._settings.get_boolean('enable-quick-settings-animation');
     this._springStiffness = this._settings.get_double('quick-settings-spring-stiffness');
     this._springDamping = this._settings.get_double('quick-settings-spring-damping');
     this._springMass = this._settings.get_double('quick-settings-spring-mass');
     this._springScale.updateParams(this._springStiffness, this._springDamping, this._springMass);
 
+    // "Apply to" (Background / Toggles) and Toggles-mode-only parameters
     this._applyTo = this._settings.get_int('quick-settings-apply-to') === 1 ? 'toggles' : 'background';
     this._toggleBaseStrength = this._settings.get_double('quick-settings-toggle-tint-strength');
     this._toggleCornerRadius = this._settings.get_double('quick-settings-toggle-corner-radius');
@@ -236,6 +300,7 @@ export class QuickSettingsManager {
     }
   }
 
+  // Utility: Convert HEX color string to normalized RGB array
   _hexToColorArray(hex: string): [number, number, number] {
     if (!hex || typeof hex !== 'string' || !hex.startsWith('#') || hex.length !== 7)
       return [1.0, 1.0, 1.0];
@@ -255,12 +320,14 @@ export class QuickSettingsManager {
     this.targetActor.translation_x = this._menuXoffset;
   }
 
+  // Dynamically apply settings changes
   _bindSettings() {
     const connectSetting = (key: string, callback: Function) => {
       let id = this._settings.connect(`changed::${key}`, callback.bind(this));
       this._settingsSignals.push(id);
     };
 
+    // ON/OFF toggle
     connectSetting('enable-quick-settings-glass', () => {
       let enabled = this._settings.get_boolean('enable-quick-settings-glass');
       if (enabled && !this._isEffectActive) this._applyEffect();
@@ -291,6 +358,10 @@ export class QuickSettingsManager {
     });
 
     connectSetting('quick-settings-tint-color', () => {
+      // [FIX-8] Pushed in BOTH modes. The custom tint color is its own shader
+      // layer now (see glass.frag), so Toggles mode reads the same tint_r/g/b
+      // uniform as Background mode rather than having this colour pre-blended
+      // into each region's tint on the TS side.
       this._tintColorArray = this._hexToColorArray(this._settings.get_string('quick-settings-tint-color'));
       if (this.effect) {
         this.effect.setTintColor(...this._tintColorArray);
@@ -311,11 +382,19 @@ export class QuickSettingsManager {
 
     connectSetting('quick-settings-corner-radius', () => {
       this._cornerRadius = this._settings.get_double('quick-settings-corner-radius');
+      // Toggles mode drives the shared corner_radius uniform from
+      // quick-settings-toggle-corner-radius instead (see below) — guard so
+      // the two settings don't fight over the same uniform.
       if (this.effect && this._activeMode === 'background') {
         this.effect.setCornerRadius(this._cornerRadius);
       }
     });
 
+    // "Apply to" (Background / Toggles). Switches live: if the effect is
+    // currently running in the OTHER mode, tear it down and rebuild it
+    // immediately in the new mode instead of waiting for the next full
+    // re-enable (previously this only updated the cached _applyTo value —
+    // see the _activeMode vs. _applyTo comment above).
     connectSetting('quick-settings-apply-to', () => {
       const newMode: 'background' | 'toggles' =
         this._settings.get_int('quick-settings-apply-to') === 1 ? 'toggles' : 'background';
@@ -371,6 +450,7 @@ export class QuickSettingsManager {
       this._adaptiveConfig.sampleIntervalMs = this._settings.get_int('quick-settings-sample-interval-ms');
     });
 
+    // Brightness / Saturation / Contrast — dynamic application from settings
     connectSetting('quick-settings-brightness', () => {
       if (this.effect) {
         this.effect.setBrightness(this._settings.get_double('quick-settings-brightness'));
@@ -400,6 +480,11 @@ export class QuickSettingsManager {
       this.animActor.add_style_class_name('liquid-glass-qs-root');
   }
 
+  // Entry point used by setup()/_bindSettings(). Dispatches to the
+  // Background or Toggles implementation based on _applyTo. Per design, a
+  // change to quick-settings-apply-to while the effect is already active
+  // does NOT switch live — it only takes effect the next time the effect is
+  // (re)applied (i.e. next time the menu opens after a full re-enable).
   _applyEffect() {
     if (this._isEffectActive) return;
     this._isEffectActive = true;
@@ -416,7 +501,9 @@ export class QuickSettingsManager {
     }
   }
 
+  // ── Background mode (existing behaviour, unchanged) ─────────────────────────
   _applyBackgroundEffect() {
+    // Shift the menu down to prevent it from clipping into the top bar
     this._menuYoffset = this._settings.get_int('quick-settings-y-offset');
     this._menuXoffset = this._settings.get_int('quick-settings-x-offset');
     this._glassExpand = this._settings.get_int('quick-settings-glass-expand');
@@ -431,29 +518,39 @@ export class QuickSettingsManager {
         this._settings.get_string('quick-settings-adaptive-text-preference')),
     };
 
+    // ── 1. bgActor: full monitor, no effect ──────────────────────────────────
+    // Set an initial size of 1x1. Passing a 0x0 size to the Cogl engine
+    // while applying a shader will immediately crash the GNOME Shell.
     this.bgActor = new UnpickableActor();
     this.bgActor.set_name('liquid-glass-bg-actor');
     this.bgActor.set_size(1.0, 1.0);
     this.bgActor.set_pivot_point(0.0, 0.0);
 
+    // ── 2. liquidBox: outer layer — LiquidEffect with built-in dual-Kawase blur ─
     this.liquidBox = new UnpickableActor();
     this.liquidBox.set_name('liquid-box');
     this.liquidBox.set_clip_to_allocation(true);
     this.bgActor.add_child(this.liquidBox);
 
+    // dummyBreaker: prevents BMS black-screen optimization bug
     let dummyBreaker = new UnpickableActor();
     dummyBreaker.set_name('optimization-breaker');
     dummyBreaker.set_size(1.0, 1.0);
     dummyBreaker.set_opacity(0);
     this.liquidBox.add_child(dummyBreaker);
 
+    // ── 3. _cloneContainer: sub-container inside liquidBox ────────────────────
     this._cloneContainer = new UnpickableActor();
     this._cloneContainer.set_name('clone-container');
     this.liquidBox.add_child(this._cloneContainer);
 
+    // Scale pivot points
+    // The menu scales from the top-center (0.5, 0.0)
     this.animActor.set_pivot_point(0.5, 0.0);
+    // bgActor scales from the top-left (0.0, 0.0) because we manually sync its exact coordinates
     this.bgActor.set_pivot_point(0.0, 0.0);
 
+    // ── Find the menuActor's ancestor that is a direct child of uiGroup ───────
     let menuRoot: Clutter.Actor = this.menu.actor;
     while (menuRoot.get_parent() && menuRoot.get_parent() !== Main.layoutManager.uiGroup) {
       const p = menuRoot.get_parent();
@@ -461,12 +558,16 @@ export class QuickSettingsManager {
       menuRoot = p;
     }
 
+    // Insert bgActor below menuRoot in uiGroup to prevent recursive clone loops
+    // Insert the custom background *underneath* the actual menu UI
     if (menuRoot.get_parent() === Main.layoutManager.uiGroup) {
       Main.layoutManager.uiGroup.insert_child_below(this.bgActor, menuRoot);
     } else {
+      // Fallback: If it has no parent yet, add it directly to the UI group
       Main.layoutManager.uiGroup.add_child(this.bgActor);
     }
 
+    // ── 5. Read effect parameters from settings ───────────────────────────────
     let blurRadius = this._settings.get_int('quick-settings-blur-radius');
     let tintColorStr = this._settings.get_string('quick-settings-tint-color');
     let tintStrength = this._settings.get_double('quick-settings-tint-strength');
@@ -475,7 +576,10 @@ export class QuickSettingsManager {
     let saturation = this._settings.get_double('quick-settings-saturation');
     let contrast = this._settings.get_double('quick-settings-contrast');
 
+    // LiquidEffect on liquidBox (includes built-in dual-Kawase blur)
+    // Apply our custom GLSL liquid shader to the outer background actor
     this.effect = new LiquidEffect({ extensionPath: this.extensionPath, settings: this._settings, owner: 'quick-settings' } as any);
+    // Tell the shader about the padding so it calculates refraction coordinates correctly
     this.effect.setPadding(SHADER_PADDING);
     this.effect.setTintColor(...this._hexToColorArray(tintColorStr));
     this.effect.setTintStrength(tintStrength);
@@ -487,6 +591,7 @@ export class QuickSettingsManager {
     this.effect.setBlurRadius(blurRadius);
     this.liquidBox.add_effect(this.effect);
 
+    // ── 5. WindowCloneManager + UILayerSampler ────────────────────────────────
     this._windowCloneManager = new WindowCloneManager(this.liquidBox, this._cloneContainer, 'lg-qs');
     this._uiSampler = new UILayerSampler(
       this.bgActor,
@@ -504,9 +609,10 @@ export class QuickSettingsManager {
     if (this._hasAutoRefreshed === undefined) this._hasAutoRefreshed = false;
     this._signals = [];
 
+    // Handle the first open as a plain GNOME quick settings open; apply custom behavior only afterwards.
     this._animSignalId = this.menu.connect('open-state-changed', (menu, isOpen: boolean) => {
       if (isOpen) {
-        this._cachedSubmenus = null;
+        this._cachedSubmenus = null; // Reset submenu cache
         if (!this._hasAutoRefreshed) this._hasAutoRefreshed = true;
 
         this._applyClassStyles();
@@ -515,6 +621,7 @@ export class QuickSettingsManager {
         this._stableBaseW = undefined;
         this._stableBaseH = undefined;
         startFrameSync();
+        // Skip animations on the first open for instant feedback
         this._startAdaptiveColorSampling(true);
         this._startButtonAlphaSampling();
         this._startAnimation(1);
@@ -528,12 +635,17 @@ export class QuickSettingsManager {
       this._startAnimation(0);
     });
 
+    // Monitor the signal when the menu's mapped state changes
+    // Stop the render loop when the menu unmaps (fully hidden)
     this._signals.push({
       target: this.menu.actor,
       id: this.menu.actor.connect('notify::mapped', () => {
+        // When the menu is completely hidden from the screen
         if (!this.menu.actor.mapped) {
+          // Stop the render/sync loop here for the first time
           stopFrameSync();
 
+          // Ensure cleanup is done reliably
           if (this.bgActor) {
             this.bgActor.hide();
             this.bgActor.opacity = 0;
@@ -551,6 +663,14 @@ export class QuickSettingsManager {
     }
   }
 
+  // ── Toggles mode ─────────────────────────────────────────────────────────
+  // Unlike Background mode, this never touches animation (spring/scale) or
+  // the panel's own background — it draws small independent glass "chips"
+  // only over each individual toggle pod. To stay compatible with the
+  // Blur My Shell workaround, it still uses ONE full-monitor bgActor/
+  // liquidBox/effect (same set_clip() technique as Background mode) so the
+  // blur pyramid and window clones are computed exactly once per frame,
+  // regardless of how many toggles are on screen — see _syncToggleRegions().
   _applyToggleEffect() {
     if (!this.targetActor) return;
 
@@ -571,28 +691,35 @@ export class QuickSettingsManager {
         this._settings.get_string('quick-settings-adaptive-text-preference')),
     };
 
+    // ── 1. bgActor: full monitor, no effect ──────────────────────────────────
+    // Set an initial size of 1x1. Passing a 0x0 size to the Cogl engine
+    // while applying a shader will immediately crash the GNOME Shell.
     this.bgActor = new UnpickableActor();
     this.bgActor.set_name('liquid-glass-bg-actor');
     this.bgActor.set_size(1.0, 1.0);
     this.bgActor.set_pivot_point(0.0, 0.0);
 
+    // ── 2. liquidBox: outer layer — LiquidEffect with built-in dual-Kawase blur ─
     this.liquidBox = new UnpickableActor();
     this.liquidBox.set_name('liquid-box');
     this.liquidBox.set_clip_to_allocation(true);
     this.bgActor.add_child(this.liquidBox);
 
+    // dummyBreaker: prevents BMS black-screen optimization bug
     let dummyBreaker = new UnpickableActor();
     dummyBreaker.set_name('optimization-breaker');
     dummyBreaker.set_size(1.0, 1.0);
     dummyBreaker.set_opacity(0);
     this.liquidBox.add_child(dummyBreaker);
 
+    // ── 3. _cloneContainer: sub-container inside liquidBox ────────────────────
     this._cloneContainer = new UnpickableActor();
     this._cloneContainer.set_name('clone-container');
     this.liquidBox.add_child(this._cloneContainer);
 
     this.bgActor.set_pivot_point(0.0, 0.0);
 
+    // ── Find the menuActor's ancestor that is a direct child of uiGroup ───────
     let menuRoot: Clutter.Actor = this.menu.actor;
     while (menuRoot.get_parent() && menuRoot.get_parent() !== Main.layoutManager.uiGroup) {
       const p = menuRoot.get_parent();
@@ -601,6 +728,40 @@ export class QuickSettingsManager {
     }
     this._menuRoot = menuRoot;
 
+    // [FIX-STRUCTURAL-3] Per user proposal: instead of drawing the real
+    // panel first and painting bgActor OVER the whole uiGroup (which is
+    // what forced lowering the glass's own opacity/blur just to let each
+    // toggle's label/icon peek back through), make bgActor a plain CHILD
+    // of `animActor` (== Main.panel.statusArea.quickSettings.menu.box —
+    // the actual `popup-menu-content quick-settings` box that directly
+    // holds the toggle grid) at index 0. Clutter paints children in list
+    // order, so every real toggle (already a later sibling in animActor)
+    // now paints AFTER — on top of — bgActor for free, structurally, with
+    // zero opacity/blur compromise and no per-icon/per-label cloning.
+    //
+    // This needs bgActor to keep behaving as if it still spans the full
+    // monitor in monitor-space (all of _syncToggleRegions()'s region math
+    // below assumes that). Since it's now parented under animActor
+    // instead of uiGroup, animActor's own transform sits between bgActor
+    // and the stage, so bgActor's position is counter-translated by
+    // animActor's current absolute position every frame in
+    // _syncToggleRegions() (see the animActor counter-transform there) —
+    // the same technique applicationManager.ts's _applyCounterScale() uses
+    // to keep a child's rendered content true-to-screen-space regardless
+    // of its parent's own transform.
+    //
+    // [FIX-5] animActor is a real St.BoxLayout, not a plain Clutter.Actor
+    // like uiGroup — it actively queries each direct child's own
+    // get_preferred_width()/height() and stacks/sums them into ITS OWN
+    // size. bgActor has an explicit fixed size set on it (set_size(screenW,
+    // screenH)), which Clutter reports straight back as its preferred size
+    // regardless of layout manager — so animActor's own allocation ballooned
+    // to include bgActor's full 1920x1080, and the whole screen turned into
+    // a dark rectangle with no toggles visible. Inserting bgActor inside a
+    // LayoutOpaqueActor host (which unconditionally reports 0x0 preferred
+    // size to whatever contains it, see actors/unpickable.ts) gives animActor nothing
+    // to balloon over, while bgActor keeps its own full-monitor geometry
+    // entirely self-managed underneath.
     if (!this._toggleGlassHost) {
       this._toggleGlassHost = new LayoutOpaqueActor();
       this._toggleGlassHost.set_name('liquid-glass-toggle-host');
@@ -610,6 +771,12 @@ export class QuickSettingsManager {
       this._toggleGlassHost.add_child(this.bgActor);
     }
 
+    // Note bgActor is now a descendant of `_menuRoot` (via animActor). Nothing
+    // in _cloneContainer may therefore sample `_menuRoot` by painting it —
+    // that is a self-referential loop. _ensurePanelContentClone() paints the
+    // panel's theme background onto a bare widget rather than cloning or
+    // snapshotting anything; see its comment for the three approaches that
+    // did sample it and how each one failed.
     if (this.animActor instanceof Clutter.Actor) {
       this.animActor.insert_child_at_index(this._toggleGlassHost, 0);
     } else if (menuRoot.get_parent() === Main.layoutManager.uiGroup) {
@@ -618,6 +785,7 @@ export class QuickSettingsManager {
       Main.layoutManager.uiGroup.add_child(this._toggleGlassHost);
     }
 
+    // ── 4. Read effect parameters from settings ───────────────────────────────
     let blurRadius = this._settings.get_int('quick-settings-blur-radius');
     let tintStrength = this._settings.get_double('quick-settings-tint-strength');
     let brightness = this._settings.get_double('quick-settings-brightness');
@@ -626,6 +794,10 @@ export class QuickSettingsManager {
 
     this.effect = new LiquidEffect({ extensionPath: this.extensionPath, settings: this._settings, owner: 'quick-settings-toggles' } as any);
     this.effect.setPadding(SHADER_PADDING);
+    // [FIX-8] Toggles mode needs the tint_r/g/b uniform pushed too, now that
+    // the custom-color layer reads it directly instead of the TS side folding
+    // the custom color into each region's pre-blended tint. Without this the
+    // shader would tint every toggle with LiquidEffect's default color.
     this._tintColorArray = this._hexToColorArray(this._settings.get_string('quick-settings-tint-color'));
     this.effect.setTintColor(...this._tintColorArray);
     this.effect.setTintStrength(tintStrength);
@@ -638,6 +810,7 @@ export class QuickSettingsManager {
     this.effect.setMultiRegionMode(true);
     this.liquidBox.add_effect(this.effect);
 
+    // ── 5. WindowCloneManager + UILayerSampler (ONE shared instance) ──────────
     this._windowCloneManager = new WindowCloneManager(this.liquidBox, this._cloneContainer, 'lg-qs-toggles');
     this._uiSampler = new UILayerSampler(
       this.bgActor,
@@ -654,6 +827,11 @@ export class QuickSettingsManager {
 
     this._signals = [];
 
+    // Unlike Background mode: no _applyClassStyles() (the panel itself must
+    // stay opaque/native), no _applyMenuOffsets(), no spring animation, and
+    // no _startButtonAlphaSampling() (the existing alpha-dim feature is
+    // superseded by full glass here and would fight over the same inline
+    // styles — see _ensureToggleStyles()).
     this._animSignalId = this.menu.connect('open-state-changed', (menu, isOpen: boolean) => {
       if (isOpen) {
         this._cachedSubmenus = null;
@@ -670,7 +848,9 @@ export class QuickSettingsManager {
     this._signals.push({
       target: this.menu.actor,
       id: this.menu.actor.connect('notify::mapped', () => {
+        // When the menu is completely hidden from the screen
         if (!this.menu.actor.mapped) {
+          // Stop the render/sync loop here for the first time
           stopFrameSync();
           if (this.bgActor) {
             this.bgActor.hide();
@@ -686,6 +866,7 @@ export class QuickSettingsManager {
     }
   }
 
+  // Clone build: applies mutual liquid-glass exclusions, then delegates to managers
   private _buildClones(): void {
     if (!this.bgActor) return;
     excludeOtherGlass(this._uiSampler, this.bgActor);
@@ -694,26 +875,104 @@ export class QuickSettingsManager {
     this._uiSampler?.refresh();
   }
 
+  // Starts the render loop and builds fresh clones when the menu is opened.
+  // The loop runs every frame while the menu is mapped. startLaterLoop()
+  // re-arms before running the step and catches what it throws — see the
+  // comment on DockManager's frameTick: a throw that skipped the reschedule
+  // used to freeze the glass until the menu was closed and reopened.
   private _startFrameSync(sync: () => void, errorTag: string, honourFreeze: boolean): void {
     if (this._frameSyncId !== 0) return;
     this._buildClones();
     startLaterLoop(this._frameSlot, {
+      // [FIX] Hard stop after teardown. A cleanup() that does not reach
+      // stopLaterLoop() — because an earlier step threw — would otherwise
+      // leave a self-rescheduling chain running forever against destroyed
+      // actors, holding this whole manager (and its settings and logger)
+      // alive. The next enable() then builds a second set on top of a live
+      // first set, which is the "the extension can no longer be enabled"
+      // symptom. Stopping the loop is still done in cleanup(); this is the
+      // backstop that does not depend on cleanup() getting that far.
       alive: () => !this._torndown && !!this.bgActor && this.targetActor.mapped,
+      // [DIAG] See setFrameSyncFrozen() in animation/frameSync.ts. While
+      // frozen the loop keeps running but does nothing, so the cost of this
+      // poll can be measured directly (Background mode only).
       honourFreeze,
       errorTag,
       step: () => {
+        // Repair the subtree if Clutter has stopped allocating it. Sampled
+        // here, at the top of the tick, because the previous frame's relayout
+        // has settled by now and this frame's sync has not dirtied anything
+        // yet. See ensureGlassAllocated().
         ensureGlassAllocated(this.bgActor);
         sync();
       },
     });
   }
 
+  // Stop the render frame loop
   private _stopFrameSync(): void {
     stopLaterLoop(this._frameSlot);
   }
 
+  // ── Panel material layer ──────────────────────────────────────────────────
+  //
+  // In Toggles mode the glass host is animActor's bottom-most child, so each
+  // toggle's glass paints over the panel's own background and under the real
+  // toggle. What the glass has to show inside a toggle's bounds is therefore
+  // the panel's MATERIAL (its background color / gradient / border-image, and
+  // whatever the desktop shows through it) — not the panel's contents, which
+  // are already painted, sharp, on top of the glass.
+  //
+  // Everything BEHIND the panel is already supplied by _uiSampler's clones of
+  // every other uiGroup child, so the only layer missing from _cloneContainer
+  // is that material. This paints it with a bare St.Widget carrying the real
+  // panel's style class (see UnpickableStyledWidget): St resolves and paints
+  // the identical background for it, live and for free.
+  //
+  // [FIX-10] Three earlier attempts and why they were abandoned:
+  //
+  //  1. Clutter.Clone(_menuRoot). bgActor is a descendant of _menuRoot (via
+  //     animActor), and a Clone re-invokes its source's paint, so the source
+  //     paint reached back into the clone's own container — an unbounded
+  //     synchronous recursion that crashed the shell on a JS stack overflow.
+  //
+  //  2. SelfExcludingSnapshotCapture: stage.paint_to_content() of the panel
+  //     rect on every 'after-paint', with bgActor hidden for that one call.
+  //     No recursion, and it worked — but it captured the panel exactly as
+  //     rendered, contents included, so every label and icon appeared twice:
+  //     once for real on top of the glass, once refracted inside it.
+  //
+  //  3. As 2, plus hiding animActor's real children for the capture. This
+  //     removed the doubling and broke four other things at once, all of them
+  //     consequences of toggling the visibility of live, interactive, laid-out
+  //     widgets sixty times a second: clutter_actor_hide() queues a relayout
+  //     on the parent, unmaps the subtree (dropping key focus, which made
+  //     every click inside Quick Settings close the menu), and churns the
+  //     stage's damage bookkeeping — the latter showing up as a hard vertical
+  //     edge with glass on one side and none on the other, at a position that
+  //     moved with the theme, and as the glass momentarily appearing complete
+  //     during the open/close animation (when the whole panel is damaged every
+  //     frame anyway).
+  //
+  // Painting the material directly avoids all of it: no clone, no nested stage
+  // paint, no touching the real panel at all.
   private _panelActorWarned: boolean = false;
 
+  // [FIX-9] Resolves the panel rectangle in stage coordinates, plus the actor
+  // it came from.
+  //
+  // This used to read `_menuRoot` (the uiGroup-direct-child ancestor of
+  // menu.actor) unconditionally, and the [snapshot:qs-panel] diagnostic showed
+  // that actor reporting 0x0 for the whole session — first as
+  // `x=NaN y=NaN w=0 h=0` (never allocated) and then `x=0 y=0 w=0 h=0`, which
+  // left the panel layer with no geometry at all and so nothing but the
+  // wallpaper/window clones showing inside the glass.
+  //
+  // Rather than depend on one actor being allocated, take the first candidate
+  // that reports a usable geometry — the ancestor, the menu actor itself, and
+  // the content box are all the same rectangle for our purposes (the content
+  // box excludes the BoxPointer's arrow, which the glass never samples
+  // anyway).
   _resolvePanelActor(): Clutter.Actor | null {
     const candidates: (Clutter.Actor | null)[] = [this._menuRoot, this.targetActor, this.animActor];
     for (const actor of candidates) {
@@ -742,6 +1001,7 @@ export class QuickSettingsManager {
     return null;
   }
 
+  /** Stage-space [x, y, w, h] of the panel, or null when none is usable. */
   _resolvePanelRect(): [number, number, number, number] | null {
     const actor = this._resolvePanelActor();
     if (!actor) return null;
@@ -768,6 +1028,8 @@ export class QuickSettingsManager {
       this._cloneContainer.add_child(this._panelContentClone);
     }
 
+    // Track the real panel's style class so a theme change (or GNOME adding a
+    // state class) is picked up without a restart.
     let cls = (this.animActor instanceof St.Widget && typeof this.animActor.get_style_class_name === 'function')
       ? (this.animActor.get_style_class_name() || '')
       : '';
@@ -775,10 +1037,29 @@ export class QuickSettingsManager {
       this._panelContentClone.set_style_class_name(cls);
     }
 
+    // No inline style override: the widget is placed at the real panel's
+    // ALLOCATION, and St insets a widget's background by its CSS margin, so
+    // letting the theme's own margin apply is what lands the material exactly
+    // where the real background is drawn (mactahoe's `.popup-menu-content`
+    // carries `margin: 4px 12px 17px 12px`). Padding is irrelevant here — it
+    // only positions children, and this widget has none.
+
+    // Always keep it above _windowCloneManager's own clone containers —
+    // those get destroyed/re-added on every rebuildClones() (see
+    // buildClones() in _applyToggleEffect()), which would otherwise
+    // silently invert the stacking order (desktop clones ending up drawn
+    // ON TOP of the panel material) the next time a window opens/closes.
     this._cloneContainer.set_child_above_sibling(this._panelContentClone, null);
 
     let rect = this._resolvePanelRect();
     if (rect) {
+      // Placed by translation, not set_position() — the same rule as every
+      // other per-frame actor inside a glass subtree (see the note in
+      // WindowCloneManager.sync()). set_position() only takes effect once
+      // Clutter hands out a new allocation, so a subtree that stops being
+      // allocated leaves this material frozen at an old rect while the
+      // property says otherwise. Size still needs the allocation, which is
+      // what ensureGlassAllocated() exists to guarantee.
       if (this._panelContentClone.x !== 0 || this._panelContentClone.y !== 0)
         this._panelContentClone.set_position(0, 0);
       this._panelContentClone.translation_x = rect[0] - monitorX;
@@ -794,6 +1075,13 @@ export class QuickSettingsManager {
     this._panelContentClone = null;
   }
 
+  // [FIX-6] Multiplies the OWN scale of `actor` and of every one of its
+  // ancestors up to the stage. Clutter.Actor.get_scale() reports only an
+  // actor's own scale property — it says nothing about scale inherited from
+  // ancestors — and BoxPointer.open() genuinely eases scale_x/scale_y from
+  // 0.96 to 1.0 while Quick Settings opens. Countering only the (always 1.0)
+  // own scale of _toggleGlassHost therefore left the glass rendered ~4% off
+  // for the whole open animation; this is what actually has to be undone.
   _getAccumulatedScale(actor: Clutter.Actor): [number, number] {
     let sx = 1.0;
     let sy = 1.0;
@@ -807,11 +1095,18 @@ export class QuickSettingsManager {
     return [sx || 1.0, sy || 1.0];
   }
 
+  // [FIX-6] Whether a cached region set is still young enough to stand in for
+  // a frame that produced none. Pure query — _takeLastRegions() is what
+  // actually consumes a grace frame.
   _canReuseLastRegions(): boolean {
     return this._lastGoodRegions !== null &&
       this._regionGraceFrames < QuickSettingsManager.REGION_GRACE_FRAMES;
   }
 
+  // [FIX-6] Consumes one grace frame and hands back the cached region set, or
+  // null once the grace window is spent (at which point the cache is dropped,
+  // so the glass hides for real rather than lingering over toggles that are
+  // genuinely gone).
   _takeLastRegions() {
     if (!this._canReuseLastRegions()) {
       this._lastGoodRegions = null;
@@ -821,14 +1116,24 @@ export class QuickSettingsManager {
     return this._lastGoodRegions;
   }
 
+  // ── Toggles-mode geometry / region synchronisation (per frame) ─────────────
+  // Unlike _syncGeometry(), this never touches animActor/targetActor scale,
+  // opacity, or position — Toggles mode has no animation of its own; the
+  // menu opens/closes using GNOME's native behaviour untouched.
   _syncToggleRegions() {
     if (!this.bgActor || !this.targetActor || !this.targetActor.mapped) {
       if (this.bgActor && this.bgActor.visible) this.bgActor.hide();
+      // [FIX-6] A closing menu is a real disappearance, not a transient
+      // structural gap — drop the cache so the next open starts clean.
       this._lastGoodRegions = null;
       this._regionGraceFrames = 0;
       return;
     }
 
+    // Monitor geometry. Computed FIRST because the bgActor counter-transform
+    // right below needs monitorX/monitorY too — everything in this function
+    // (every regionX/regionY, the panel-content clone's position, the
+    // shader resolution) works in monitor-local coordinates.
     let monitor = this._getMenuMonitorGeometry();
     let monitorX = monitor?.x ?? 0;
     let monitorY = monitor?.y ?? 0;
@@ -836,6 +1141,10 @@ export class QuickSettingsManager {
     let screenH = Math.max(1, monitor?.height ?? 1);
 
     const [bgPosX, bgPosY] = this._placeToggleHost(this.bgActor, monitorX, monitorY);
+    // [FIX-6] NOT set_position(monitorX, monitorY) — that is Background
+    // mode's placement, where bgActor is a uiGroup child. Here bgActor
+    // hangs off animActor, so re-apply the counter-transformed position
+    // _placeToggleHost() computed; see the [FIX-6] note there.
     this.bgActor.set_position(bgPosX, bgPosY);
 
     const toggles = this._toggleStyles.sync(this.menu?.actor);
@@ -854,6 +1163,38 @@ export class QuickSettingsManager {
     }
 
     if (!this.bgActor.visible) this.bgActor.show();
+    // [FIX-1] Sync bgActor's opacity to the panel's own current fade state,
+    // the same way _syncGeometry() already does for Background mode
+    // (`targetActor.get_first_child()?.opacity`) — GNOME fades the popup
+    // menu's close animation by animating its first child's opacity, not
+    // `targetActor` (menu.actor) itself. Previously this was hardcoded to
+    // 255, so during the close animation the real panel content
+    // progressively faded out while the glass (now structurally on top of
+    // it) stayed fully solid, only disappearing once the panel was fully
+    // gone (i.e. once `targetActor.mapped` finally flips false above).
+    // Mirroring the same value keeps them fading in lockstep.
+    //
+    // [FIX-9] TOGGLE_GLASS_OVERLAY_OPACITY is 1.0, not 0.7.
+    //
+    // The 0.7 came from [FIX-2], back when bgActor painted structurally ON
+    // TOP of the real panel: dialing it down was the only way to let the
+    // real toggles' sharp icons/labels show back through. [FIX-STRUCTURAL-3]
+    // then inverted the structure — the glass host is now animActor's
+    // BOTTOM-most child (re-asserted every frame by the
+    // set_child_below_sibling() call at the top of this function), so every
+    // real toggle already paints ON TOP of the glass for free. The 0.7 kept
+    // being applied anyway, and all it did was make the glass 30%
+    // see-through.
+    //
+    // That leak was invisible under Adwaita, whose `.popup-menu-content` is
+    // an opaque `#36363a` — the 30% showing through is just dark panel. But
+    // mactahoe overrides that rule with `.quick-settings { background: none }`,
+    // leaving the panel body fully transparent, so the 30% showing through
+    // is the raw, UNBLURRED desktop. glass.frag's own output is opaque
+    // inside a region (`float alpha = insideMask;`), and global._lgGlass
+    // confirmed the blur pipeline itself is healthy (blurResult 960x540, not
+    // null) — so this actor opacity was the entire reason the toggles looked
+    // like they had a sharp background and no blur under mactahoe only.
     const TOGGLE_GLASS_OVERLAY_OPACITY = 1.0;
     let panelOpacity = this.targetActor.get_first_child()?.opacity ?? 255;
     this.bgActor.opacity = Math.round(panelOpacity * TOGGLE_GLASS_OVERLAY_OPACITY);
@@ -865,6 +1206,57 @@ export class QuickSettingsManager {
     this._syncCaptureLayers(monitorX, monitorY, screenW, screenH);
   }
 
+  // [FIX-STRUCTURAL-3 / FIX-5] bgActor lives inside _toggleGlassHost,
+  // which is the actual CHILD of animActor (see _applyToggleEffect() and
+  // LayoutOpaqueActor in actors/unpickable.ts) — real toggle content (later siblings
+  // within animActor) naturally paints on top of the host, no opacity/
+  // blur compromise needed for labels/icons to stay legible.
+  //
+  // Two things that used to be handled at the uiGroup level now need to
+  // happen at the animActor level instead:
+  //
+  //  1. Re-assert the host as animActor's BOTTOM-most child every frame.
+  //     GNOME can rebuild/reorder animActor's own children at any time
+  //     (a quick-toggle being added/removed, e.g. a new Bluetooth device
+  //     row appearing) — set_child_below_sibling() is a cheap list-splice
+  //     (not a repaint), so doing this unconditionally every frame is the
+  //     same self-healing idiom already used for the old uiGroup-level
+  //     re-assertion, just re-targeted.
+  //
+  //  2. Counter-transform bgActor against everything animActor's own
+  //     ancestry does to it, so bgActor's internal monitor-space math
+  //     stays valid unchanged. Without this, bgActor's (0,0) would sit
+  //     wherever the host happens to land on screen instead of at the
+  //     monitor's own origin.
+  //
+  // [FIX-6] "The glass only shows up once the open animation has fully
+  // finished, and blinks out for a moment whenever a submenu opens or
+  // closes." Two separate defects in the counter-transform, both of which
+  // only bite while the panel's geometry is CHANGING — which is exactly
+  // the open animation and the submenu open/close relayout:
+  //
+  //  a. The geometry-change branch further down (`if (this._lastBgW !== …)`)
+  //     ended with `this.bgActor.set_position(monitorX, monitorY)`, copied
+  //     verbatim from Background mode where bgActor is a uiGroup child and
+  //     that IS its correct screen position. In Toggles mode bgActor hangs
+  //     off animActor instead, so that line silently overwrote the
+  //     counter-translation computed here with a raw monitor origin — and
+  //     since that branch fires on every frame where the regions move, the
+  //     glass spent the entire open animation (and the submenu relayout)
+  //     displaced by the panel's own absolute position, i.e. shoved off the
+  //     right edge of the screen. It only snapped back into place once the
+  //     regions stopped changing and the branch stopped firing — hence
+  //     "appears only after the animation ends" / "blinks". bgPosX/bgPosY
+  //     are now computed once here and re-applied by that branch instead of
+  //     being clobbered.
+  //
+  //  b. `get_scale()` reports an actor's OWN scale property only; the host
+  //     carries none, so `hostScaleX/Y` was always exactly 1.0 and the
+  //     divisions were no-ops. The scale that actually matters is INHERITED
+  //     — BoxPointer.open() genuinely eases scale_x/scale_y from 0.96 to
+  //     1.0 — so the accumulated ancestor scale is what has to be countered
+  //     (see _getAccumulatedScale()), otherwise the glass renders ~4% off
+  //     for the duration of every open animation.
   private _placeToggleHost(bgActor: Clutter.Actor, monitorX: number, monitorY: number): [number, number] {
     if (!(this.animActor instanceof Clutter.Actor) || !this._toggleGlassHost) {
       Main.layoutManager.uiGroup.set_child_above_sibling(bgActor, null);
@@ -876,6 +1268,11 @@ export class QuickSettingsManager {
     let [accScaleX, accScaleY] = this._getAccumulatedScale(this._toggleGlassHost);
 
     if (!Number.isFinite(hostAbsX) || !Number.isFinite(hostAbsY)) return [monitorX, monitorY];
+    // Undo the inherited scale on bgActor itself (pivot is (0,0), so this
+    // never moves its origin), then place its origin so that — after the
+    // host's own transform is applied on top — it lands exactly on the
+    // monitor's origin. bgActor's content is then 1:1 with real screen
+    // pixels again, which is what all the region math below assumes.
     bgActor.set_scale(1.0 / accScaleX, 1.0 / accScaleY);
     return [(monitorX - hostAbsX) / accScaleX, (monitorY - hostAbsY) / accScaleY];
   }
@@ -885,17 +1282,87 @@ export class QuickSettingsManager {
     for (let toggle of toggles) {
       if (!toggle.visible || !toggle.mapped) continue;
 
+      // One fully-transformed rect, rather than a transformed position
+      // paired with an untransformed size. Everything below works in
+      // monitor-local SCREEN pixels (bgActor is counter-scaled to be 1:1
+      // with the screen, see the accScale block above), so the region has
+      // to be the toggle's real on-screen footprint.
+      //
+      // Reading the size separately is what made the toggle glass render
+      // too large for the whole open AND close animation: the menu is
+      // animated by easing scale on an ancestor (BoxPointer.open(), plus
+      // this extension's own spring), and neither get_size() nor the
+      // allocation box carries an inherited scale — only the position did.
+      // So while scale < 1 the region kept the toggle's full unscaled size
+      // and the glass overhung the button, converging only as scale hit 1.
       let [absX, absY, w, h] = getTransformedRect(toggle);
       if (Number.isNaN(absX) || Number.isNaN(absY) || Number.isNaN(w) || Number.isNaN(h) || w <= 0 || h <= 0) continue;
 
+      // Expand by glassExpand + SHADER_PADDING, exactly like Background
+      // mode's single bgW/bgH — gives the shader room for refraction/blur
+      // at each region's edge.
       let regionX = (absX - monitorX) - this._glassExpand - SHADER_PADDING;
       let regionY = (absY - monitorY) - this._glassExpand - SHADER_PADDING;
       let regionW = w + (this._glassExpand * 2) + (SHADER_PADDING * 2);
       let regionH = h + (this._glassExpand * 2) + (SHADER_PADDING * 2);
 
       let entry = this._toggleStyles.colorFor(toggle);
+      // [FIX-8] "A toggle whose background genuinely turns solid white when
+      // ON (Do Not Disturb under mactahoe) barely shows any white unless the
+      // custom Tint Strength is also turned up."
+      //
+      // The old code pre-blended the pod's own color with the configured tint
+      // color HERE and handed the shader one combined color, so the shader's
+      // single tint_strength ended up scaling both. At Tint Strength 0.21 the
+      // pod's own white was therefore applied at 21% too — and the only way
+      // to make it read strongly was to make the custom tint read strongly as
+      // well, which is exactly backwards (there is no "transparent" Tint
+      // Color to escape to).
+      //
+      // The two are now independent layers in the shader (see glass.frag's
+      // mix() chain): this passes the pod's own color as the region's BASE
+      // color plus its own strength, and the custom tint color/strength stay
+      // on their own uniforms. Nothing is pre-blended.
+      //
+      // The alpha-weighting that used to live here is gone with it: it existed
+      // to stop a 15%-opacity white sheen being painted as if it were solid
+      // white, and _samplePodColor() now resolves that sheen to the color it
+      // actually composites to on screen, so the base color needs no further
+      // correction. entry.baseAlpha survives purely as "did we resolve a real
+      // color at all" — a pod we could not sample opts out with strength 0
+      // rather than contributing an invented color.
       let hasBase = !!(entry && entry.baseAlpha > 0.02);
       let base = hasBase ? entry!.baseColor : this._tintColorArray;
+      // [FIX-9] Weight the base layer by the pod's own COVERAGE.
+      //
+      // [FIX-8] removed the alpha weighting entirely on the grounds that
+      // _samplePodColor() already returns "the color the pod composites to on
+      // screen". That holds only while the ancestry actually terminates in
+      // something opaque. Adwaita's `.popup-menu-content` is `#36363a` (fully
+      // opaque), so _compositeOverAncestors() always reaches coverage 1.0
+      // there and the distinction never mattered — but mactahoe's
+      // `.quick-settings { background: none }` overrides that very rule, so
+      // under mactahoe the walk runs out of ancestors while still
+      // see-through and the coverage stays at the pod's own alpha.
+      //
+      // _compositeOverAncestors() then UN-PREMULTIPLIES before returning, so
+      // for a standalone `.quick-toggle` under mactahoe:
+      //
+      //   OFF: rgba(255,255,255,0.15) -> {r:1, g:1, b:1, a:0.15}
+      //   ON:  #ffffff                -> {r:1, g:1, b:1, a:1.00}
+      //
+      // i.e. the RGB is pure white in BOTH states and the only thing that
+      // changed is the alpha that [FIX-8] discarded — exactly the reported
+      // "the base color doesn't follow ON/OFF under mactahoe". (Adwaita
+      // works because its two states differ in RGB: a gray sheen vs the
+      // accent color.)
+      //
+      // Multiplying the strength by the coverage restores the distinction
+      // without reintroducing what [FIX-8] actually fixed: the base color and
+      // the custom tint color remain independent shader layers with
+      // independent strengths; this only scales the base layer by how much
+      // paint the pod genuinely contributes. It is a no-op wherever the
+      // ancestry is opaque, i.e. for every Adwaita pod.
       let baseStrength = hasBase ? this._toggleBaseStrength * entry!.baseAlpha : 0.0;
 
       layout.regions.push({
@@ -910,6 +1377,17 @@ export class QuickSettingsManager {
     return layout;
   }
 
+  // [FIX-6] Structural changes (the grid re-allocating around a submenu
+  // that just opened or closed, a toggle being added/removed) can leave a
+  // pod visible-but-not-yet-allocated for a frame, which used to yield an
+  // empty region set and hide the glass outright for that one frame — a
+  // visible blink. Geometry here is read at BEFORE_REDRAW, i.e. before the
+  // pending relayout runs, so being one frame behind a structural change
+  // is expected rather than exceptional. Ride out such a gap by re-using
+  // the last good region set for a couple of frames instead of blinking
+  // out; a genuinely closing menu is already caught by the `mapped` check
+  // at the top of this function, and the grace window is bounded so the
+  // glass can never linger over toggles that really are gone.
   private _resolveToggleRegions(collected: ToggleRegionLayout): ToggleRegionLayout | null {
     if (collected.regions.length > 0) {
       this._lastGoodRegions = collected;
@@ -921,6 +1399,7 @@ export class QuickSettingsManager {
 
   private _applyToggleBounds(bgActor: Clutter.Actor, localBgX: number, localBgY: number, bgW: number, bgH: number,
     bgPosX: number, bgPosY: number, screenW: number, screenH: number) {
+    // Only update positions/sizes if they actually changed to save CPU cycles
     if (this._lastBoundsSpace === 'toggles' && this._lastBgW === bgW && this._lastBgH === bgH &&
       this._lastBgX === localBgX && this._lastBgY === localBgY &&
       this._lastHostX === bgPosX && this._lastHostY === bgPosY &&
@@ -937,7 +1416,12 @@ export class QuickSettingsManager {
   }
 
   private _syncCaptureLayers(monitorX: number, monitorY: number, screenW: number, screenH: number) {
+    // ── Sync clones every frame (dockManager pattern) ──────────────────────
     this._windowCloneManager?.setOffset(-monitorX, -monitorY);
+    // [PERF ①/①b] See syncGlassCaptureClip() in capture/clip.ts. Sits between the
+    // effect's geometry uniforms and the two sync() calls that consume the
+    // cull rect it produces.
+    // [PERF ①/①b] See syncGlassCaptureClip() in capture/clip.ts.
     syncGlassCaptureClip({
       cloneContainer: this._cloneContainer,
       effect: this.effect,
@@ -951,6 +1435,10 @@ export class QuickSettingsManager {
     this._windowCloneManager?.sync();
   }
 
+  // ── Geometry synchronisation ────────────────────────────────────────────────
+  // Calculates and synchronizes the position/size of the glass background every frame
+  // Full-screen FBO approach: bgActor covers the entire monitor, shader is told
+  // where the menu lives within that FBO via setGlassGeometry().
   _syncGeometry() {
     if (!this.bgActor || !this.targetActor || !this.targetActor.mapped) {
       if (this.bgActor && this.bgActor.visible) this.bgActor.hide();
@@ -966,13 +1454,17 @@ export class QuickSettingsManager {
     const { w, h, scaleX, scaleY } = this._measurePanel();
     const [animAbsX, animAbsY] = this._resolvePanelOrigin(w);
 
+    // The background needs to be larger than the UI to account for the glass expansion
+    // and the extra padding required by the shader for edge refraction.
     let bgW = w + (this._glassExpand * 2) + (SHADER_PADDING * 2);
     let bgH = h + (this._glassExpand * 2) + (SHADER_PADDING * 2);
 
+    // Cover the background by purely subtracting the padding from the exact UI coordinates
     let bgX = animAbsX - this._glassExpand - SHADER_PADDING;
     let bgY = animAbsY - this._glassExpand - SHADER_PADDING;
 
     if (!Number.isNaN(bgX) && !Number.isNaN(bgY) && w >= 1.0 && h >= 1.0) {
+      // ── Monitor geometry ───────────────────────────────────────────────────
       let monitor = this._getMenuMonitorGeometry();
       let monitorX = monitor?.x ?? 0;
       let monitorY = monitor?.y ?? 0;
@@ -990,6 +1482,7 @@ export class QuickSettingsManager {
   private _panelScale(): [number, number] {
     let [scaleX, scaleY] = this.animActor.get_scale();
     if (!this._enableAnimation) {
+      // For default GNOME animation: the transparent wrapper directly under BoxPointer is the actual animated entity
       let gnomeAnimContainer = this.targetActor.get_first_child();
       if (gnomeAnimContainer) {
         scaleX *= gnomeAnimContainer.scale_x;
@@ -1022,6 +1515,8 @@ export class QuickSettingsManager {
     let targetW = Math.round(inW);
     let targetH = Math.round(inH);
 
+    // GNOME Shell Hover Bug Compensation
+    // Detects when the menu tries to unexpectedly shrink by a few pixels
     if (Math.abs(inW - outW) <= 2 && marginW > 0) {
       targetW = Math.round(inW - marginW);
       targetH = Math.round(inH - marginH);
@@ -1030,6 +1525,8 @@ export class QuickSettingsManager {
     this._stableBaseW = targetW;
     this._stableBaseH = targetH;
 
+    // Multiply by the current animation scale.
+    // Math.max guarantees the size never drops below 1px (prevents Cogl crashes).
     return {
       w: Math.max(1, this._stableBaseW * scaleX),
       h: Math.max(1, this._stableBaseH * scaleY),
@@ -1038,8 +1535,10 @@ export class QuickSettingsManager {
     };
   }
 
+  // Get correct coordinates directly from animActor, which is the actual UI content area
   private _resolvePanelOrigin(w: number): [number, number] {
     return resolveGlassOrigin(this.animActor, this as any, () => {
+      // Ultimate fallback: Just place it in the top-center of the primary monitor
       const monitor = Main.layoutManager.primaryMonitor;
       if (!monitor) return [0, 0];
       return [(monitor.width / 2) - (w / 2), (Main.panel.height || 27) + (this._menuYoffset ?? 0)];
@@ -1048,16 +1547,20 @@ export class QuickSettingsManager {
 
   private _applyPanelBounds(bgActor: Clutter.Actor, bgX: number, bgY: number, bgW: number, bgH: number,
     monitorX: number, monitorY: number, screenW: number, screenH: number) {
+    // ── Update actors only when geometry changed ───────────────────────────
+    // Only update positions/sizes if they actually changed to save CPU cycles
     if (this._lastBoundsSpace === 'panel' && this._lastBgW === bgW && this._lastBgH === bgH &&
       this._lastBgX === bgX && this._lastBgY === bgY &&
       this._lastScreenW === screenW && this._lastScreenH === screenH) return;
 
+    // Monitor-local coordinates (shader uses these)
     let localBgX = bgX - monitorX;
     let localBgY = bgY - monitorY;
     placeScreenGlass(bgActor, this.liquidBox, monitorX, monitorY, screenW, screenH,
       { x: localBgX, y: localBgY, w: bgW, h: bgH }, true);
 
     this.effect?.setShadowMaxRadius(GLASS_SHADOW_MAX_RADIUS);
+    // Inform shader of full-screen resolution and where the menu lives in the FBO
     this.effect?.setResolution(screenW, screenH);
     this.effect?.setGlassGeometry(localBgX, localBgY, bgW, bgH);
 
@@ -1071,6 +1574,7 @@ export class QuickSettingsManager {
     applyGlassScale(this.effect, this._cornerRadius, scaleX, scaleY);
   }
 
+  // Updates the shader resolution based on the current background actor size
   _updateResolution() {
     if (!this.bgActor || !this.effect) return;
     let [width, height] = this.bgActor.get_size();
@@ -1079,6 +1583,7 @@ export class QuickSettingsManager {
     }
   }
 
+  // Utility function to safely check if an actor has a specific style class
   _hasStyleClass(actor: Clutter.Actor, className: string) {
     return actor instanceof St.Widget && actor.has_style_class_name(className);
   }
@@ -1091,11 +1596,13 @@ export class QuickSettingsManager {
   _findAllTextActors(actor: Clutter.Actor, foundActors: Clutter.Actor[] = []) {
     if (!actor) return foundActors;
 
+    // Collect applicable text or button elements that are currently visible
     if (actor instanceof St.Label || actor instanceof Clutter.Text ||
       actor instanceof St.Button || actor instanceof St.Icon) {
       if (actor.visible) foundActors.push(actor);
     }
 
+    // Recursively scan child elements
     let children = typeof actor.get_children === 'function' ? actor.get_children() : [];
     for (let i = 0; i < children.length; i++) {
       this._findAllTextActors(children[i], foundActors);
@@ -1103,6 +1610,7 @@ export class QuickSettingsManager {
     return foundActors;
   }
 
+  // Initiates the color change for a specific actor
   _setActorColor(actor: CustomBannerActor, color: string, skipAnimations = false, batchStart?: number) {
     if (!actor || typeof actor.set_style !== 'function') return;
 
@@ -1123,6 +1631,11 @@ export class QuickSettingsManager {
     }
 
     if (actor._currentTargetColor === color && actor._currentInsensitiveState === isInsensitive) return;
+    // A light<->dark flip used to be snapped here, because interpolating the
+    // two in RGB passes through the background's own grey and the label
+    // disappears mid-tween. _animateActorColor() now cross-dissolves that case
+    // instead (see crossFadeColorAt() in animation/colors.ts), so it is animated like any
+    // other change.
     actor._currentTargetColor = color;
     actor._currentInsensitiveState = isInsensitive;
 
@@ -1145,12 +1658,15 @@ export class QuickSettingsManager {
     this._styledActors.clear();
   }
 
+  // Iterates through the color map and applies the new target colors to the respective actors
   _applyAdaptiveColorMap(colorMap: Map<Clutter.Actor, string>, skipAnimations = false) {
     if (!colorMap || colorMap.size === 0) return;
     this._backdropColors ??= new Map();
     this._backdropSignals ??= new Map();
     this._dirtyBackdropRoots ??= new Set();
     this._sampleColors = colorMap;
+    // One timestamp for the whole map, so every actor that flips in this round
+    // runs off the same clock and the toggles move as one.
     const batchStart = GLib.get_monotonic_time();
     for (const [actor, color] of colorMap.entries()) {
       if (!this._backdropColors.has(actor)) {
@@ -1223,6 +1739,7 @@ export class QuickSettingsManager {
     this._dirtyBackdropRoots?.clear();
   }
 
+  // Starts the timer for periodically sampling contrast and updating adaptive text colors
   _startAdaptiveColorSampling(skipAnimations = false) {
     if (!this._adaptiveConfig.enabled) return;
     if (skipAnimations) this._contrastSampler.invalidate();
@@ -1243,6 +1760,7 @@ export class QuickSettingsManager {
     );
   }
 
+  // Stops the adaptive color sampling timer
   _stopAdaptiveColorSampling() {
     this._clearBackdropTracking();
     if (this._adaptiveTimerId !== 0) {
@@ -1251,6 +1769,7 @@ export class QuickSettingsManager {
     }
   }
 
+  // Collects target actors, samples their contrast, and triggers color updates
   _updateAdaptiveTextColors(skipAnimations = false) {
     if (!this._adaptiveConfig.enabled || this._adaptiveInFlight) return;
 
@@ -1262,6 +1781,10 @@ export class QuickSettingsManager {
 
     this._contrastSampler
       .chooseColorsForActors(targets, this._adaptiveConfig, this.menu?.actor,
+        // [PERF B4] Skip the capture while the glass under the text has not
+        // been repainted since the last one. See chooseColorsForActors().
+        // Background mode only: in Toggles mode the text is not drawn over
+        // the glass, so its paints say nothing about the pixels sampled.
         () => this._activeMode === 'background' ? this.effect?.paintCount ?? NaN : NaN)
       .then(colorMap => {
         if (generation !== (this._adaptiveGeneration ?? 0) || this._torndown || !this._adaptiveConfig.enabled) return;
@@ -1294,6 +1817,7 @@ export class QuickSettingsManager {
     let targetAlpha = isInsensitive ? 0.5 : 1.0;
     let startAlpha = startColor.alpha / 255.0;
 
+    // Override text color and icon foreground color directly using inline CSS
     const apply = (r: number, g: number, b: number, a: number) => {
       const rgba = `rgba(${r}, ${g}, ${b}, ${a.toFixed(3)})`;
       const base = (actor.get_style() || '').split(';')
@@ -1303,6 +1827,11 @@ export class QuickSettingsManager {
       finally { this._applyingForeground = false; }
     };
 
+    // NOT cancelled on the animated path: add() below reads the entry this may
+    // already have, so that an interrupted tween restarts from the colour that
+    // is actually on screen rather than from a theme node St has not
+    // re-resolved yet. The snap path does cancel, because nothing should keep
+    // stepping after it.
     if (skipAnimations) {
       adaptiveColorTweener.cancel(actor);
       apply(targetRgb.r, targetRgb.g, targetRgb.b, targetAlpha);
@@ -1310,6 +1839,8 @@ export class QuickSettingsManager {
     }
 
     const startRgb = { r: startColor.red, g: startColor.green, b: startColor.blue };
+    // One shared frame-clock driver, one shared start time per batch — see
+    // AdaptiveColorTweener in animation/colors.ts for why this is not a per-actor timer.
     adaptiveColorTweener.add(actor, {
       startRgb, startAlpha,
       targetRgb, targetAlpha,
@@ -1319,6 +1850,7 @@ export class QuickSettingsManager {
     }, batchStart);
   }
 
+  // ── Button alpha sampling (QuickSettings-specific) ─────────────────────────
   _findAllButtons(actor: Clutter.Actor, foundButtons: Clutter.Actor[] = []) {
     if (!actor) return foundButtons;
 
@@ -1361,15 +1893,21 @@ export class QuickSettingsManager {
     const bgColor = button.get_theme_node()?.get_background_color();
     if (!bgColor) return;
 
+    // FIX 1: If this is a parent toggle container, hide its background if any child is active/colored.
+    // This prevents the dark pod background from muddying the semi-transparent orange child button.
     if (this._hasColoredToggleChild(button)) {
       button.set_style(origStyle
         ? `${origStyle} background-color: transparent !important;`
         : 'background-color: transparent !important;');
       return;
     }
+    // FIX 2: If the button is completely transparent by default (like power/lock buttons), keep it transparent.
     if (bgColor.alpha === 0) return;
+    // Apply target alpha for normally visible buttons
     const rgbaStr = `rgba(${bgColor.red}, ${bgColor.green}, ${bgColor.blue}, ${targetAlpha})`;
     button.set_style(origStyle ? `${origStyle} background-color: ${rgbaStr};` : `background-color: ${rgbaStr};`);
+    // Ensure the parent toggle container is also updated dynamically.
+    // If a child button changes state, we must force the parent to re-evaluate its transparency.
     const parent = typeof button.get_parent === 'function' ? button.get_parent() : null;
     if (parent && parent instanceof St.Widget && parent.has_style_class_name('quick-toggle'))
       this._updateSingleButtonAlpha(parent as CustomBannerActor, targetAlpha);
@@ -1426,10 +1964,12 @@ export class QuickSettingsManager {
         this._buttonSignalIds.set(button, signalIds);
       }
 
+      // Apply style safely
       this._updateSingleButtonAlpha(button as unknown as CustomBannerActor, targetAlpha);
     }
   }
 
+  // Start sampling timer
   _startButtonAlphaSampling() {
     this._updateButtonAlpha();
     if (this._buttonTimerId !== 0) return;
@@ -1451,6 +1991,7 @@ export class QuickSettingsManager {
     }
   }
 
+  // Revert processing when extension is disabled, etc.
   _clearButtonStyles() {
     this._stopButtonAlphaSampling();
     this._disconnectButtonSignals();
@@ -1473,6 +2014,7 @@ export class QuickSettingsManager {
     this._buttonSignalIds.clear();
   }
 
+  // ── Spring animation (QuickSettings-specific) ──────────────────────────────
   _startAnimation(targetValue: number) {
     if (this._tickId !== 0) {
       removeFrameTicker(this._tickId);
@@ -1492,6 +2034,9 @@ export class QuickSettingsManager {
     if (this._tickId === 0) {
       let lastTime = GLib.get_monotonic_time();
 
+      // [PERF C1] Stepped by the frame clock, once per frame at most — see
+      // addFrameTicker(). The spring itself sub-steps, so the motion is as
+      // fine as the old 1ms timer's while the actors are written once a frame.
       this._tickId = addFrameTicker(() => {
         if (!this.bgActor || !this.targetActor) {
           this._tickId = 0;
@@ -1510,9 +2055,12 @@ export class QuickSettingsManager {
     }
   }
 
+  // ── Submenu position fix (QuickSettings-specific) ──────────────────────────
+  // Fix: Force submenu position to the center of the parent menu
   _adjustSubmenuPositions() {
     if (!this._enableSubmenuFix || !this.menu?.isOpen || !this.animActor) return;
 
+    // Scan when there's no cached submenus yet
     if (!this._cachedSubmenus) {
       this._cachedSubmenus = [];
       _collectSubmenus(this.menu.actor, this._cachedSubmenus);
@@ -1522,7 +2070,14 @@ export class QuickSettingsManager {
 
     if (foundMenus.length === 0) return;
 
+    // Get the absolute coordinates and size as the parent's base (animActor = the visual bounding box of the menu)
     let [parentAbsX, parentAbsY] = this.animActor.get_transformed_position();
+    // Every size read in this function comes from the allocation, to stay
+    // consistent with the get_transformed_position() calls it is paired
+    // with — those are allocation-derived, while get_size() silently falls
+    // back to the preferred size whenever a relayout is still pending (see
+    // getAllocatedSize). Mixing the two yields geometry that matches
+    // neither.
     let [parentW, parentH] = getAllocatedSize(this.animActor);
 
     if (Number.isNaN(parentAbsX) || Number.isNaN(parentAbsY) ||
@@ -1543,6 +2098,7 @@ export class QuickSettingsManager {
       Number.isNaN(subW) || Number.isNaN(subH) ||
       subW <= 0 || subH <= 0) return;
 
+    // X: centre-align submenu within parent
     let currentTranslationX = submenu.translation_x || 0;
     let baseRelativeX = subAbsX - parentAbsX - currentTranslationX;
     let targetRelativeX = (parentW - subW) / 2;
@@ -1551,21 +2107,26 @@ export class QuickSettingsManager {
       submenu.translation_x = newTranslationX;
     }
 
+    // Y: centre-align submenu in the available gap between neighbours
     let currentTranslationY = submenu.translation_y || 0;
     let baseAbsY = subAbsY - currentTranslationY;
     const gap = { subCenterY: baseAbsY + (subH / 2), aboveMaxY: parentAbsY, belowMinY: parentAbsY + parentH };
 
+    // Execute boundary scan starting from the direct children of the box (parent container)
     let parentChildren = typeof this.animActor.get_children === 'function' ? this.animActor.get_children() : [];
     for (let child of parentChildren) _findSubmenuGap(child, submenu, gap);
 
+    // Calculate the target value to place the submenu in the center of the identified vertical gap
     let targetTranslationY = (gap.aboveMaxY + (gap.belowMinY - gap.aboveMaxY) / 2) - (subH / 2) - baseAbsY;
 
+    // Chattering prevention (update only if there's a difference of 0.5px or more from the current movement)
     if (Math.abs(currentTranslationY - targetTranslationY) > 0.5) {
       submenu.translation_y = targetTranslationY;
     }
   }
 
   _clearSubmenuFix() {
+    // Scan when there's no cached submenus yet
     let foundMenus: Clutter.Actor[] = this._cachedSubmenus || [];
 
     if (foundMenus.length === 0 && this.menu?.actor) _collectSubmenus(this.menu.actor, foundMenus);
@@ -1574,9 +2135,10 @@ export class QuickSettingsManager {
       try { submenu.translation_x = 0; } catch { }
     }
 
-    this._cachedSubmenus = null;
+    this._cachedSubmenus = null; // Clear cache
   }
 
+  // ── Effect remove / cleanup ─────────────────────────────────────────────────
   _removeEffect() {
     if (!this._isEffectActive) return;
     this._isEffectActive = false;
@@ -1585,21 +2147,28 @@ export class QuickSettingsManager {
     this._clearAdaptiveStyles();
     this._clearButtonStyles();
     this._clearSubmenuFix();
-    this._toggleStyles.clear();
+    this._toggleStyles.clear(); // no-op if Background mode was active (map is empty)
     this._destroyPanelContentClone();
 
     this._disconnectEffectSignals();
     this._restoreMenuActors();
 
+    // DESTROY EFFECT FIRST (before bgActor.destroy())
     if (this.effect) {
       this.effect.cleanup();
       this.effect = null;
     }
 
+    // DESTROY ACTOR HIERARCHY — bgActor.destroy() cascades through
+    // liquidBox → _cloneContainer and all their children.
     if (this.bgActor) {
       this.bgActor.destroy();
       this.bgActor = null;
     }
+    // [FIX-5] bgActor's PARENT is now _toggleGlassHost (a LayoutOpaqueActor
+    // living inside animActor), not the other way around — destroying
+    // bgActor doesn't touch it, so it needs its own explicit teardown or
+    // it lingers as a dangling empty child of animActor.
     if (this._toggleGlassHost) {
       if (isActorValid(this._toggleGlassHost)) {
         try { this._toggleGlassHost.destroy(); } catch { }
@@ -1609,6 +2178,7 @@ export class QuickSettingsManager {
     this.liquidBox = null;
     this._cloneContainer = null;
 
+    // Clean up managers (their destroy() guards against already-destroyed actors)
     this._uiSampler?.destroy();
     this._uiSampler = null;
     this._windowCloneManager?.destroy();
@@ -1628,6 +2198,7 @@ export class QuickSettingsManager {
   }
 
   private _disconnectEffectSignals(): void {
+    // Disconnect all event listeners
     for (let sig of this._signals) {
       try { if (sig && sig.id) sig.target.disconnect(sig.id); } catch { }
     }
@@ -1647,6 +2218,7 @@ export class QuickSettingsManager {
   }
 
   private _restoreMenuActors(): void {
+    // Remove transparent CSS overrides
     this.targetActor.remove_style_class_name('liquid-glass-transparent');
     if (this.animActor) {
       this.animActor.remove_style_class_name('liquid-glass-transparent');
@@ -1670,6 +2242,13 @@ export class QuickSettingsManager {
     }
   }
 
+  // [FIX] Teardown must not be all-or-nothing.
+  //
+  // These steps used to run bare, one after another, so the first one that
+  // threw skipped every step after it — signal handlers, actors, effects and
+  // (worst of all) the per-frame later chain stayed alive, and the next
+  // enable() built a second set on top. Disabling is exactly when a throw is
+  // most likely: the shell is destroying the same actors we are.
   private _teardownStep(name: string, fn: () => void): void {
     try {
       fn();
@@ -1696,6 +2275,8 @@ export class QuickSettingsManager {
       this._settingsSignals = [];
     });
 
+    // [FIX] `if (!this.targetActor) return;` used to sit here and skip
+    // _removeEffect() outright whenever the panel button had gone away.
     this._teardownStep('removeEffect', () => this._removeEffect());
   }
 }

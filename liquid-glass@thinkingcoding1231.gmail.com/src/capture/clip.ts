@@ -5,9 +5,36 @@ import { isActorValid } from '../actors/lifecycle.js';
 import { isCaptureClipEnabled, isCloneCullEnabled, isCullSiteEnabled, GlassRect } from './options.js';
 import { unionRectInto, rectsIntersect } from '../actors/geometry.js';
 import { setClipIfChanged } from '../actors/writes.js';
+/**
+ * [PERF ①/①b] Per-frame entry point for the capture clip and the clone cull.
+ *
+ * Call it from the manager's own sync, AFTER setResolution()/
+ * setGlassGeometry() (so the effect's uniforms describe this frame) and
+ * BEFORE uiSampler.sync()/windowCloneManager.sync() (so the cull rect this
+ * computes is the one those two use this frame, not next frame).
+ *
+ * Coordinate spaces, because getting one of these wrong makes the glass show
+ * an empty background and nothing else:
+ *
+ *   shader space  liquidBox-local pixels. What LiquidEffect works in
+ *                 (resolution_x/y, dock_x/y/w/h, getCaptureClipRect()).
+ *   screen space  absolute stage coordinates. What the clones are positioned
+ *                 in — both WindowCloneManager and UILayerSampler place
+ *                 their clones at the SOURCE's absolute position and let a
+ *                 container-level translation map them into the FBO.
+ *
+ * They differ by the glass's own origin on screen, which the caller passes as
+ * originX/originY (the monitor origin for every current caller).
+ *
+ * The clip goes on the clone container, whose own transform is identity, so
+ * its local space IS shader space and the rect can be applied as-is.
+ */
 export function syncGlassCaptureClip(opts: {
+  /** The actor holding bgClone / windowClones / uiClones. */
   cloneContainer: Clutter.Actor | null,
+  /** The LiquidEffect driving this glass. */
   effect: any,
+  /** Screen position of shader-space (0, 0), i.e. of the glass's bgActor. */
   originX: number,
   originY: number,
   uiSampler?: UILayerSampler | null,
@@ -48,8 +75,26 @@ export function syncGlassCaptureClip(opts: {
   }
   if (!rect) { clear(); return; }
 
+  // A BMS replica whose rect we have not measured yet: sit this frame out
+  // rather than risk clipping the panel's band away for one frame. It costs
+  // a single unclipped paint, once, right after the replica is built.
   if (uiSampler?.hasUnmeasuredBmsReplica()) { clear(); return; }
 
+  // Widen to cover every BMS replica this glass draws. A BACKGROUND-mode BMS
+  // blur reads the framebuffer over the panel's full stage rect, so any part
+  // of that rect we stop painting into comes back as blurred transparency
+  // smeared across the whole panel (memo.md 追記4). The panel is full width,
+  // so with the dock at the top edge this widens the clip to the full screen
+  // — the height still collapses, which is where the saving is.
+  //
+  // [PERF B3] ...but only a replica this glass can actually SEE. The union
+  // used to be unconditional, so every glass — an OSD at the bottom edge, a
+  // dock at the bottom — carried the full-width panel band in its cull rect:
+  // every window touching the top of the screen (every maximized window) was
+  // exempt from ①b, and its nested glass ran inside this capture for nothing.
+  // A replica outside the glass's own reach contributes no visible pixel, so
+  // it is left out of the rect and UILayerSampler culls it like any other
+  // clone (see syncProperties()).
   const bmsRects = uiSampler?.getBmsScreenRects() ?? [];
   const ownRect: GlassRect = [rect[0], rect[1], rect[2], rect[3]];
   for (const b of bmsRects) {
@@ -72,14 +117,20 @@ export function syncGlassCaptureClip(opts: {
 
   applyCaptureClip(cloneContainer, rect);
 
+  // [DIAG] Visible in global._lgGlass.dump() as `captureClip`.
   effect._lgCaptureClip = rect.slice();
 
   const screenRect: GlassRect = [rect[0] + originX, rect[1] + originY, rect[2], rect[3]];
 
+  // The wallpaper clone is not under cloneContainer, so it needs its own
+  // clip — in screen space. See applyBgCloneClip().
   windowCloneManager?.applyBgCloneClip(isCaptureClipEnabled() ? screenRect : null);
 
   uiSampler?.setCullRect(screenRect);
   windowCloneManager?.setCullRect(screenRect);
+  // [PERF B2] The same rect, published for the glass's own capture: a window
+  // glass painted through a clone inside it clamps its composite to this.
+  // See rendering/nestedRoi.ts.
   effect._lgCaptureScreenRect = screenRect;
 }
 

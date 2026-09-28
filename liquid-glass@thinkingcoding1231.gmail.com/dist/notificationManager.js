@@ -1,3 +1,4 @@
+// src/notificationManager.ts
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
@@ -14,6 +15,7 @@ import { excludeOtherGlass } from './capture/glassExclusions.js';
 import { setClipIfChanged } from './actors/writes.js';
 import { syncGlassCaptureClip } from './capture/clip.js';
 import { resolveCrossFade, adaptiveColorTweener } from './animation/colors.js';
+// ========== Configuration Parameters (Defaults, overridden by settings) ==========
 const SHADER_PADDING = 20;
 export class NotificationManager {
     extensionPath;
@@ -21,6 +23,11 @@ export class NotificationManager {
     _logger;
     tray;
     currentBanner = null;
+    // Full-screen FBO actor hierarchy (matches dockManager pattern)
+    //   bgActor (full monitor, no effect)
+    //     └─ liquidBox  ← LiquidEffect with built-in dual-Kawase blur
+    //          ├─ _cloneContainer ← WindowCloneManager + UILayerSampler deposits here
+    //          └─ dummyBreaker (prevents BMS black-screen optimization bug)
     bgActor = null;
     liquidBox = null;
     _cloneContainer = null;
@@ -33,6 +40,9 @@ export class NotificationManager {
     get _frameSlot() {
         return { get: () => this._frameSyncId, set: (id) => { this._frameSyncId = id; } };
     }
+    // [FIX] Set by cleanup() before anything that can throw. Read by the
+    // per-frame loop so an orphaned one stops itself even if cleanup() never
+    // reached the call that stops it. See the note on DockManager's frameTick.
     _torndown = false;
     _isEffectActive;
     _bannerIdleId = 0;
@@ -45,6 +55,9 @@ export class NotificationManager {
     _lastBgY;
     _lastScreenW;
     _lastScreenH;
+    // Monitor origin the last _syncGeometry() resolved, so the paint-time hook
+    // can rebuild the glass rect without re-resolving the monitor. See
+    // _syncGlassGeometryLive().
     _liveMonitorOrigin = null;
     _contrastSampler;
     _adaptiveConfig;
@@ -88,6 +101,7 @@ export class NotificationManager {
             this._applyEffect();
         }
     }
+    // Utility: Convert HEX color string to normalized RGB array
     _hexToColorArray(hex) {
         if (!hex || typeof hex !== 'string' || !hex.startsWith('#') || hex.length !== 7)
             return [1.0, 1.0, 1.0];
@@ -136,6 +150,7 @@ export class NotificationManager {
                 this._glassExpand = this._settings.get_int('notification-glass-expand');
             }
         });
+        // Brightness / Saturation / Contrast — dynamic application from settings
         connectSetting('notification-brightness', () => {
             if (this.effect && this._isEffectActive) {
                 this.effect.setBrightness(this._settings.get_double('notification-brightness'));
@@ -175,12 +190,14 @@ export class NotificationManager {
             return;
         }
         this._isEffectActive = true;
+        // Apply settings initially
         this._adaptiveConfig.enabled = this._settings.get_boolean('notification-enable-adaptive-text-color');
         this._adaptiveConfig.sampleIntervalMs = this._settings.get_int('notification-sample-interval-ms');
         this._glassExpand = this._settings.get_int('notification-glass-expand');
         this._baseTint = this._settings.get_double('notification-tint-strength');
         this._currentTint = this._baseTint;
         this._notificationYOffset = this._settings.get_int('notification-y-offset');
+        // Listen for new notifications
         this._signals.push(bannerBin.connect('child-added', (container, actor) => {
             if (actor === this.bgActor || actor.get_name?.() === 'liquid-glass-bg-actor')
                 return;
@@ -190,6 +207,7 @@ export class NotificationManager {
             this._bannerIdleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
                 this._bannerIdleId = 0;
                 this._pendingBanner = null;
+                // A queued setup may outlive the notification or the effect toggle.
                 if (!this._isEffectActive || actor.get_parent() !== bannerBin)
                     return GLib.SOURCE_REMOVE;
                 if (actor !== this.currentBanner) {
@@ -229,24 +247,29 @@ export class NotificationManager {
             // @ts-expect-error: shell-owned container
             this.tray._bannerBin.translation_y = this._originalBannerOffset + this._notificationYOffset;
         }
+        // ── 1. bgActor: full monitor, no effect ──────────────────────────────────
         this.bgActor = new UnpickableActor();
         this.bgActor.set_name('liquid-glass-bg-actor');
         this.bgActor.hide();
         this.bgActor.set_size(1.0, 1.0);
         this.bgActor.set_pivot_point(0.0, 0.0);
+        // ── 2. liquidBox: outer layer — LiquidEffect with built-in dual-Kawase blur ─
         this.liquidBox = new UnpickableActor();
         this.liquidBox.set_name('liquid-box');
         this.liquidBox.set_clip_to_allocation(true);
         this.bgActor.add_child(this.liquidBox);
+        // dummyBreaker: prevents BMS black-screen optimization bug
         let dummyBreaker = new UnpickableActor();
         dummyBreaker.set_name('optimization-breaker');
         dummyBreaker.set_size(1.0, 1.0);
         dummyBreaker.set_opacity(0);
         this.liquidBox.add_child(dummyBreaker);
+        // ── 3. _cloneContainer: sub-container inside liquidBox ────────────────────
         this._cloneContainer = new UnpickableActor();
         this._cloneContainer.set_name('clone-container');
         this.liquidBox.add_child(this._cloneContainer);
         // @ts-expect-error
+        // ── Find the bannerBin's ancestor that is a direct child of uiGroup ──────
         let bannerBin = this.tray._bannerBin;
         let bannerRoot = bannerBin ?? targetActor;
         while (bannerRoot.get_parent() && bannerRoot.get_parent() !== Main.layoutManager.uiGroup) {
@@ -255,12 +278,15 @@ export class NotificationManager {
                 break;
             bannerRoot = p;
         }
+        // Insert bgActor below the notification root in uiGroup to prevent recursive
+        // clone loops (same pattern as dockManager / uiManager)
         if (bannerRoot.get_parent() === Main.layoutManager.uiGroup) {
             Main.layoutManager.uiGroup.insert_child_below(this.bgActor, bannerRoot);
         }
         else {
             Main.layoutManager.uiGroup.add_child(this.bgActor);
         }
+        // ── 4. Read effect parameters from settings ───────────────────────────────
         let blurRadius = this._settings.get_int('notification-blur-radius');
         let tintColorStr = this._settings.get_string('notification-tint-color');
         let cornerRadius = this._settings.get_double('notification-corner-radius');
@@ -269,6 +295,7 @@ export class NotificationManager {
         let saturation = this._settings.get_double('notification-saturation');
         let contrast = this._settings.get_double('notification-contrast');
         this._baseTint = tintStrength;
+        // LiquidEffect on liquidBox (includes built-in dual-Kawase blur)
         this.effect = new LiquidEffect({ extensionPath: this.extensionPath, settings: this._settings, owner: 'notification' });
         this.effect.setPadding(SHADER_PADDING);
         this.effect.setTintColor(...this._hexToColorArray(tintColorStr));
@@ -280,18 +307,47 @@ export class NotificationManager {
         this.effect.setContrast(contrast);
         this.effect.setBlurRadius(blurRadius);
         this.liquidBox.add_effect(this.effect);
+        // [FIX] Banner-follows-glass lag. messageTray.js eases `_bannerBin.y`,
+        // which queues a relayout, and the frame tick below runs before this
+        // frame's relayout — so the rect it computes comes from the previous
+        // frame's allocation. This recomputes the shader's glass rect at paint
+        // time, which is after the relayout. See
+        // LiquidEffect.setLiveGeometryHook().
         this.effect.setLiveGeometryHook(() => this._syncGlassGeometryLive());
+        // ── 5. WindowCloneManager + UILayerSampler ────────────────────────────────
         this._windowCloneManager = new WindowCloneManager(this.liquidBox, this._cloneContainer, 'lg-notification');
         this._uiSampler = new UILayerSampler(this.bgActor, this.liquidBox, [bannerRoot, global.windowGroup, global.window_group], this._cloneContainer, 'notification');
+        // First valid geometry sync makes the glass visible.
+        // Initial clone build (also applies liquid-glass mutual exclusions)
         this._buildClones();
+        // ── 7. Frame-render loop ──────────────────────────────────────────────────
         stopLaterLoop(this._frameSlot);
         startLaterLoop(this._frameSlot, {
+            // [FIX] Hard stop after teardown. A cleanup() that does not reach
+            // stopLaterLoop() — because an earlier step threw — would otherwise
+            // leave a self-rescheduling chain running forever against destroyed
+            // actors, holding this whole manager (and its settings and logger)
+            // alive. The next enable() then builds a second set on top of a live
+            // first set, which is the "the extension can no longer be enabled"
+            // symptom. Stopping the loop is still done in cleanup(); this is the
+            // backstop that does not depend on cleanup() getting that far.
             alive: () => !this._torndown && !!this.bgActor && !!this.currentBanner,
+            // [DIAG] See setFrameSyncFrozen() in animation/frameSync.ts. The loop
+            // keeps running but does nothing, so the cost of this poll can be
+            // measured directly.
             honourFreeze: true,
             errorTag: 'NotificationManager',
             step: () => {
+                // startLaterLoop() re-arms before running this step and catches what
+                // it throws, so a failing sync cannot end the loop — see the comment
+                // on DockManager's frameTick.
+                // Repair the subtree if Clutter has stopped allocating it. Sampled
+                // here, at the top of the tick, because the previous frame's relayout
+                // has settled by now and this frame's sync has not dirtied anything
+                // yet. See ensureGlassAllocated().
                 ensureGlassAllocated(this.bgActor);
                 this._syncGeometry();
+                // Hover tint animation (notification-specific behaviour preserved)
                 let isHovered = this.currentBanner.hover;
                 let targetTint = isHovered ? (this._baseTint + 0.1) : this._baseTint;
                 if (Math.abs(this._currentTint - targetTint) > 0.001) {
@@ -303,11 +359,17 @@ export class NotificationManager {
         this._isFirstAdaptiveRun = true;
         this._startAdaptiveColorSampling();
     }
+    // ── Geometry synchronisation ────────────────────────────────────────────────
+    // Called every frame. Uses full-screen FBO architecture so that BMS coordinate
+    // assumptions are satisfied (all actors cover the entire monitor).
     _syncGeometry() {
         if (!this.bgActor || !this.currentBanner)
             return;
         // @ts-expect-error: shell-owned container
+        // Keep the offset on the same parent GNOME animates, never on the glass alone.
         this.tray._bannerBin.translation_y = this._originalBannerOffset + this._notificationYOffset;
+        // GNOME animates opacity and scale on _bannerBin, not on the banner.
+        // Both the origin and size must include that ancestor transform.
         const [absX, absY, w, h] = getTransformedRect(this.currentBanner);
         const opacity = this.currentBanner.get_paint_opacity();
         if (!this.currentBanner.mapped || !this.tray.visible || opacity === 0 ||
@@ -326,25 +388,34 @@ export class NotificationManager {
         let monitorY = monitor?.y ?? 0;
         let screenW = Math.max(1, monitor?.width ?? 1);
         let screenH = Math.max(1, monitor?.height ?? 1);
+        // Monitor-local coordinates (shader uses these)
         let localBgX = bgX_abs - monitorX;
         let localBgY = bgY_abs - monitorY;
+        // The only part of the rect the paint-time hook cannot derive on its own.
         this._liveMonitorOrigin = [monitorX, monitorY];
+        // ── Update actors only when geometry actually changed ────────────────────
         if (this._lastBgW !== bgW || this._lastBgH !== bgH ||
             this._lastBgX !== bgX_abs || this._lastBgY !== bgY_abs ||
             this._lastScreenW !== screenW || this._lastScreenH !== screenH) {
+            // bgActor: full monitor size, positioned at monitor origin
             this.bgActor.remove_transition('size');
             this.bgActor.remove_transition('position');
             this.bgActor.set_position(monitorX, monitorY);
             this.bgActor.set_size(screenW, screenH);
             this.bgActor.remove_transition('size');
             this.bgActor.remove_transition('position');
+            // liquidBox fills the entire bgActor
             this.liquidBox?.set_position(0, 0);
             this.liquidBox?.set_size(screenW, screenH);
+            // Soft clip — limits GPU work to the notification area + generous margin
             const CLIP_PADDING = 200;
             this.liquidBox?.remove_clip();
+            // [PERF] set_clip() queues a redraw unconditionally — see setClipIfChanged().
             setClipIfChanged(this.bgActor, localBgX - CLIP_PADDING, localBgY - CLIP_PADDING, bgW + CLIP_PADDING * 2, bgH + CLIP_PADDING * 2);
             const SHADOW_MAX_RADIUS = CLIP_PADDING - 20;
             this.effect?.setShadowMaxRadius(SHADOW_MAX_RADIUS);
+            // Inform the shader of the full-screen resolution and where the
+            // notification lives within the FBO (mirrors dockManager.setGlassGeometry)
             this.effect?.setResolution(screenW, screenH);
             this.effect?.setGlassGeometry(localBgX, localBgY, bgW, bgH);
             this._lastBgW = bgW;
@@ -354,8 +425,14 @@ export class NotificationManager {
             this._lastScreenW = screenW;
             this._lastScreenH = screenH;
         }
+        // ── Sync clones every frame (dockManager pattern) ────────────────────────
         this._windowCloneManager?.setOffset(-monitorX, -monitorY);
         this._uiSampler?.refresh();
+        // [PERF ①/①b] Clip the offscreen CAPTURE to the region this glass can
+        // actually show, and hide the clones that fall outside it. Must sit
+        // between setGlassGeometry() (which makes the effect's uniforms describe
+        // this frame) and the two sync() calls below (which consume the cull
+        // rect this sets). See syncGlassCaptureClip() in capture/clip.ts.
         syncGlassCaptureClip({
             cloneContainer: this._cloneContainer,
             effect: this.effect,
@@ -367,6 +444,21 @@ export class NotificationManager {
         this._uiSampler?.sync(monitorX, monitorY, screenW, screenH);
         this._windowCloneManager?.sync();
     }
+    // ── Paint-time geometry (see LiquidEffect.setLiveGeometryHook) ─────────────
+    //
+    // Runs inside the paint phase, once per paint of the glass. The banner's
+    // entry/exit eases `_bannerBin.y` (messageTray.js), and setting `y` queues
+    // a relayout rather than moving a paint-time transform — so the banner's
+    // ALLOCATION, which is what get_transformed_extents() reports, only catches
+    // up in the stage's relayout phase. That phase runs after the
+    // BEFORE_REDRAW laters _syncGeometry() lives in, and before the paint this
+    // hook runs in. Here it is current.
+    //
+    // This deliberately repeats only the cheap, stateless half of
+    // _syncGeometry(): the shader's glass rect, which is pure arithmetic on the
+    // banner's transformed rect. Everything else it does — resizing actors,
+    // re-clipping, moving clones — is actor state that must not be touched
+    // mid-paint, and none of it is what the eye is tracking.
     _syncGlassGeometryLive() {
         const banner = this.currentBanner;
         const origin = this._liveMonitorOrigin;
@@ -377,10 +469,14 @@ export class NotificationManager {
         const [absX, absY, w, h] = getTransformedRect(banner);
         if (![absX, absY, w, h].every(Number.isFinite) || w <= 0 || h <= 0)
             return;
+        // Identical derivation to _syncGeometry()'s.
         const bgW = w + this._glassExpand * 2 + SHADER_PADDING * 2;
         const bgH = h + this._glassExpand * 2 + SHADER_PADDING * 2;
         this.effect.setGlassGeometry(absX - this._glassExpand - SHADER_PADDING - origin[0], absY - this._glassExpand - SHADER_PADDING - origin[1], bgW, bgH);
     }
+    // Called once when the banner effect is first set up (and after monitor changes).
+    // Applies mutual exclusions between multiple Liquid Glass bgActors, then
+    // delegates clone construction to WindowCloneManager + UILayerSampler.
     _buildClones() {
         if (!this.bgActor)
             return;
@@ -389,6 +485,7 @@ export class NotificationManager {
         this._uiSampler?.rebindSelf();
         this._uiSampler?.refresh();
     }
+    // ── Per-banner cleanup ──────────────────────────────────────────────────────
     _cleanupCurrentBanner() {
         this._bannerGeneration++;
         this._contrastSampler.invalidate();
@@ -404,20 +501,25 @@ export class NotificationManager {
             this.currentBanner = null;
         }
         stopLaterLoop(this._frameSlot);
+        // DESTROY EFFECT FIRST (must happen before bgActor.destroy())
         if (this.effect) {
             this.effect.cleanup();
             this.effect = null;
         }
+        // DESTROY ACTOR HIERARCHY — bgActor.destroy() cascades through
+        // liquidBox → _cloneContainer and all their children.
         if (this.bgActor) {
             this.bgActor.destroy();
             this.bgActor = null;
         }
         this.liquidBox = null;
         this._cloneContainer = null;
+        // Clean up managers (their destroy() guards against already-destroyed actors)
         this._uiSampler?.destroy();
         this._uiSampler = null;
         this._windowCloneManager?.destroy();
         this._windowCloneManager = null;
+        // Reset cached geometry state
         this._lastBgW = undefined;
         this._lastBgH = undefined;
         this._lastBgX = undefined;
@@ -426,6 +528,7 @@ export class NotificationManager {
         this._lastScreenH = undefined;
         this._isFirstAdaptiveRun = true;
     }
+    // ── Effect remove / cleanup ─────────────────────────────────────────────────
     _removeEffect() {
         if (!this._isEffectActive)
             return;
@@ -445,6 +548,13 @@ export class NotificationManager {
         this._signals = [];
         this._cleanupCurrentBanner();
     }
+    // [FIX] Teardown must not be all-or-nothing.
+    //
+    // These steps used to run bare, one after another, so the first one that
+    // threw skipped every step after it — signal handlers, actors, effects and
+    // (worst of all) the per-frame later chain stayed alive, and the next
+    // enable() built a second set on top. Disabling is exactly when a throw is
+    // most likely: the shell is destroying the same actors we are.
     _teardownStep(name, fn) {
         try {
             fn();
@@ -460,6 +570,8 @@ export class NotificationManager {
     }
     cleanup() {
         this._torndown = true;
+        // Nothing for a late paint-time hook to act on. (The effect drops the
+        // hook itself in its own cleanup(); this covers the window before that.)
         this._liveMonitorOrigin = null;
         this._teardownStep('frameSync', () => stopLaterLoop(this._frameSlot));
         this._teardownStep('settingsSignals', () => {
@@ -473,6 +585,7 @@ export class NotificationManager {
         });
         this._teardownStep('removeEffect', () => this._removeEffect());
     }
+    // ── Adaptive text colour helpers (unchanged logic) ──────────────────────────
     _collectAdaptiveTextTargets(actor = this.currentBanner, targets = []) {
         if (!actor)
             return targets;
@@ -490,6 +603,11 @@ export class NotificationManager {
         }
         if (actor._currentTargetColor === color)
             return;
+        // A light<->dark flip used to be snapped here, because interpolating the
+        // two in RGB passes through the background's own grey and the label
+        // disappears mid-tween. _animateActorColor() now cross-dissolves that case
+        // instead (see crossFadeColorAt() in animation/colors.ts), so it is animated like any
+        // other change.
         actor._currentTargetColor = color;
         this._animateActorColor(actor, color, 380, skipAnimations, batchStart);
     }
@@ -509,6 +627,7 @@ export class NotificationManager {
     _applyAdaptiveColorMap(colorMap, skipAnimations = false) {
         if (!colorMap || colorMap.size === 0)
             return;
+        // One timestamp for the whole map, so every label in the banner flips together.
         const batchStart = GLib.get_monotonic_time();
         for (const [actor, color] of colorMap.entries()) {
             this._setActorColor(actor, color, skipAnimations, batchStart);
@@ -560,7 +679,10 @@ export class NotificationManager {
         this._adaptiveInFlight = true;
         const generation = this._bannerGeneration;
         this._contrastSampler
-            .chooseColorsForActors(targets, this._adaptiveConfig, this.currentBanner, () => this.effect?.paintCount ?? NaN)
+            .chooseColorsForActors(targets, this._adaptiveConfig, this.currentBanner, 
+        // [PERF B4] Skip the capture while the glass under the text has not
+        // been repainted since the last one. See chooseColorsForActors().
+        () => this.effect?.paintCount ?? NaN)
             .then(colorMap => {
             if (generation !== this._bannerGeneration || !this.currentBanner)
                 return;
@@ -584,6 +706,10 @@ export class NotificationManager {
     _animateActorColor(actor, targetHexColor, durationMs = 380, skipAnimations = false, batchStart) {
         if (!actor || Object.keys(actor).length === 0)
             return;
+        // NOT cancelled here: add() below reads the entry this may already have,
+        // so that an interrupted tween restarts from the colour that is actually
+        // on screen rather than from a theme node St has not re-resolved yet.
+        // The snap path does cancel, because nothing should keep stepping after it.
         const originalStyle = (this._styledActors.get(actor) || '').trim();
         const stylePrefix = originalStyle ? `${originalStyle.replace(/;$/, '')}; ` : '';
         let themeNode = actor.get_theme_node();
@@ -606,6 +732,8 @@ export class NotificationManager {
         }
         const startRgb = { r: startColor.red, g: startColor.green, b: startColor.blue };
         const startAlpha = startColor.alpha / 255.0;
+        // One shared frame-clock driver, one shared start time per batch — see
+        // AdaptiveColorTweener in animation/colors.ts for why this is not a per-actor timer.
         adaptiveColorTweener.add(actor, {
             startRgb, startAlpha,
             targetRgb, targetAlpha: 1.0,
