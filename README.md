@@ -10,6 +10,8 @@ A GNOME Shell Extension that replicates the "Liquid Glass" UI concept using shad
 
 I love the look of Apple's Liquid Glass, but since I don't own any Apple products (I use an Android smartphone and a Linux computer), I wanted a way to see it on my desktop every day. So, I decided to build it myself.
 
+> **Are you a developer?** If you'd like to use this glass effect in your own GTK 4 / libadwaita app, take a look at [glass-lib](https://github.com/ryohsuke1231/glass-lib).
+
 ## Demo
 
 Dash to Dock:
