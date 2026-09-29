@@ -59,6 +59,7 @@ export class PreferenceControls {
   choice(group, title, choices, subtitle = '', custom = true) {
     const row = new Adw.ComboRow({title, subtitle,
       model: Gtk.StringList.new([...choices.map(choice => choice.title), ...(custom ? ['Custom'] : [])])});
+    if (custom) row.list_factory = this._choiceListFactory(row, choices.length);
     group.add(row);
     let syncing = false;
     const refresh = () => {
@@ -76,6 +77,38 @@ export class PreferenceControls {
     });
     this.watch([...new Set(choices.flatMap(choice => Object.keys(choice.patch)))], refresh);
     return row;
+  }
+
+  // "Custom" only reports that the values were edited by hand; it cannot be
+  // picked. Replaces the combo row's popup list so that entry is greyed out
+  // and inert, keeping the checkmark the default list draws on the selection.
+  _choiceListFactory(row, customIndex) {
+    const factory = new Gtk.SignalListItemFactory();
+    factory.connect('setup', (_factory, item) => {
+      const box = new Gtk.Box({spacing: 6});
+      const label = new Gtk.Label({xalign: 0, hexpand: true});
+      const check = new Gtk.Image({icon_name: 'object-select-symbolic'});
+      box.append(label);
+      box.append(check);
+      item.child = box;
+      item._label = label;
+      item._check = check;
+    });
+    factory.connect('bind', (_factory, item) => {
+      const isCustom = item.position === customIndex;
+      item._label.label = item.item.string;
+      item.child.sensitive = !isCustom;
+      item.activatable = !isCustom;
+      item.selectable = !isCustom;
+      const sync = () => { item._check.opacity = row.selected === item.position ? 1 : 0; };
+      item._selectedId = row.connect('notify::selected', sync);
+      sync();
+    });
+    factory.connect('unbind', (_factory, item) => {
+      if (item._selectedId) row.disconnect(item._selectedId);
+      item._selectedId = 0;
+    });
+    return factory;
   }
 
   // `slider` adds a slider that shares the spin row's adjustment, for values
