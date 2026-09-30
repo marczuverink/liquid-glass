@@ -188,9 +188,10 @@ function ensureSharedBackgroundSource() {
     const source = new BackgroundMirror();
     source.set_name('lg-bg-mirror-source');
     source.set_position(0, 0);
-    source.set_size(group.width, group.height);
-    // A clone scales its source to its own size, so the source has to follow
-    // the group's size through monitor changes.
+    // A clone takes its size from this actor's preferred size and scales its
+    // allocation into it, so both follow the group through the constraints.
+    // No fixed size: it would override the constrained preferred size with the
+    // group's size at enable time, 0x0 when monitors appear later (headless).
     for (const coordinate of [Clutter.BindCoordinate.WIDTH, Clutter.BindCoordinate.HEIGHT])
         source.add_constraint(new Clutter.BindConstraint({ source: group, coordinate }));
     // Opacity 0 rather than hidden: clutter_actor_paint() skips it on screen,
