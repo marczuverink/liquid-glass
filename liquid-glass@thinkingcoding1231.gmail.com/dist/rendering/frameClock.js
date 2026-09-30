@@ -5,16 +5,19 @@
 // each monitor's first paint still runs the full chain.
 export let frameSerial = 0;
 let _frameSerialHandler = 0;
+
 export function ensureFrameSerialHook() {
     if (!_frameSerialHandler)
         _frameSerialHandler = global.stage.connect('after-paint', () => { frameSerial++; });
     return true;
 }
+
 // Blur reuse is gated on this: without the hook the serial never advances and
 // every paint after the first would reuse a stale blur.
 export function frameSerialIsLive() {
     return _frameSerialHandler !== 0;
 }
+
 export function releaseFrameSerialHook() {
     if (!_frameSerialHandler)
         return;

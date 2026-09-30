@@ -56,6 +56,7 @@ const MENU_WINDOW_TYPES = [
 // Bound on the transient_for walk, so a cycle cannot hang the first-frame
 // handler. A desktop menu is one hop from the desktop, submenus a few more.
 const MAX_TRANSIENT_DEPTH = 8;
+
 export class ApplicationManager {
     // Slack around the glass box when culling behind-window clones. Keeping a
     // clone too many costs little; one too few pops a window in and out.
@@ -81,11 +82,13 @@ export class ApplicationManager {
     _displacedContainers = new Set();
     _strandedScaleWindows = new Set();
     _anomalousClones = new Set();
+
     constructor(extensionPath, settings, logger) {
         this._extensionPath = extensionPath;
         this._settings = settings;
         this._logger = logger;
     }
+
     setup() {
         this._glassMargin = this._computeGlassMargin();
         this._bindSettings();
@@ -93,13 +96,14 @@ export class ApplicationManager {
         this._displaySignals.push(display.connect('window-created', (_d, metaWindow) => this._onWindowCreated(metaWindow)), display.connect('restacked', () => {
             this._rebuildAllClones();
             this._armFocusDebug('restacked');
-        }), 
+        }),
         // Dragging a window and releasing it can misplace clones without any
         // restack, so grabs arm the diagnostic too.
         display.connect('grab-op-begin', () => this._armFocusDebug('grab-op-begin')), display.connect('grab-op-end', () => this._armFocusDebug('grab-op-end')));
         if (this._isEffectEnabled())
             this._applyEffects();
     }
+
     cleanup() {
         for (const id of this._displaySignals)
             global.display.disconnect(id);
@@ -114,6 +118,7 @@ export class ApplicationManager {
         this._strandedScaleWindows.clear();
         this._anomalousClones.clear();
     }
+
     // A window can only be dressed once it has painted. The handlers are
     // dropped after the first frame, when the window goes away first, or on
     // cleanup.
@@ -132,6 +137,7 @@ export class ApplicationManager {
             actor.connect('destroy', () => this._forgetNewWindow(actor)),
         ]);
     }
+
     _forgetNewWindow(actor) {
         const ids = this._newWindows.get(actor);
         if (!ids)
@@ -140,6 +146,7 @@ export class ApplicationManager {
         for (const id of ids)
             actor.disconnect(id);
     }
+
     _bindSettings() {
         const connectSetting = (key, callback) => {
             this._settingsSignals.push(this._settings.connect(`changed::${key}`, callback));
@@ -164,31 +171,38 @@ export class ApplicationManager {
         connectSetting('shadow-radius', () => this._updateGlassMargin());
         connectSetting('shadow-intensity', () => this._updateGlassMargin());
     }
+
     _getContentOpacity(profile = 'application') {
         return this._settings.get_double(this._profileKey(profile, 'content-opacity'));
     }
+
     _updateWindowOpacities() {
         for (const state of this._states.values()) {
             if (isActorValid(state.surfaceActor))
                 state.surfaceActor.opacity = Math.round(this._getContentOpacity(state.profile) * 255);
         }
     }
+
     /** Appearance key in a profile's namespace, e.g. `desktop-menu-tint-color`. */
     _profileKey(profile, suffix) {
         return `${profile}-${suffix}`;
     }
+
     /** The switch that turns one profile on, e.g. `enable-desktop-menu-glass`. */
     _profileEnableKey(profile) {
         return `enable-${profile}-glass`;
     }
+
     _isProfileEnabled(profile) {
         return this._settings.get_boolean(this._profileEnableKey(profile));
     }
+
     // Whether any profile wants glass. The per-window decision is made in
     // _profileForWindow().
     _isEffectEnabled() {
         return this._isProfileEnabled('application') || this._isProfileEnabled('desktop-menu');
     }
+
     // WM_CLASS casing differs between toolkits, and the preferences promise a
     // case-insensitive match.
     _listContainsClass(list, wmClass) {
@@ -197,14 +211,17 @@ export class ApplicationManager {
         const normalized = wmClass.toLowerCase();
         return list.some(entry => entry.toLowerCase() === normalized);
     }
+
     _windowMatchesWhitelist(metaWindow) {
         const whitelist = this._settings.get_strv('application-window-whitelist');
         return this._listContainsClass(whitelist, metaWindow.get_wm_class());
     }
+
     _windowMatchesBlacklist(metaWindow) {
         const blacklist = this._settings.get_strv('application-window-blacklist');
         return this._listContainsClass(blacklist, metaWindow.get_wm_class());
     }
+
     /**
      * Whether this is the menu the desktop itself puts up (right-click on the
      * wallpaper). On GNOME 50 / Wayland with Desktop Icons NG it is a
@@ -230,6 +247,7 @@ export class ApplicationManager {
         }
         return false;
     }
+
     /**
      * The profile that should dress this window, or null to leave it alone.
      * _shouldApplyToWindow() and _setupWindow() both use it so they agree.
@@ -257,13 +275,16 @@ export class ApplicationManager {
         }
         return this._windowMatchesWhitelist(metaWindow) ? 'application' : null;
     }
+
     _shouldApplyToWindow(windowActor) {
         return this._profileForWindow(windowActor) !== null;
     }
+
     _applyEffects() {
         this._buildForExistingWindows();
         this._startFrameSync();
     }
+
     _removeAllEffects() {
         this._stopFrameSync();
         if (this._rebuildIdleId) {
@@ -278,6 +299,7 @@ export class ApplicationManager {
             this._cleanupState(state);
         this._states.clear();
     }
+
     _syncWhitelist() {
         if (!this._isEffectEnabled()) {
             this._removeAllEffects();
@@ -297,6 +319,7 @@ export class ApplicationManager {
         }
         this._rebuildAllClones();
     }
+
     // The margin the shadow settings need. Without a shadow the glass keeps the
     // minimum, so its framebuffers are not enlarged for nothing.
     _computeGlassMargin() {
@@ -306,6 +329,7 @@ export class ApplicationManager {
             return GLASS_MIN_MARGIN;
         return Math.min(GLASS_MAX_MARGIN, Math.max(GLASS_MIN_MARGIN, Math.ceil(radius) + SHADOW_MARGIN_HEADROOM));
     }
+
     // Pushes a changed margin into every glass. The geometry signature is
     // dropped because none of its inputs change with the margin.
     _updateGlassMargin() {
@@ -320,12 +344,14 @@ export class ApplicationManager {
             state.geomSig = undefined;
         }
     }
+
     _updateEffectParams() {
         for (const state of this._states.values()) {
             this._applyAppearance(state.effect, state.profile);
             state.radiusScaleApplied = 1;
         }
     }
+
     _applyAppearance(effect, profile) {
         const k = (suffix) => this._profileKey(profile, suffix);
         effect.setTintColor(...hexToColorArray(this._settings.get_string(k('tint-color'))));
@@ -336,6 +362,7 @@ export class ApplicationManager {
         effect.setContrast(this._settings.get_double(k('contrast')));
         effect.setSaturation(this._settings.get_double(k('saturation')));
     }
+
     // The sync runs from the stage's 'before-update', i.e. only on frames the
     // compositor paints anyway, and never requests frames of its own.
     _startFrameSync() {
@@ -344,12 +371,14 @@ export class ApplicationManager {
         this._frameSignalId = global.stage.connect('before-update', () => this._frameTick());
         this._frameTick();
     }
+
     _stopFrameSync() {
         if (!this._frameSignalId)
             return;
         global.stage.disconnect(this._frameSignalId);
         this._frameSignalId = 0;
     }
+
     // Debounced to an idle so a burst of restacks rebuilds once. Mutter can
     // still be settling the stacking order then, so the rebuild runs once more
     // before the next frame.
@@ -373,12 +402,14 @@ export class ApplicationManager {
             return GLib.SOURCE_REMOVE;
         });
     }
+
     _buildForExistingWindows() {
         for (const actor of getWindowActors()) {
             if (this._shouldApplyToWindow(actor))
                 this._setupWindow(actor);
         }
     }
+
     _setupWindow(windowActor) {
         if (this._states.has(windowActor))
             return;
@@ -484,6 +515,7 @@ export class ApplicationManager {
             }),
         });
     }
+
     _rebuildWindowClones(state) {
         for (const clone of state.clones.values())
             clone.destroy();
@@ -518,6 +550,7 @@ export class ApplicationManager {
             state.clones.set(actor, clone);
         }
     }
+
     // The frame rect's origin inside the buffer rect, i.e. the invisible CSD
     // border. It only changes with the decorations, but during a drag the frame
     // rect trails the buffer rect by a frame, so the difference jumps by the
@@ -537,6 +570,7 @@ export class ApplicationManager {
         }
         return state.frameLocal ?? [0, 0];
     }
+
     // Places a child of the window actor on a screen rect at 1:1 scale while
     // GNOME animates the window actor's scale. The glass edge follows the
     // window, but the content sampled through it is real screen pixels and must
@@ -556,6 +590,7 @@ export class ApplicationManager {
         child.set_scale(1 / sx, 1 / sy);
         child.set_position(dx / sx, dy / sy);
     }
+
     // The window actor's animation scale, with degenerate values read as 1.
     _animationScale(windowActor) {
         let [sx, sy] = windowActor.get_scale();
@@ -565,6 +600,7 @@ export class ApplicationManager {
             sy = 1;
         return [sx, sy];
     }
+
     // The corner radius is in screen pixels and the glass box shrinks with the
     // window during an animation, so the radius scales with it. Re-applied only
     // when the scale changes.
@@ -576,12 +612,14 @@ export class ApplicationManager {
         const cornerRadius = this._settings.get_double(this._profileKey(state.profile, 'corner-radius'));
         state.effect.setCornerRadius(cornerRadius * s);
     }
+
     // Hides the glass for a frame. The geometry signature is dropped so the next
     // frame runs the full sync and shows it again.
     _hideGlass(state) {
         setActorVisible(state.bgActor, false);
         state.geomSig = undefined;
     }
+
     _syncState(state) {
         const actor = state.windowActor;
         if (!actor.get_stage() || !actor.mapped) {
@@ -600,6 +638,7 @@ export class ApplicationManager {
             state.effect.endBatch();
         }
     }
+
     _syncStateInner(state, actor, metaWin) {
         const winWorkspace = metaWin.get_workspace();
         if (winWorkspace && winWorkspace !== global.workspace_manager.get_active_workspace()) {
@@ -678,6 +717,7 @@ export class ApplicationManager {
             this._setGlassStrandHidden(state, false);
         }
     }
+
     // Stores `values` as the geometry signature and returns whether it was
     // unchanged. A new signature starts as NaN, which never compares equal.
     _updateGeometrySignature(state, values) {
@@ -695,6 +735,7 @@ export class ApplicationManager {
         }
         return unchanged;
     }
+
     // Offsets the clone containers so their origin lands on screen (0,0), which
     // lets the clones inside use raw screen coordinates:
     //   container origin = A + localX - windowActor.x + offset = 0
@@ -716,6 +757,7 @@ export class ApplicationManager {
         state.constraints.bg.setOffset(offsetX, offsetY);
         state.constraints.windows.setOffset(offsetX, offsetY);
     }
+
     /**
      * Keeps a glass whose capture contains another glass from latching black.
      * When a cloned window's own glass re-renders its offscreen during our
@@ -745,6 +787,7 @@ export class ApplicationManager {
         if (this._nestedClonesChanged(state))
             bg.queue_redraw();
     }
+
     // Whether an inner glass we clone has re-rendered since the last frame. Its
     // serial is only readable a frame after the re-render, so this repair
     // leaves a one-frame flicker.
@@ -772,6 +815,7 @@ export class ApplicationManager {
                 seen.delete(src);
         return stale;
     }
+
     // One damaged handler per behind-cloned window that owns a glass. It costs
     // one extra repaint per content change of such a window and nothing while
     // the desktop is still. Windows without a glass add no nested offscreen and
@@ -788,12 +832,14 @@ export class ApplicationManager {
                 bg.queue_redraw();
         });
     }
+
     _releaseDamageHooks(state) {
         if (!state.damageHooks)
             return;
         releaseDamageHooks(state.damageHooks);
         state.damageHooks = undefined;
     }
+
     /**
      * Places every behind-window clone at its source's geometry. Runs even when
      * this window's own geometry is unchanged.
@@ -835,6 +881,7 @@ export class ApplicationManager {
         reportClonedWindowActors(state, state.clones.keys());
         this._repairNestedGlass(state);
     }
+
     // Logs, on entry and exit, a clone that should be showing but that Clutter
     // cannot paint. has_allocation() is not checked: it always reads false
     // right after this frame's writes.
@@ -857,12 +904,14 @@ export class ApplicationManager {
             this._logger.log(`[Liquid Glass][clone-anomaly] EXIT src="${srcTitle}"`);
         }
     }
+
     // Describes a cull transition for the log.
     _cullWhy(src, cullRect) {
         const [w, h] = getAllocatedSize(src);
         return `src=(${Math.round(src.x)},${Math.round(src.y)},${Math.round(w)}x${Math.round(h)}) ` +
             `glassRect=[${cullRect.map(Math.round)}] app`;
     }
+
     /**
      * Whether `src` lies entirely outside the glass box `cullRect`. The size is
      * the allocated one: src.width reports the preferred size while a relayout
@@ -880,6 +929,7 @@ export class ApplicationManager {
         const m = ApplicationManager.CLONE_CULL_MARGIN;
         return !rectsIntersect(x - m, y - m, w + m * 2, h + m * 2, cullRect);
     }
+
     _frameTick() {
         // Diagnostic switch that freezes the sync so its cost can be measured.
         if (isFrameSyncFrozen())
@@ -901,6 +951,7 @@ export class ApplicationManager {
         if (this._debugFocusLogFrames > 0)
             this._debugFocusLogFrames--;
     }
+
     _syncFrameState(state) {
         const metaWin = state.windowActor.get_meta_window();
         if (!metaWin)
@@ -919,6 +970,7 @@ export class ApplicationManager {
         if (this._debugFocusLogFrames > 0)
             this._logFocusDebugInfo(state);
     }
+
     _logStrand(state, metaWin, title, rescue) {
         const wa = state.windowActor;
         const parent = wa.get_parent();
@@ -931,6 +983,7 @@ export class ApplicationManager {
             `bg(mapped=${state.bgActor.mapped},vis=${state.bgActor.visible},alloc=${state.bgActor.has_allocation()}) ` +
             `min=${metaWin.minimized}`);
     }
+
     // Logs the window geometry for a few frames after a restack or grab. Off
     // unless switched on through global._lgGlass, and checked here so the log
     // strings are never built otherwise.
@@ -940,6 +993,7 @@ export class ApplicationManager {
         this._debugFocusLogFrames = ApplicationManager.DEBUG_FOCUS_LOG_FRAME_COUNT;
         this._logger.log(`[Liquid Glass][focus-debug] ---- ${reason} event ----`);
     }
+
     /**
      * Re-allocates the glass once its window actor is mapped again, after a
      * restore from minimise. clutter_actor_allocate() skips unmapped actors, so
@@ -965,6 +1019,7 @@ export class ApplicationManager {
             return GLib.SOURCE_REMOVE;
         });
     }
+
     /**
      * Hides the glass with opacity rather than visibility. Both callers hide it
      * because the subtree is stranded, and a hidden actor can be neither
@@ -976,6 +1031,7 @@ export class ApplicationManager {
         if (state.bgActor.opacity !== wanted)
             state.bgActor.opacity = wanted;
     }
+
     // Whether this frame would counter-scale a subtree that missed the last
     // relayout. See MAX_STRANDED_COUNTER_SCALE.
     _counterScaleWouldStrand(state) {
@@ -997,6 +1053,7 @@ export class ApplicationManager {
         }
         return stranded;
     }
+
     // How far the clone container's screen origin is from (0,0), the invariant
     // the clone placement relies on; Infinity if it is not finite.
     _checkContainerAnchor(state) {
@@ -1025,6 +1082,7 @@ export class ApplicationManager {
         }
         return offBy;
     }
+
     _logFocusDebugInfo(state) {
         const actor = state.windowActor;
         const metaWin = actor.get_meta_window();
@@ -1062,6 +1120,7 @@ export class ApplicationManager {
                 `clone.hasAlloc=${clone.has_allocation()} clone.mapped=${clone.mapped}`);
         }
     }
+
     _cleanupState(state) {
         // Handlers on mutter's window actors, which outlive the state.
         this._releaseDamageHooks(state);

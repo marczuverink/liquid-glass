@@ -2,6 +2,7 @@ import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
 import { isActorValid } from '../actors/lifecycle.js';
 import { utilsLog } from '../diagnostics/logging.js';
+
 /**
  * Stops mutter from clipping a window we clone to the frame's damage region.
  * MetaSurfaceActor stores the damage clip on its MetaShapedTexture, which
@@ -16,10 +17,12 @@ export const CullOptOutEffect = GObject.registerClass(
 // Empty: the default paint passes the actor through unchanged.
 class CullOptOutEffect extends Clutter.Effect {
 });
+
 const CULL_OPT_OUT_NAME = 'lg-cull-opt-out';
 const _cullOptOutOwners = new Map();
 const _cullOptOutEffects = new Map();
 let _cullOptOutEnabled = true;
+
 function _reconcileCullOptOut() {
     const before = _cullOptOutEffects.size;
     const wanted = _wantedCullOptOutActors();
@@ -41,6 +44,7 @@ function _reconcileCullOptOut() {
         _reportCullOptOut();
     }
 }
+
 function _wantedCullOptOutActors() {
     const wanted = new Set();
     if (_cullOptOutEnabled) {
@@ -53,10 +57,12 @@ function _wantedCullOptOutActors() {
     }
     return wanted;
 }
+
 function _reportCullOptOut() {
     utilsLog(`[cull-opt-out] holding ${_cullOptOutEffects.size} window actor(s)` +
         ` [${[..._cullOptOutEffects.keys()].map(a => a.get_meta_window()?.get_title() ?? '?').join(', ')}]`);
 }
+
 function _sameSet(a, b) {
     if (!a)
         return false;
@@ -68,6 +74,7 @@ function _sameSet(a, b) {
     }
     return n === a.size;
 }
+
 /**
  * Declares which window actors `owner` currently clones. Safe to call every
  * frame: it returns immediately unless the set actually changed.
@@ -78,21 +85,25 @@ export function reportClonedWindowActors(owner, actors) {
     _cullOptOutOwners.set(owner, new Set(actors));
     _reconcileCullOptOut();
 }
+
 /** Drops `owner`'s claim; call when a manager or a window's glass goes away. */
 export function releaseClonedWindowActors(owner) {
     if (_cullOptOutOwners.delete(owner))
         _reconcileCullOptOut();
 }
+
 /** Drops every claim and every effect; call from the extension's disable(). */
 export function releaseAllClonedWindowActors() {
     _cullOptOutOwners.clear();
     _reconcileCullOptOut();
 }
+
 // false restores mutter's normal culling of cloned windows (global._lgGlass.cullOptOut).
 export function setCullOptOutEnabled(enabled) {
     _cullOptOutEnabled = !!enabled;
     _reconcileCullOptOut();
 }
+
 export function isCullOptOutEnabled() {
     return _cullOptOutEnabled;
 }

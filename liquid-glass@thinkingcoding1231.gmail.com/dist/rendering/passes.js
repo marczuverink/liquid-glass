@@ -1,16 +1,20 @@
 import Clutter from 'gi://Clutter';
+
 export class RenderPasses {
     _logger;
     // Per-pass pipeline copies; see pipeline().
     _passPipelines = new Map();
     // Logs the UV mismatch in composite() only once.
     _uvMismatchWarned = false;
+
     constructor(_logger) {
         this._logger = _logger;
     }
+
     clear() {
         this._passPipelines.clear();
     }
+
     /**
      * A copy of `base` for one pass. Paint nodes run after vfunc_paint_target()
      * returns, so passes sharing a pipeline would all draw with the last pass's
@@ -27,6 +31,7 @@ export class RenderPasses {
         this._passPipelines.set(key, { base, copy });
         return copy;
     }
+
     /**
      * Queues a render-to-texture pass as a paint node. vfunc_paint_target()
      * runs while the node tree is built, before the offscreen capture is drawn;
@@ -42,6 +47,7 @@ export class RenderPasses {
         layerNode.add_child(drawNode);
         drawNode.add_texture_rectangle(new Clutter.ActorBox({ x1: 0, y1: 0, x2: destW, y2: destH }), uv[0], uv[1], uv[2], uv[3]);
     }
+
     /**
      * Queues the final composite as a paint node, after the capture and the
      * blur passes. Both layers share one UV range (the crop pass guarantees
@@ -63,11 +69,13 @@ export class RenderPasses {
         drawNode.add_texture_rectangle(new Clutter.ActorBox({ x1: dest[0], y1: dest[1], x2: dest[2], y2: dest[3] }), layer0UV[0], layer0UV[1], layer0UV[2], layer0UV[3]);
     }
 }
+
 // Cogl caches uniform locations, so these are cheap to call every frame.
 export function setPipelineVec2(pipeline, name, x, y) {
     const loc = pipeline.get_uniform_location(name);
     pipeline.set_uniform_float(loc, 2, 1, [x, y]);
 }
+
 export function setPipelineFloat(pipeline, name, value) {
     const loc = pipeline.get_uniform_location(name);
     pipeline.set_uniform_float(loc, 1, 1, [value]);

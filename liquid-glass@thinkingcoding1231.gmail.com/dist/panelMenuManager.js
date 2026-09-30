@@ -10,6 +10,7 @@ const LEGACY_KEYS = {
     keyboard: 'enable-keyboard-menu-glass',
     vitalsMenu: 'enable-vitals-menu-glass',
 };
+
 export class PanelMenuManager {
     _path;
     _settings;
@@ -19,11 +20,13 @@ export class PanelMenuManager {
     // Menu actor -> its glass, with the indicator name for the logs.
     _menus = new Map();
     _idleId = 0;
+
     constructor(_path, _settings, _logger) {
         this._path = _path;
         this._settings = _settings;
         this._logger = _logger;
     }
+
     setup() {
         const schedule = () => this._scheduleScan();
         const watch = (target, signal) => {
@@ -40,6 +43,7 @@ export class PanelMenuManager {
             watch(this._settings, `changed::${key}`);
         this._scheduleScan();
     }
+
     _scheduleScan() {
         if (this._idleId)
             return;
@@ -49,6 +53,7 @@ export class PanelMenuManager {
             return GLib.SOURCE_REMOVE;
         });
     }
+
     _scan() {
         const panel = Main.panel;
         const { buttons, wanted, detected } = this._discover(panel);
@@ -59,6 +64,7 @@ export class PanelMenuManager {
         if (JSON.stringify(detected) !== JSON.stringify(this._settings.get_strv('detected-extra-menus')))
             this._settings.set_strv('detected-extra-menus', detected);
     }
+
     _discover(panel) {
         const buttons = new Set();
         const wanted = new Map();
@@ -84,6 +90,7 @@ export class PanelMenuManager {
         }
         return { buttons, wanted, detected };
     }
+
     _watchButton(button) {
         if (this._buttons.has(button))
             return;
@@ -95,6 +102,7 @@ export class PanelMenuManager {
             }),
         ]);
     }
+
     _forgetButtons(present) {
         for (const [button, ids] of this._buttons) {
             if (present.has(button))
@@ -104,6 +112,7 @@ export class PanelMenuManager {
             this._buttons.delete(button);
         }
     }
+
     _detachUnwanted(wanted) {
         // Keep existing instances: a new indicator must not close another menu.
         for (const [menu, entry] of this._menus) {
@@ -113,6 +122,7 @@ export class PanelMenuManager {
             entry.manager.cleanup();
         }
     }
+
     // Most of these menus belong to other extensions and may not be built the
     // way UIManager expects; such a menu is skipped instead of stopping the scan.
     _attachWanted(wanted) {
@@ -130,6 +140,7 @@ export class PanelMenuManager {
             }
         }
     }
+
     cleanup() {
         if (this._idleId) {
             GLib.Source.remove(this._idleId);

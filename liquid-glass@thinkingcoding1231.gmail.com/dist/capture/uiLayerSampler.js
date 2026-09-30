@@ -36,6 +36,7 @@ export const BMS_MODE = { SNAPSHOT: 0, CLONE: 1, SKIP: 2, REPLICATE: 3 };
 let _bmsMode = BMS_MODE.REPLICATE;
 // Every live sampler, so a mode change can rebuild the affected clones.
 const _liveSamplers = new Set();
+
 export function setBmsMode(mode) {
     _bmsMode = mode;
     for (const sampler of _liveSamplers)
@@ -45,9 +46,11 @@ export function setBmsMode(mode) {
     diagnosticLog(msg);
     return msg;
 }
+
 export function getBmsMode() {
     return _bmsMode;
 }
+
 /**
  * Clones the children of Main.layoutManager.uiGroup (panel, window groups,
  * other extensions' UI) into the glass, so the glass shows everything behind
@@ -91,7 +94,8 @@ export class UILayerSampler {
     // reads the framebuffer under the panel, so the capture clip must keep
     // those rects painted (see syncGlassCaptureClip()).
     _bmsScreenRects = [];
-    constructor(selfActor, container, extraExclusions = [], cloneContainer = null, label = '?', 
+
+    constructor(selfActor, container, extraExclusions = [], cloneContainer = null, label = '?',
     /**
      * Actors whose uiGroup ancestor is excluded, resolved on every refresh():
      * Dash to Dock rebuilds its container when its settings change, and a
@@ -118,16 +122,19 @@ export class UILayerSampler {
         }
         DND.addDragMonitor(this._dragMonitor);
     }
+
     // Restricts culling to `rect` (screen coordinates), or null for the
     // container's bounds.
     setCullRect(rect) {
         this._cullRect = rect;
     }
+
     // The BMS replica rects from the previous sync (the clip is computed
     // before the clones sync); the panel does not move.
     getBmsScreenRects() {
         return this._bmsScreenRects;
     }
+
     /** True when this sampler has a BMS replica whose rect is not known yet. */
     hasUnmeasuredBmsReplica() {
         if (this._bmsScreenRects.length > 0)
@@ -138,6 +145,7 @@ export class UILayerSampler {
         }
         return false;
     }
+
     _findUiGroupAncestor(actor) {
         const uiGroup = Main.layoutManager.uiGroup;
         let current = actor;
@@ -148,12 +156,14 @@ export class UILayerSampler {
         }
         return null;
     }
+
     /** Adds an actor to the set of uiGroup children that should never be cloned. */
     addExclusion(actor) {
         if (!actor)
             return;
         this._extraExclusions.add(actor);
     }
+
     /**
      * Blur My Shell's panel-blur actor, when BMS is enabled. This reads BMS's
      * internals, which can be absent or change between its versions, so every
@@ -163,6 +173,7 @@ export class UILayerSampler {
         const ext = Main.extensionManager.lookup('blur-my-shell@aunetx');
         return ext?.stateObj?._panel_blur?.actors_list?.[0]?.bg_manager?.backgroundActor ?? null;
     }
+
     // The BMS actor if `child` (a uiGroup child) is or contains it.
     _findBmsDescendant(child) {
         const target = this._resolveBmsTargetActor();
@@ -170,6 +181,7 @@ export class UILayerSampler {
             return null;
         return child === target || child.contains(target) ? target : null;
     }
+
     /**
      * The REPLICATE stand-in for panel_box: a widget carrying our own copy of
      * BMS's blur effect (radius and brightness follow BMS's live effect), then
@@ -210,6 +222,7 @@ export class UILayerSampler {
             `name="${child.name ?? '(unnamed)'}" with ${parts.length} part(s)`);
         return container;
     }
+
     // Where the container's own pixels start inside its offscreen, as published
     // by LiquidEffect on each paint; (0, 0) until then.
     _captureOffset() {
@@ -218,6 +231,7 @@ export class UILayerSampler {
             return [off[0], off[1]];
         return [0, 0];
     }
+
     /**
      * A blur effect of the same class BMS uses on the real panel. BMS picks the
      * Blur module's effect when it is installed and gnome-shell's otherwise,
@@ -256,6 +270,7 @@ export class UILayerSampler {
             brightness: 1.0,
         });
     }
+
     // Per-frame geometry of a replica: each part at its place inside
     // panel_box, and the blur widget on the panel's rect, as BMS places its own.
     _syncBmsReplica(source, replica) {
@@ -277,6 +292,7 @@ export class UILayerSampler {
         }
         this._reportReplicaGeometry(source, replica);
     }
+
     _syncReplicaParts(parts) {
         let panelRect = null;
         for (const { src, clone } of parts) {
@@ -296,6 +312,7 @@ export class UILayerSampler {
         }
         return panelRect;
     }
+
     _syncReplicaBlur(blurWidget, src) {
         let ours = blurWidget.get_effects()[0];
         if (!ours || !isActorValid(src))
@@ -315,6 +332,7 @@ export class UILayerSampler {
         if (ours.brightness !== theirs.brightness)
             ours.brightness = theirs.brightness;
     }
+
     // Logs the replica's geometry when it changes (with logging on).
     _reportReplicaGeometry(source, replica) {
         if (!utilsLogEnabled())
@@ -342,6 +360,7 @@ export class UILayerSampler {
         replica.lastGeomLine = line;
         utilsLog(`[Liquid Glass][ui-sampler:${this._label}] replica geom ${line}`);
     }
+
     // The SNAPSHOT stand-in; see SelfExcludingSnapshotCapture.
     _createSelfExcludingSnapshotActor(child) {
         const stage = child.get_stage();
@@ -377,6 +396,7 @@ export class UILayerSampler {
         });
         return actor;
     }
+
     /**
      * Finds an OffscreenEffect in `root`'s subtree (another extension's JS
      * effect, say), skipping our own ("LiquidGlass*" GTypes).
@@ -402,6 +422,7 @@ export class UILayerSampler {
         }
         return null;
     }
+
     /**
      * SNAPSHOT fallback: paints an existing OffscreenEffect's texture instead
      * of the child. BMS's native effect never matches; other extensions' JS
@@ -421,9 +442,11 @@ export class UILayerSampler {
         blit.setTextureGetter(() => effect.get_texture());
         return blit;
     }
+
     rebindSelf() {
         this._selfRoot = this._findUiGroupAncestor(this._selfActor);
     }
+
     /**
      * Whether `root`'s subtree holds another glass's root ('liquid-glass-bg-actor'
      * or 'liquid-box') at any depth; cloning it would nest that glass in this one.
@@ -443,6 +466,7 @@ export class UILayerSampler {
         }
         return false;
     }
+
     // Stacks a new clone to match its source's place among uiGroup's children,
     // instead of at the front where add_child() puts it.
     _insertCloneInZOrder(child, clone) {
@@ -465,6 +489,7 @@ export class UILayerSampler {
         else
             this._uiClonesContainer.set_child_below_sibling(clone, null);
     }
+
     /**
      * Scans uiGroup's current children, creating/destroying clones as needed.
      * Call whenever the set of top-level UI actors may have changed (e.g. a
@@ -498,6 +523,7 @@ export class UILayerSampler {
         this._reportClonedSet();
         this._reportClonedWindowGroups();
     }
+
     _dynamicExclusions() {
         const dynamicExclusions = new Set();
         for (const src of this._ancestorExclusionSources) {
@@ -509,6 +535,7 @@ export class UILayerSampler {
         }
         return dynamicExclusions;
     }
+
     _isCloneCandidate(child, dynamicExclusions) {
         if (!isActorValid(child))
             return false;
@@ -541,6 +568,7 @@ export class UILayerSampler {
         }
         return true;
     }
+
     _addSourceClone(child) {
         const bmsTarget = this._findBmsDescendant(child);
         // SKIP is decided here rather than in _isCloneCandidate() so the child
@@ -577,6 +605,7 @@ export class UILayerSampler {
         this._insertCloneInZOrder(child, sourceClone);
         return sourceClone;
     }
+
     _trackSourceDestroy(child) {
         if (!this._sourceDestroyIds.has(child)) {
             this._sourceDestroyIds.set(child, child.connect('destroy', () => {
@@ -589,6 +618,7 @@ export class UILayerSampler {
             }));
         }
     }
+
     _pruneSourceClones(seen) {
         for (const [actor, sourceClone] of this._clones) {
             if (!seen.has(actor)) {
@@ -605,6 +635,7 @@ export class UILayerSampler {
             this._existingEffectCache.delete(actor);
         }
     }
+
     // Copies the source's geometry, opacity and visibility onto its clone, and
     // culls the clone outside the cull rect or the container.
     syncProperties(source, sourceClone, containerW, containerH, cX, cY) {
@@ -657,6 +688,7 @@ export class UILayerSampler {
             setActorVisible(sourceClone, isVisible);
         }
     }
+
     _cullSourceClone(sourceClone, absX, absY, scaledW, scaledH) {
         // Decided before any write, so a culled clone costs nothing this frame.
         // A clone whose source has no usable rect yet is never culled (it may
@@ -679,6 +711,7 @@ export class UILayerSampler {
         setCloneCulled(sourceClone, false, () => `label=${this._label}`);
         return false;
     }
+
     // Logs a clone that is not on its source's screen rect, once when it
     // drifts and once when it recovers.
     _checkCloneDrift(source, sourceClone, expectX, expectY) {
@@ -706,6 +739,7 @@ export class UILayerSampler {
             utilsLog(`[Liquid Glass][ui-sampler] RECOVERED clone for name="${source.name ?? '(unnamed)'}"`);
         }
     }
+
     // Callers pass the monitor rect: the clone container is translated by
     // (-monitor.x, -monitor.y) so clones can sit at their sources' screen
     // positions. Without arguments the container's own rect is used.
@@ -730,6 +764,7 @@ export class UILayerSampler {
             this.syncProperties(actor, sourceClone, contW, contH, contAbsX, contAbsY);
         }
     }
+
     _syncCloneContainer(contAbsX, contAbsY) {
         // Keep the UI clones in front; WindowCloneManager's rebuilds would
         // otherwise put window clones above them.
@@ -746,6 +781,7 @@ export class UILayerSampler {
             setTranslationIfChanged(this._uiClonesContainer, -contAbsX, -contAbsY);
         }
     }
+
     /**
      * Drops the clones whose BMS answer changed since they were built, for the
      * next refresh() to rebuild. Otherwise the result would depend on which
@@ -773,6 +809,7 @@ export class UILayerSampler {
             this._bmsStateAtClone.delete(child);
         }
     }
+
     // Drops every clone of a child that holds BMS, so the next refresh()
     // rebuilds it for the current BMS mode.
     rebuildBmsClones() {
@@ -789,6 +826,7 @@ export class UILayerSampler {
         }
         this._clonedNamesLogged = '';
     }
+
     /**
      * The cull opt-out (see CullOptOutEffect) for windows reached through a
      * cloned window group: cloning global.window_group paints every window in
@@ -804,6 +842,7 @@ export class UILayerSampler {
         }
         reportClonedWindowActors(this, clonesAWindowGroup ? getWindowActors() : []);
     }
+
     // Logs which uiGroup children are cloned whenever the set changes, since a
     // wrongly included child only shows up as a ghost inside the glass.
     _reportClonedSet() {
@@ -819,6 +858,7 @@ export class UILayerSampler {
         this._clonedNamesLogged = names;
         utilsLog(`[Liquid Glass][ui-sampler:${this._label}] cloning [${names}]`);
     }
+
     destroy() {
         _liveSamplers.delete(this);
         DND.removeDragMonitor(this._dragMonitor);

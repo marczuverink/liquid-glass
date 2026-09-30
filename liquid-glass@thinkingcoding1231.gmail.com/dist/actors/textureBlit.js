@@ -3,6 +3,7 @@ import Clutter from 'gi://Clutter';
 import Cogl from 'gi://Cogl';
 import Shell from 'gi://Shell';
 import { getAllocatedSize, computeCaptureLayout } from './geometry.js';
+
 /**
  * Paints another OffscreenEffect's texture stretched over its allocation.
  * Unlike a Clutter.Clone it never paints the source, so the source's effect
@@ -18,16 +19,21 @@ export const TextureBlitActor = GObject.registerClass({
         this._sourceActor = null;
         this._pipeline = null;
     }
+
     vfunc_pick(_pickContext) { }
+
     setTextureGetter(fn) {
         this._getTexture = fn;
     }
+
     setSourceActor(actor) {
         this._sourceActor = actor;
     }
+
     _getCoglContext() {
         return Clutter.get_default_backend().get_cogl_context();
     }
+
     _textureUV(tex) {
         const texW = tex.get_width();
         const texH = tex.get_height();
@@ -49,6 +55,7 @@ export const TextureBlitActor = GObject.registerClass({
         }
         return [uMin, vMin, uMax, vMax];
     }
+
     vfunc_paint(paintContext) {
         if (!this._getTexture)
             return;

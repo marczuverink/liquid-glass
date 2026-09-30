@@ -9,6 +9,7 @@ import { reportClonedWindowActors, releaseClonedWindowActors } from './windowCul
 import { getWindowActors } from '../actors/windows.js';
 import { getAllocatedSize, rectsIntersect } from '../actors/geometry.js';
 import { setActorVisible } from '../actors/allocation.js';
+
 export class WindowCloneManager {
     // The screen rect this glass can show; see setCullRect().
     _cullRect = null;
@@ -24,6 +25,7 @@ export class WindowCloneManager {
     // Prefix for the names of every actor created here, so Clutter's warnings
     // (which print actor names) say which glass they are about.
     label;
+
     constructor(container, cloneContainer = null, label = 'lg') {
         this.container = container;
         this.label = label;
@@ -31,6 +33,7 @@ export class WindowCloneManager {
         this.cloneContainer = cloneContainer;
         this._createClones();
     }
+
     // The wallpaper sits at the back of `container`; the window clones go into
     // `cloneContainer` when there is one, else into `container` above it.
     _createClones() {
@@ -45,6 +48,7 @@ export class WindowCloneManager {
             this.container.add_child(this.windowClonesContainer);
         this.container.insert_child_at_index(this.bgClone, 0);
     }
+
     rebuildClones() {
         if (!isActorValid(this.container))
             return;
@@ -58,6 +62,7 @@ export class WindowCloneManager {
         this._createClones();
         this.sync();
     }
+
     // Clones sit at their windows' screen positions and the glass's background
     // actor sits at the monitor origin, so callers pass (-monitor.x, -monitor.y).
     // Applied as a translation, like the clones themselves (see
@@ -74,10 +79,12 @@ export class WindowCloneManager {
             setTranslationIfChanged(this.bgClone, x, y);
         }
     }
+
     // The screen rect this glass can show, or null to draw every window.
     setCullRect(rect) {
         this._cullRect = rect;
     }
+
     /**
      * Clips the wallpaper, which is outside the clone container and so not
      * covered by its clip. `rect` is in screen coordinates: the clip applies
@@ -96,6 +103,7 @@ export class WindowCloneManager {
             bg.remove_clip();
         }
     }
+
     // The 'damage' nested-glass repair (see NestedGlassFix): redraw this glass
     // when a cloned window with its own glass is damaged. 'damaged' fires before
     // the frame is painted, so the redraw lands in the same frame.
@@ -110,9 +118,11 @@ export class WindowCloneManager {
                 container.queue_redraw();
         });
     }
+
     _releaseDamageHooks() {
         releaseDamageHooks(this._damageHooks);
     }
+
     sync() {
         this._syncDamageHooks();
         reportClonedWindowActors(this, this._windowClones.keys());
@@ -150,6 +160,7 @@ export class WindowCloneManager {
             }
         }
     }
+
     _ensureWindowClone(w, metaWindow) {
         let clone = this._windowClones.get(w);
         // rebuildClones() destroys clones along with their container.
@@ -167,6 +178,7 @@ export class WindowCloneManager {
         }
         return clone;
     }
+
     _syncWindowClone(w, metaWindow, width, height, wX, wY, zIndex) {
         const sxSafe = Number.isFinite(w.scale_x) && w.scale_x > 0 ? w.scale_x : 1;
         const sySafe = Number.isFinite(w.scale_y) && w.scale_y > 0 ? w.scale_y : 1;
@@ -211,6 +223,7 @@ export class WindowCloneManager {
             this.windowClonesContainer?.set_child_at_index(clone, zIndex);
         }
     }
+
     destroy() {
         // Both live on mutter's window actors, which outlive this manager.
         this._releaseDamageHooks();

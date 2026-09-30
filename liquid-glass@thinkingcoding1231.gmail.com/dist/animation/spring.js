@@ -3,6 +3,7 @@
 // stall) are clamped instead of jumped over.
 export const MAX_STEP_S = 0.066;
 const SUB_STEP_S = 0.002;
+
 // Damped spring (Hooke's law), integrated with semi-implicit Euler.
 export class Spring {
     stiffness;
@@ -11,6 +12,7 @@ export class Spring {
     value;
     velocity;
     target;
+
     constructor(stiffness, damping, mass) {
         this.stiffness = stiffness;
         this.damping = damping;
@@ -19,11 +21,13 @@ export class Spring {
         this.velocity = 0;
         this.target = 0;
     }
+
     updateParams(stiffness, damping, mass) {
         this.stiffness = stiffness;
         this.damping = damping;
         this.mass = mass;
     }
+
     update(elapsedMs) {
         let dt = elapsedMs / 1000;
         if (dt > MAX_STEP_S)
@@ -45,6 +49,7 @@ export class Spring {
         return Math.abs(this.velocity) < 0.01 && Math.abs(this.value - this.target) < 0.001;
     }
 }
+
 // A spring described by response (period, seconds) and damping fraction, as
 // SwiftUI does, solved analytically so it cannot diverge at any stiffness.
 export class SwiftSpring {
@@ -54,9 +59,11 @@ export class SwiftSpring {
     value = 0;
     velocity = 0;
     target = 0;
+
     constructor(response, dampingFraction, mass = 1.0) {
         this.updateParams(response, dampingFraction, mass);
     }
+
     // Out-of-range values (including NaN) keep the previous parameter.
     updateParams(response, dampingFraction, mass = 1.0) {
         if (response > 0.01)
@@ -66,6 +73,7 @@ export class SwiftSpring {
         if (mass > 0.01)
             this.mass = mass;
     }
+
     update(elapsedMs) {
         let dt = elapsedMs / 1000;
         if (!(dt > 0))

@@ -1,10 +1,12 @@
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { isActorValid } from './lifecycle.js';
+
 /** True when the two rects share at least one pixel. */
 export function rectsIntersect(ax, ay, aw, ah, b) {
     return ax < b[0] + b[2] && ax + aw > b[0] &&
         ay < b[1] + b[3] && ay + ah > b[1];
 }
+
 /** Grows `a` in place so it also contains `b`. */
 export function unionRectInto(a, b) {
     const x1 = Math.max(a[0] + a[2], b[0] + b[2]);
@@ -14,6 +16,7 @@ export function unionRectInto(a, b) {
     a[2] = x1 - a[0];
     a[3] = y1 - a[1];
 }
+
 /**
  * An actor's allocated size. get_size() falls back to the preferred size
  * while a relayout is pending, which our BEFORE_REDRAW syncs run into all the
@@ -30,6 +33,7 @@ export function getAllocatedSize(actor) {
     const [sw, sh] = actor.get_size();
     return [sw, sh];
 }
+
 /**
  * An actor's on-screen rectangle [x, y, w, h] with every ancestor transform
  * applied. Pairing get_transformed_position() with a size is wrong while an
@@ -47,6 +51,7 @@ export function getTransformedRect(actor) {
     const [aw, ah] = getAllocatedSize(actor);
     return [px, py, aw, ah];
 }
+
 /**
  * Where the actor's own pixels are inside the padded capture texture, and the
  * rect to draw the composite into so it lands back on the actor.
@@ -134,6 +139,7 @@ export function computeCaptureLayout(actor, srcW, srcH, allocW, allocH) {
         dest: [padLeft, padTop, padLeft + contentW, padTop + contentH],
     };
 }
+
 export function resolveMonitorGeometry(candidates) {
     const layoutManager = Main.layoutManager;
     for (const actor of candidates) {

@@ -29,6 +29,7 @@ export let nestedRoiDefault = true;
 const RING_MAX = 4000;
 const _ring = [];
 let _ringLast = new Map();
+
 function _ringTransition(wa) {
     const trOp = wa.get_transition('opacity');
     if (!trOp)
@@ -36,6 +37,7 @@ function _ringTransition(wa) {
     return `|tr=${trOp.is_playing() ? 'play' : 'stop'},${trOp.get_progress().toFixed(3)},` +
         `${trOp.get_frame_clock() ? 'clk' : 'NOCLK'}`;
 }
+
 function _ringLine(fx) {
     const a = fx.get_actor();
     if (!a)
@@ -58,6 +60,7 @@ function _ringLine(fx) {
         `|views=${wa.peek_stage_views().length}` +
         _ringTransition(wa);
 }
+
 function _ringSampleOnce() {
     const t = GLib.get_monotonic_time();
     for (const fx of _liveEffects) {
@@ -72,6 +75,7 @@ function _ringSampleOnce() {
             _ring.shift();
     }
 }
+
 function _dumpWindowState(wa, live) {
     const mw = wa.get_meta_window();
     if (!mw)
@@ -80,6 +84,7 @@ function _dumpWindowState(wa, live) {
     const r = mw.get_frame_rect();
     live.wRect = `${r.x},${r.y},${r.width}x${r.height}`;
 }
+
 // Whether the shell's own animation is still attached to the window actor.
 // A stall at a fixed scale/opacity looks the same from outside whether the
 // timeline is not being ticked (playing, progress stuck; `clock=NULL` when no
@@ -96,6 +101,7 @@ function _dumpTransitions(wa, live) {
                 `,clock=${tr.get_frame_clock() ? 'set' : 'NULL'}`;
     }
 }
+
 function _dumpParentState(fx, a, wa, live) {
     live.parentMapped = wa.mapped;
     live.parentHasAlloc = wa.has_allocation();
@@ -112,6 +118,7 @@ function _dumpParentState(fx, a, wa, live) {
         live.wgViews = wg.peek_stage_views().length;
     live.glassViews = a.peek_stage_views().length;
 }
+
 // Live actor state next to the snapshot: a frozen paint counter alone cannot
 // tell minimised, culled, unallocated and stuck apart. `paints` is read live
 // too, because with glass-debug-diagnostics off the snapshot is only
@@ -132,6 +139,7 @@ function _dumpLiveState(fx) {
         _dumpParentState(fx, a, wa, live);
     return live;
 }
+
 function _dumpRow(fx, now) {
     if (!fx._diagLast)
         return `(never painted) owner=${fx._owner ?? '?'}${fx._diagOwnerLabel ? ' label=' + fx._diagOwnerLabel : ''}`;
@@ -149,6 +157,7 @@ function _dumpRow(fx, now) {
         ..._dumpLiveState(fx),
     });
 }
+
 export function dumpGlassState() {
     const now = GLib.get_monotonic_time();
     const rows = [..._liveEffects].map(fx => _dumpRow(fx, now));
@@ -156,11 +165,13 @@ export function dumpGlassState() {
     diagnosticLog(`[Liquid Glass][dump]\n${out}`);
     return out;
 }
+
 // While the recorder is armed, flush it automatically the first few times a
 // window actor becomes stranded. Capped, because each flush writes to the
 // journal.
 let _autoCaptures = 0;
 const AUTO_CAPTURE_LIMIT = 6;
+
 export function noteStrandEntry(label, detail) {
     if (!_ringArmed)
         return;
@@ -171,12 +182,14 @@ export function noteStrandEntry(label, detail) {
         `on strand entry for "${label}" — ${detail}`);
     flushGlassRing();
 }
+
 // The recorder is off unless armed through global._lgGlass.ring(true), and
 // its timer only exists while it is armed.
 let _ringArmed = false;
 let _ringSamplerEnabled = false;
 let _ringSamplerId = 0;
 let _ringSamplerInterval = 50;
+
 function syncGlassRingSampler() {
     if (!_ringArmed || !_ringSamplerEnabled) {
         if (_ringSamplerId)
@@ -190,6 +203,7 @@ function syncGlassRingSampler() {
         });
     }
 }
+
 export function setGlassRingArmed(armed) {
     _ringArmed = !!armed;
     syncGlassRingSampler();
@@ -199,9 +213,11 @@ export function setGlassRingArmed(armed) {
         _autoCaptures = 0;
     }
 }
+
 export function isGlassRingArmed() {
     return _ringArmed;
 }
+
 /**
  * Lets the sampler run whenever the recorder is armed. Pair with
  * stopGlassRingSampler() in disable().
@@ -211,10 +227,12 @@ export function startGlassRingSampler(intervalMs = 50) {
     _ringSamplerEnabled = true;
     syncGlassRingSampler();
 }
+
 export function stopGlassRingSampler() {
     _ringSamplerEnabled = false;
     setGlassRingArmed(false);
 }
+
 /** Writes the ring buffer out and clears it. */
 export function flushGlassRing() {
     if (!_ring.length) {
@@ -242,22 +260,27 @@ export function flushGlassRing() {
     _ring.length = 0;
     _ringLast = new Map();
 }
+
 function report(msg) {
     diagnosticLog(`[Liquid Glass] ${msg}`);
     return msg;
 }
+
 function onOff(enabled) {
     return enabled ? 'ENABLED' : 'DISABLED';
 }
+
 // Applies a setter to every live glass and returns how many it reached.
 function onEveryEffect(apply) {
     for (const fx of _liveEffects)
         apply(fx);
     return _liveEffects.size;
 }
+
 function ownerName(actor) {
     return actor.get_parent()?.get_name() ?? actor.get_name() ?? '(?)';
 }
+
 function describeChildren(actor, depth, maxDepth, lines) {
     if (depth > maxDepth)
         return;
@@ -269,6 +292,7 @@ function describeChildren(actor, depth, maxDepth, lines) {
         describeChildren(c, depth + 1, maxDepth, lines);
     }
 }
+
 function describeUnpainted(actor, depth, lines) {
     for (const c of actor.get_children()) {
         if (!c.visible || c.opacity === 0) {
@@ -282,6 +306,7 @@ function describeUnpainted(actor, depth, lines) {
         }
     }
 }
+
 function createDebugApi() {
     return {
         count: () => _liveEffects.size,
@@ -448,22 +473,27 @@ function createDebugApi() {
         earlyExit: (enabled) => report(`early exits ${onOff(enabled)} on ${onEveryEffect(fx => fx.setEarlyExitEnabled(enabled))} instance(s)`),
     };
 }
+
 /** Called from enable(): publishes global._lgGlass and the ring sampler. */
 export function installGlassDiagnostics() {
     global._lgGlass = createDebugApi();
     startGlassRingSampler(50);
 }
+
 /** Called from disable(). */
 export function removeGlassDiagnostics() {
     stopGlassRingSampler();
     delete global._lgGlass;
 }
+
 export function isLiveGlassEffect(effect) {
     return _liveEffects.has(effect);
 }
+
 export function registerGlassEffect(effect) {
     _liveEffects.add(effect);
 }
+
 export function unregisterGlassEffect(effect) {
     _liveEffects.delete(effect);
     // The frame-serial hook is shared by every instance; release it with the

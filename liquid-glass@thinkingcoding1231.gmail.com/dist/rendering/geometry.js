@@ -1,10 +1,12 @@
 export class GlassGeometry {
     _uniforms;
+
     constructor(_uniforms) {
         this._uniforms = _uniforms;
         this.blurEnabled = GlassGeometry.USE_BLUR_RECT;
         this.compositeEnabled = GlassGeometry.USE_COMPOSITE_RECT;
     }
+
     // The glass rect [x, y, w, h] last given to the shader, in the space of
     // setResolution()/setGlassGeometry().
     rect = [0, 0, 0, 0];
@@ -44,6 +46,7 @@ export class GlassGeometry {
     // it is drawn, so no refraction margin is needed.
     static USE_COMPOSITE_RECT = true;
     static COMPOSITE_RECT_MIN_SAVING = 0.95;
+
     /**
      * The rect [x, y, w, h] (shader space) the composite has to cover, or null
      * for the whole actor. glass.frag draws no shadow beyond
@@ -89,6 +92,7 @@ export class GlassGeometry {
             return null;
         return [bx, by, bw, bh];
     }
+
     /**
      * The union [x0, y0, x1, y1] of the glass bodies, or null. The rect a
      * manager passes is the background box; the shader insets the body by
@@ -119,6 +123,7 @@ export class GlassGeometry {
             return null;
         return [x0, y0, x1, y1];
     }
+
     /**
      * The part of the capture this glass can need at all, in shader space. Not
      * the blur rect: this one must exist even when the blur rect is switched
@@ -161,11 +166,13 @@ export class GlassGeometry {
             return null;
         return [cx, cy, cw, ch];
     }
+
     _samplingReachPx(resW, resH) {
         const chroma = Math.max(this._uniforms.get('chroma_strength') ?? 0, 0);
         const minRes = Math.max(Math.min(resW, resH), 1);
         return Math.min(0.30 * minRes, GlassGeometry.EDGE_LENS_REACH + GlassGeometry.EDGE_FOOTPRINT_SPREAD + chroma);
     }
+
     /**
      * The part of the actor that has to be blurred, [x, y, w, h] in shader
      * space, or null for all of it. The margin is how far a visible pixel's

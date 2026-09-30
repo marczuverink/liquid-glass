@@ -1,5 +1,7 @@
 export const SURFACES = ['dock', 'menu', 'panel-menu', 'notification', 'quick-settings', 'osd', 'application', 'desktop-menu'];
+
 export const sharedKeys = suffix => SURFACES.map(surface => `${surface}-${suffix}`);
+
 export const TEXT_KEYS = ['menu', 'panel-menu', 'notification', 'quick-settings', 'osd']
   .map(surface => `${surface}-enable-adaptive-text-color`);
 export const MENU_KEYS = ['enable-menu-glass', 'enable-quick-settings-glass', 'enable-extra-menu-glass', 'enable-desktop-menu-glass'];

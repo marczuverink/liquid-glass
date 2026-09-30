@@ -4,7 +4,7 @@ import type { Logger } from '../logger.js';
 import { splitShader } from './shaderSource.js';
 
 export class ShaderPipelines {
-  constructor(private _logger?: Logger) {}
+  constructor(private _logger?: Logger) { }
 
   async load(extensionPath: string | undefined): Promise<void> {
     if (!extensionPath) throw new Error('Missing extension path for shader loading');

@@ -14,18 +14,23 @@
 // Both can be toggled from global._lgGlass for comparison.
 let _captureClipEnabled = false;
 let _cloneCullEnabled = true;
+
 export function setCaptureClipEnabled(enabled) {
     _captureClipEnabled = !!enabled;
 }
+
 export function isCaptureClipEnabled() {
     return _captureClipEnabled;
 }
+
 export function setCloneCullEnabled(enabled) {
     _cloneCullEnabled = !!enabled;
 }
+
 export function isCloneCullEnabled() {
     return _cloneCullEnabled;
 }
+
 // The cull runs at separate sites, each ANDed with cloneCull:
 //   app      behind-window clones inside a window's own glass
 //   windows  window clones inside the dock, menus, notifications, OSD, Quick Settings
@@ -36,6 +41,7 @@ let _cullApp = true;
 let _cullWindows = true;
 let _cullUi = true;
 let _cullBms = true;
+
 export function setCullSiteEnabled(site, enabled) {
     if (site === 'app')
         _cullApp = !!enabled;
@@ -46,6 +52,7 @@ export function setCullSiteEnabled(site, enabled) {
     else
         _cullUi = !!enabled;
 }
+
 export function isCullSiteEnabled(site) {
     if (!_cloneCullEnabled)
         return false;

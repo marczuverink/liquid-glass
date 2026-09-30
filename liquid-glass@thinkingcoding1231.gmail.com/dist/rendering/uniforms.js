@@ -1,6 +1,8 @@
 export class UniformState {
     _pipeline = null;
+
     get values() { return this._pendingUniforms; }
+
     attach(pipeline) {
         this._pipeline = pipeline;
         this._compUniforms.clear();
@@ -11,17 +13,20 @@ export class UniformState {
         if (pipeline)
             this.flush();
     }
+
     takeDirty() {
         const changed = this._uniformsDirty;
         this._uniformsDirty = false;
         return changed;
     }
+
     clear() {
         this.attach(null);
         this._pendingUniforms.clear();
         this._pendingUniformArrays.clear();
         this._uniformsDirty = false;
     }
+
     // Uniform locations in the current pipeline.
     _compUniforms = new Map();
     _compUniformArrays = new Map();
@@ -37,6 +42,7 @@ export class UniformState {
     _uniformsDirty = false;
     // Reused for scalar uploads; Cogl copies the values during the call.
     _uniformScratch = [0];
+
     // Sets a float uniform, buffered until attach() provides a pipeline.
     set(name, value) {
         if (this._pendingUniforms.get(name) === value)
@@ -47,6 +53,7 @@ export class UniformState {
             this._applyUniform(name, value);
         }
     }
+
     _applyUniform(name, value) {
         if (!this._pipeline)
             return;
@@ -61,6 +68,7 @@ export class UniformState {
         this._pipeline.set_uniform_float(loc, 1, 1, this._uniformScratch);
         this._appliedUniforms.set(name, value);
     }
+
     flush() {
         for (const [name, value] of this._pendingUniforms) {
             this._applyUniform(name, value);
@@ -69,6 +77,7 @@ export class UniformState {
             this._applyUniformArray(name, values);
         }
     }
+
     // Sets a float array uniform (e.g. region_x[16]), buffered like set().
     setArray(name, values) {
         const prev = this._pendingUniformArrays.get(name);
@@ -90,6 +99,7 @@ export class UniformState {
             this._applyUniformArray(name, values);
         }
     }
+
     _applyUniformArray(name, values) {
         if (!this._pipeline)
             return;

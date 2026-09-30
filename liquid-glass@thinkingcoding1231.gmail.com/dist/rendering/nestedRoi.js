@@ -14,16 +14,19 @@ const ROI_PAD = 2;
 // whole. The rect is in screen coordinates and mapped into the nested glass
 // with its stage transform, which the clone reproduces.
 const _captureOwners = new Map();
+
 export function registerCaptureOwner(owner, texture, previous) {
     if (previous && previous !== texture && _captureOwners.get(previous) === owner)
         _captureOwners.delete(previous);
     _captureOwners.set(texture, owner);
     return texture;
 }
+
 export function unregisterCaptureOwner(owner, texture) {
     if (texture && _captureOwners.get(texture) === owner)
         _captureOwners.delete(texture);
 }
+
 function enclosingOwner(self, paintContext) {
     if (_captureOwners.size === 0)
         return null;
@@ -34,6 +37,7 @@ function enclosingOwner(self, paintContext) {
     const owner = _captureOwners.get(fb.get_texture()) ?? null;
     return owner && owner !== self && isLiveGlassEffect(owner) ? owner : null;
 }
+
 export function nestedCompositeRoi(self, actor, paintContext, resW, resH) {
     if (!actor)
         return null;
@@ -59,6 +63,7 @@ export function nestedCompositeRoi(self, actor, paintContext, resW, resH) {
         Math.min(resH, Math.ceil(maxY) + ROI_PAD),
     ];
 }
+
 export function clampToRoi(compRect, roi, resW, resH) {
     const base = compRect ?? [0, 0, resW, resH];
     const x0 = Math.max(base[0], roi[0]);

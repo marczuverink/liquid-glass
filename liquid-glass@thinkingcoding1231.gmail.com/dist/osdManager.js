@@ -17,6 +17,7 @@ import { syncGlassCaptureClip } from './capture/clip.js';
 import { resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb, rgbToHex } from './animation/colors.js';
 // Room around the glass rect for the shader's edge effects.
 const SHADER_PADDING = 20;
+
 export class OsdManager {
     extensionPath;
     _settings;
@@ -37,6 +38,7 @@ export class OsdManager {
     _adaptiveInFlight;
     _styledActors;
     _isFirstAdaptiveRun;
+
     constructor(extensionPath, settings, logger) {
         this.extensionPath = extensionPath;
         this._settings = settings;
@@ -61,6 +63,7 @@ export class OsdManager {
         this._osdYOffset = 0;
         this._isFirstAdaptiveRun = true;
     }
+
     setup() {
         if (!this._settings)
             return;
@@ -69,6 +72,7 @@ export class OsdManager {
             this._applyEffect();
         }
     }
+
     _bindSettings() {
         const connectSetting = (key, callback) => {
             let id = this._settings.connect(`changed::${key}`, callback.bind(this));
@@ -176,6 +180,7 @@ export class OsdManager {
             }
         });
     }
+
     _applyEffect() {
         if (this._isEffectActive)
             return;
@@ -223,9 +228,11 @@ export class OsdManager {
             }
         });
     }
+
     _excludeOtherGlass(state) {
         excludeOtherGlass(state._uiSampler, state.bgActor);
     }
+
     _setupOsdEffect(osdWindow) {
         // The OSD's 'osd-window' box, which draws its background.
         const targetBox = osdWindow._hbox ?? null;
@@ -329,6 +336,7 @@ export class OsdManager {
             state._windowCloneManager?.destroy();
         });
     }
+
     // Every frame, for one monitor's OSD.
     _syncGeometry(state) {
         if (!state.bgActor || !state.targetBox)
@@ -419,6 +427,7 @@ export class OsdManager {
         state._uiSampler?.sync(monitorX, monitorY, screenW, screenH);
         state._windowCloneManager?.sync();
     }
+
     _osdVisualHeight(state, h) {
         // When the icon changes, the box's height briefly includes its bottom
         // margin; that jump is ignored.
@@ -433,6 +442,7 @@ export class OsdManager {
             state._stableBaseH = h;
         return visualH;
     }
+
     _removeEffect() {
         if (!this._isEffectActive)
             return;
@@ -449,6 +459,7 @@ export class OsdManager {
         }
         this._osdStates = [];
     }
+
     _cleanupOsdState(state) {
         this._restoreOsdTarget(state);
         // The effect is cleaned up before its actor is destroyed.
@@ -467,6 +478,7 @@ export class OsdManager {
         state._windowCloneManager?.destroy();
         state._windowCloneManager = null;
     }
+
     _restoreOsdTarget(state) {
         if (state.osdWindow && state._destroyId) {
             state.osdWindow.disconnect(state._destroyId);
@@ -477,6 +489,7 @@ export class OsdManager {
             state.targetBox.translation_y = 0;
         }
     }
+
     cleanup() {
         this._stopFrameSync();
         for (let sigId of this._settingsSignals)
@@ -484,6 +497,7 @@ export class OsdManager {
         this._settingsSignals = [];
         this._removeEffect();
     }
+
     _collectAdaptiveTextTargets() {
         let targets = [];
         for (let state of this._osdStates) {
@@ -493,6 +507,7 @@ export class OsdManager {
         }
         return targets;
     }
+
     _findAllTextActors(actor, foundActors = []) {
         if (!actor)
             return foundActors;
@@ -508,6 +523,7 @@ export class OsdManager {
         }
         return foundActors;
     }
+
     _setActorColor(actor, color, skipAnimations = false, batchStart) {
         // Clutter.Text targets have no St style.
         if (!(actor instanceof St.Widget))
@@ -524,6 +540,7 @@ export class OsdManager {
         actor._currentTargetColor = color;
         this._animateActorColor(actor, color, 380, skipAnimations, batchStart);
     }
+
     _clearAdaptiveStyles() {
         for (const [actor, style] of this._styledActors.entries()) {
             adaptiveColorTweener.cancel(actor);
@@ -532,6 +549,7 @@ export class OsdManager {
         }
         this._styledActors.clear();
     }
+
     _applyAdaptiveColorMap(colorMap, skipAnimations = false) {
         if (!colorMap || colorMap.size === 0)
             return;
@@ -541,6 +559,7 @@ export class OsdManager {
             this._setActorColor(actor, color, skipAnimations, batchStart);
         }
     }
+
     _startAdaptiveColorSampling() {
         if (!this._adaptiveConfig.enabled)
             return;
@@ -554,12 +573,14 @@ export class OsdManager {
             return GLib.SOURCE_CONTINUE;
         });
     }
+
     _stopAdaptiveColorSampling() {
         if (this._adaptiveTimerId !== 0) {
             GLib.source_remove(this._adaptiveTimerId);
             this._adaptiveTimerId = 0;
         }
     }
+
     _updateAdaptiveTextColors() {
         if (!this._adaptiveConfig.enabled || this._adaptiveInFlight)
             return;
@@ -581,6 +602,7 @@ export class OsdManager {
             this._adaptiveInFlight = false;
         });
     }
+
     _animateActorColor(actor, targetHexColor, durationMs = 380, skipAnimations = false, batchStart) {
         // An existing tween is not cancelled: add() restarts from the colour it
         // last applied.
@@ -642,12 +664,15 @@ export class OsdManager {
             coalesce: !isProgressBar,
         }, batchStart);
     }
+
     get _frameSlot() {
         return { get: () => this._frameSyncId, set: (id) => { this._frameSyncId = id; } };
     }
+
     get _frameSignalSlot() {
         return { get: () => this._frameSignalId, set: (id) => { this._frameSignalId = id; } };
     }
+
     _stopFrameSync() {
         stopStageLoop(this._frameSignalSlot, this._frameSlot);
     }

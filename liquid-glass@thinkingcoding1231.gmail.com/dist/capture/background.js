@@ -6,6 +6,7 @@ import Meta from 'gi://Meta';
 import { isActorValid } from '../actors/lifecycle.js';
 import Shell from 'gi://Shell';
 import { UnpickableClone } from '../actors/unpickable.js';
+
 /**
  * The wallpaper for the glass, without cloning the shell's _backgroundGroup.
  *
@@ -32,7 +33,7 @@ export const BackgroundMirror = GObject.registerClass(class BackgroundMirror ext
         this._sourceGroup = null;
         const group = Main.layoutManager._backgroundGroup;
         this._sourceGroup = group;
-        this._groupHandlers.push(group.connect('child-added', (_g, child) => this._addMirror(child)), group.connect('child-removed', (_g, child) => this._removeMirror(child)), 
+        this._groupHandlers.push(group.connect('child-added', (_g, child) => this._addMirror(child)), group.connect('child-removed', (_g, child) => this._removeMirror(child)),
         // The shell moves a new wallpaper below the old one with
         // set_child_below_sibling(), which emits no child-added/removed, only
         // first-child/last-child. Without this the incoming wallpaper stayed
@@ -42,6 +43,7 @@ export const BackgroundMirror = GObject.registerClass(class BackgroundMirror ext
         for (const child of group.get_children())
             this._addMirror(child);
     }
+
     // `background` carries the wallpaper; the rest are what the shell animates
     // for dimming and vignettes.
     _contentProps() {
@@ -56,6 +58,7 @@ export const BackgroundMirror = GObject.registerClass(class BackgroundMirror ext
             'rounded-clip-radius',
         ];
     }
+
     _addMirror(child) {
         if (this._mirrors.has(child))
             return;
@@ -117,10 +120,12 @@ export const BackgroundMirror = GObject.registerClass(class BackgroundMirror ext
         // The cross-fade depends on matching the group's stacking.
         this._restack();
     }
+
     _bindMirrorContent(srcContent, dstContent) {
         for (const prop of this._contentProps())
             srcContent.bind_property(prop, dstContent, prop, GObject.BindingFlags.SYNC_CREATE);
     }
+
     _removeMirror(child) {
         const mirror = this._mirrors.get(child);
         if (!mirror)
@@ -129,6 +134,7 @@ export const BackgroundMirror = GObject.registerClass(class BackgroundMirror ext
         if (isActorValid(mirror))
             mirror.destroy();
     }
+
     // Matches the background group's order. set_child_at_index() queues a
     // relayout even for an unchanged index, so compare first.
     _restack() {
@@ -156,6 +162,7 @@ export const BackgroundMirror = GObject.registerClass(class BackgroundMirror ext
             this.set_child_at_index(wanted[i], i);
         utilsLog(`[bg-mirror] restacked ${wanted.length} wallpaper mirror(s)`);
     }
+
     _onDestroy() {
         if (isActorValid(this._sourceGroup)) {
             for (const id of this._groupHandlers)
@@ -165,20 +172,26 @@ export const BackgroundMirror = GObject.registerClass(class BackgroundMirror ext
         this._mirrors.clear();
         this._sourceGroup = null;
     }
+
     vfunc_pick(_pickContext) {
     }
 });
+
 // false clones _backgroundGroup directly, for comparison (global._lgGlass.bgMirror).
 let _backgroundMirrorEnabled = true;
+
 export function setBackgroundMirrorEnabled(enabled) {
     _backgroundMirrorEnabled = !!enabled;
 }
+
 export function isBackgroundMirrorEnabled() {
     return _backgroundMirrorEnabled;
 }
+
 // One BackgroundMirror shared by every glass, since rebuilding clones would
 // otherwise keep creating new background contents.
 let _sharedBackgroundSource = null;
+
 function ensureSharedBackgroundSource() {
     if (isActorValid(_sharedBackgroundSource))
         return _sharedBackgroundSource;
@@ -209,10 +222,12 @@ function ensureSharedBackgroundSource() {
     _sharedBackgroundSource = source;
     return source;
 }
+
 /** The shared source if one exists; never creates one. */
 export function getSharedBackgroundSource() {
     return isActorValid(_sharedBackgroundSource) ? _sharedBackgroundSource : null;
 }
+
 /** Tears the shared source down; call from the extension's disable(). */
 export function destroySharedBackgroundSource() {
     const source = _sharedBackgroundSource;
@@ -220,6 +235,7 @@ export function destroySharedBackgroundSource() {
     if (isActorValid(source))
         source.destroy();
 }
+
 /**
  * The wallpaper actor at the back of a glass: always a clone (see
  * BackgroundMirror), of the shared mirror unless switched off.
