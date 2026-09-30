@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const { loadModule } = require('./helpers/load-module.cjs');
 
-test('snapshot capture restores only actors it hid, including after capture errors', () => {
+test('snapshot capture restores only actors it hid, including after capture errors, and stops on destroy', () => {
   const warnings = [], events = [];
   const { SelfExcludingSnapshotCapture } = loadModule(path.join(__dirname,
     '../liquid-glass@thinkingcoding1231.gmail.com/dist/capture/snapshot.js'), {
@@ -16,7 +16,7 @@ test('snapshot capture restores only actors it hid, including after capture erro
   const first = actor('first', true), second = actor('second', false);
   let fail = false, afterPaint;
   const content = {};
-  const stage = { connect(_name, cb) { afterPaint = cb; return 7; }, disconnect(id) { assert.equal(id, 7); },
+  const stage = { connect(_name, cb) { afterPaint = cb; return 7; }, disconnect(id) { assert.equal(id, 7); afterPaint = null; },
     paint_to_content(rect, scale, _region, flags) {
       assert.equal(first.visible, false);
       assert.equal(second.visible, false);
@@ -26,7 +26,6 @@ test('snapshot capture restores only actors it hid, including after capture erro
     } };
   const capture = new SelfExcludingSnapshotCapture(stage, first, () => [10.2, 20.7, 100.1, 79.9]);
   capture.addHideActor(second);
-  capture.addHideActor({ visible: true, hide() { throw new Error('disposed'); } });
   assert.equal(capture.getContent(), content);
   fail = true;
   afterPaint();
@@ -36,6 +35,5 @@ test('snapshot capture restores only actors it hid, including after capture erro
   assert.deepEqual(events, [['first', 'hide'], ['first', 'show'], ['first', 'hide'], ['first', 'show']]);
   assert.equal(warnings.length, 1);
   capture.destroy();
-  afterPaint();
-  assert.equal(events.length, 4);
+  assert.equal(afterPaint, null);
 });

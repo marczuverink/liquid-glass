@@ -190,11 +190,10 @@ test('changing glass expansion requests a frame even on an idle desktop', () => 
   assert.equal(settings.handlers.size, 0);
 });
 
-test('a failing target style cannot leave capture actors, effects or callbacks behind', () => {
+test('removing the effect leaves no capture actors, effects or callbacks behind', () => {
   const { manager, target, pending, stage } = fixture({ x: 0, y: 0, width: 1920, height: 1080 });
   manager._applyEffect();
   const { bgActor, effect, _uiSampler, _windowCloneManager } = manager;
-  target.remove_style_class_name = () => { throw new Error('target no longer usable'); };
   manager._removeEffect();
   assert.equal(pending.size, 0);
   assert.equal(stage.handlers.size, 0);

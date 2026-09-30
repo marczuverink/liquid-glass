@@ -104,7 +104,7 @@ function blurFixture() {
   f.bases.initialize(f.context);
   const { BlurRenderer } = f.load(path.join(dist, 'rendering/blur.js'));
   let repaints = 0;
-  const blur = new BlurRenderer(f.bases, f.passes, () => repaints++, f.logger);
+  const blur = new BlurRenderer(f.bases, f.passes, () => repaints++);
   return { ...f, blur, repaints: () => repaints };
 }
 
@@ -189,30 +189,17 @@ for (const method of [0, 1]) test(`blur method ${method} is reused across frames
   assert.equal(blur.canReuse(input(1)), false);
 });
 
-test('failed blur allocation drops a partial pool and can recover on the next paint', () => {
-  const { blur, context, failAllocation, errors } = blurFixture();
-  failAllocation(true); blur.resize(context, 800, 600);
-  assert.equal(blur.ready, false);
-  assert.equal(blur.width, 0);
-  assert.equal(errors.length, 1);
-  failAllocation(false); blur.resize(context, 800, 600);
-  assert.equal(blur.ready, true);
-});
-
-test('crop target is reused until dimensions change and falls back on allocation failure', () => {
-  const { load, bases, passes, logger, context, texture, root, textures, failAllocation } = gpuFixture();
+test('crop target is reused until dimensions change', () => {
+  const { load, bases, passes, context, texture, root, textures } = gpuFixture();
   bases.initialize(context);
   const { CropPass } = load(path.join(dist, 'rendering/crop.js'));
-  const crop = new CropPass(bases, passes, logger), src = texture(803, 603);
+  const crop = new CropPass(bases, passes), src = texture(803, 603);
   const render = (w, h) => crop.render(root(), context, src, 803, 603, w, h, [0, 0, 1, 1]);
   const first = render(800, 600);
   assert.equal(render(800, 600), first);
   assert.equal(textures.length, 1);
   assert.notEqual(render(790, 590), first);
   crop.clear();
-  failAllocation(true);
-  assert.equal(render(800, 600), src);
-  failAllocation(false);
   assert.notEqual(render(800, 600), src);
 });
 

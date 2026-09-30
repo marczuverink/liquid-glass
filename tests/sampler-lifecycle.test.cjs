@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const dist = path.join(__dirname, '../liquid-glass@thinkingcoding1231.gmail.com/dist');
-const { loadModule } = require('./helpers/load-module.cjs');
+const { loadModule, createModuleLoader } = require('./helpers/load-module.cjs');
 
 function fixture(mode) {
   class Actor {
@@ -41,10 +41,12 @@ function fixture(mode) {
       addDragMonitor(m) { monitors.add(m); }, removeDragMonitor(m) { monitors.delete(m); } },
     GLib: { get_monotonic_time: () => 0 }, Meta: {},
   };
-  const utils = loadModule(path.join(dist, 'utils.js'), bindings);
+  const load = createModuleLoader(bindings);
+  const utils = Object.assign({}, ...['capture/uiLayerSampler.js', 'actors/unpickable.js', 'actors/textureBlit.js']
+    .map(file => load(path.join(dist, file))));
   if (mode !== undefined) utils.setBmsMode(mode);
   const classes = Object.fromEntries(['UILayerSampler', 'UnpickableActor', 'UnpickableClone',
-    'UnpickableWidget', 'UnpickableStyledWidget', 'TextureBlitActor', 'LayoutOpaqueActor']
+    'UnpickableWidget', 'TextureBlitActor', 'LayoutOpaqueActor']
     .map(name => [name, utils[name]]));
   const sampler = new classes.UILayerSampler(self, self);
   sampler._resolveBmsTargetActor = () => null;
@@ -75,20 +77,6 @@ test('BMS clone selection preserves skip, replica failure and snapshot fallbacks
     sampler.destroy();
     assert.equal(content.handlers.size, 0);
   }
-});
-
-test('one broken uiGroup child does not prevent later clones or stale clone cleanup', () => {
-  const { sampler, content, Actor, uiGroup } = fixture();
-  sampler.refresh();
-  content.visible = false;
-  const broken = new Actor(), healthy = new Actor();
-  Object.defineProperty(broken, '_isDisposed', { get() { throw new Error('gone'); } });
-  uiGroup.add_child(broken); uiGroup.add_child(healthy);
-  sampler.refresh();
-  assert.equal(sampler._clones.has(content), false);
-  assert.equal(sampler._clones.has(healthy), true);
-  assert.equal(content.handlers.size, 0);
-  sampler.destroy();
 });
 
 test('100 menu hide/show cycles do not accumulate source destroy handlers', () => {

@@ -4,7 +4,6 @@ const path = require('node:path');
 const { loadModule } = require('./helpers/load-module.cjs');
 
 const WindowType = { NORMAL: 0, DIALOG: 1, MODAL_DIALOG: 2, DESKTOP: 3, DOCK: 4, SPLASHSCREEN: 5, UTILITY: 6 };
-const fail = () => { throw new Error('disposed'); };
 const window = (wmClass, title = '', type = WindowType.NORMAL, extra = {}) => ({
   get_wm_class: () => wmClass, get_title: () => title, get_window_type: () => type, ...extra,
 });
@@ -38,13 +37,10 @@ test('window list groups case-sensitive classes, caps unique titles and sorts by
   assert.equal(f.calls.apps.length, 3);
 });
 
-test('window list excludes shell surfaces and unreadable windows before requesting a tracker', () => {
-  const f = fixture([
-    window(null), window(''), ...[3, 4, 5].map(type => window('Shell', '', type)),
-    ...['get_wm_class', 'get_window_type', 'get_title'].map(getter => window('Gone', '', 0, { [getter]: fail })),
-  ]);
+test('window list excludes shell surfaces without looking up their applications', () => {
+  const f = fixture([window(null), window(''), ...[3, 4, 5].map(type => window('Shell', '', type))]);
   assert.deepEqual(f.list(), []);
-  assert.equal(f.calls.tracker, 0);
+  assert.equal(f.calls.apps.length, 0);
 });
 
 test('window list marks normal and dialog groups but keeps utility windows', () => {
@@ -54,30 +50,15 @@ test('window list marks normal and dialog groups but keeps utility windows', () 
     [['Dialog', true, 1], ['Mixed', true, 2], ['Modal', true, 1], ['Utility', false, 1]]);
 });
 
-test('tracker failure is cached for one request and retried on the next request', () => {
-  const f = fixture([window('One'), window('Two')], undefined, fail);
-  assert.equal(f.list().length, 2);
-  assert.equal(f.calls.tracker, 1);
-  f.list();
-  assert.equal(f.calls.tracker, 2);
-});
-
-test('window app failures retry while a name is missing and preserve partially read metadata', () => {
+test('application lookups repeat while a name is missing and keep partially read metadata', () => {
   const windows = [window('Same'), window('Same'), window('Same'), window('Same')];
   let lookup = 0;
   const f = fixture(windows, () => {
     lookup++;
-    if (lookup === 1) return fail();
+    if (lookup === 1) return null;
     if (lookup === 2) return app(null, 'old-icon');
-    return { get_name: () => 'Named', get_app_info: fail };
+    return { get_name: () => 'Named', get_app_info: () => null };
   });
   assert.deepEqual(f.list(), [{ wmClass: 'Same', appName: 'Named', iconName: 'old-icon', titles: [], count: 4, normal: true }]);
   assert.equal(lookup, 3);
-});
-
-test('missing window lists and display errors return an empty JSON list', () => {
-  assert.deepEqual(fixture(null).list(), []);
-  const f = fixture(fail);
-  assert.deepEqual(f.list(), []);
-  assert.equal(f.calls.logs.length, 1);
 });

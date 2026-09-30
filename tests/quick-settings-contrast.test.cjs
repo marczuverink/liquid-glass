@@ -20,17 +20,6 @@ test('button alpha keeps a coloured toggle child visible and makes its container
   assert.equal(child._isUpdatingAlpha, false);
 });
 
-test('button alpha restores adaptive foreground and clears its guard after theme failure', () => {
-  const f = fixture();
-  f.button.style = 'padding: 4px; color: white; -st-icon-foreground-color: white;';
-  f.manager._styledActors.set(f.button, 'padding: 4px;');
-  f.button.get_theme_node = () => { throw new Error('disposed'); };
-  assert.throws(() => f.manager._updateSingleButtonAlpha(f.button, 0.5), /disposed/);
-  assert.match(f.button.get_style(), /color: white/);
-  assert.match(f.button.get_style(), /-st-icon-foreground-color: white/);
-  assert.equal(f.button._isUpdatingAlpha, false);
-});
-
 function fixture(background = dark, luma = 0.7) {
   let reads = 0;
   let nextId = 1;
@@ -83,7 +72,9 @@ function fixture(background = dark, luma = 0.7) {
   const manager = Object.create(QuickSettingsManager.prototype);
   Object.assign(manager, {_adaptiveConfig: {...AdaptiveContrastConfig}, _adaptiveInFlight: false,
     _contrastSampler: sampler, _styledActors: new Map(), _styledButtons: new Map(),
-    _buttonSignalIds: new Map(), _adaptiveTimerId: 0, _buttonTimerId: 0,
+    _buttonSignalIds: new Map(), _adaptiveTimerId: 0, _buttonTimerId: 0, _buttonIdleIds: new Set(),
+    _backdropColors: new Map(), _backdropSignals: new Map(), _sampleColors: new Map(),
+    _dirtyBackdropRoots: new Set(), _backdropRefreshId: 0, _applyingForeground: false, _adaptiveGeneration: 0,
     menu: {actor: root, isOpen: true}, _logger: {error(message) { throw Error(message); }}});
   const sample = async () => { manager._updateAdaptiveTextColors(true); await new Promise(resolve => setImmediate(resolve)); };
   const flush = () => {

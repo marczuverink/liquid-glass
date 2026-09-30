@@ -48,7 +48,7 @@ function materialFixture(settings) {
 
 test('material fallback uses the macOS 27 optical defaults without settings', () => {
   const { state, material } = materialFixture(undefined);
-  for (const [name, value] of Object.entries({ resolution_x: 0, pointer_x: -100, corner_radius: 60,
+  for (const [name, value] of Object.entries({ resolution_x: 0, corner_radius: 60,
     padding: 20, shadow_max_radius: 180, surface_light_enabled: 1, multi_region_mode: 0,
     early_exit_enabled: 1, edge_taps_enabled: 1, blur_tex_w: 0, displacement_scale: 10.5, max_z: 88,
     ior: 2.4, shadow_radius: 50, ao_radius: 1 }))

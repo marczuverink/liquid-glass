@@ -1,7 +1,7 @@
 export function clipDockBounds(bounds, target) {
     let { absX, absY, baseW, baseH } = bounds;
     const { absX: tX, absY: tY, baseW: tW, baseH: tH } = target;
-    // 親コンテナからはみ出した分をカットし、本来のサイズに強制する
+    // Cut off whatever sticks out of the target.
     if (absX < tX) {
         baseW -= (tX - absX);
         absX = tX;
@@ -30,10 +30,9 @@ export function dockEdges(bounds, monitor) {
     }
     return { minCenterDist, distLeftCenter, distRightCenter, distTopCenter, distBottomCenter };
 }
-// 参照矩形との前後の隙間。軸が反転している場合は参照の開始位置を補正してから
-// 測る。For when the dock is upside down: 原点が下端にあるため、真の左上Y座標は
-// refY - refH になり、ギャップを再計算して正常化する。X 軸が反転（左右ミラー）
-// している左/右ドックも同じ検知と補正。
+// The gaps before and after the reference rect. On a flipped axis (a dock
+// placed at the top, or a mirrored left/right dock) the reference's origin is
+// at its far edge, so its real start is refStart - refSize.
 function referenceGaps(start, size, refStart, refSize) {
     let before = refStart - start;
     let after = start + size - (refStart + refSize);
@@ -52,23 +51,20 @@ export function balanceDockBounds(bounds, reference, edges) {
     const [topGap, bottomGap] = referenceGaps(absY, baseH, refY, refH);
     const [leftGap, rightGap] = referenceGaps(absX, baseW, refX, refW);
     if (baseW >= baseH) {
-        // ▼ 横長ドック（上・下ドック）▼
+        // Horizontal dock (top or bottom). A difference larger than half the
+        // height is bogus and ignored. Trim the larger gap: the bottom by
+        // shrinking, the top by also moving the start down.
         const diff = Math.abs(bottomGap - topGap);
-        // 異常値(高さを超えるようなズレ)は無視する安全装置
         if (diff > 0 && diff < baseH / 2) {
-            // 下の隙間の方が広い -> 下を削る。
-            // 上の隙間の方が広い -> 開始位置(上)を下げて、高さも削る。
             if (!(bottomGap > topGap))
                 absY += diff;
             baseH -= diff;
         }
     }
     else {
-        // ▼ 縦長ドック（左・右ドック）▼
+        // Vertical dock. Only the gap facing the screen centre is trimmed: for a
+        // left dock that is the right gap, and the start is never moved right.
         const diff = Math.abs(rightGap - leftGap);
-        // 左ドック: 中央方向（右側）の余白のみ削る。leftGap > rightGap になっても
-        // absX を右にズラしてはいけない（何もしない。誤補正防止）。
-        // 右ドック: 中央方向（左側）の余白を削る。
         if (diff > 0 && diff < baseW / 2 &&
             (edges.minCenterDist !== edges.distLeftCenter || rightGap > leftGap)) {
             if (!(rightGap > leftGap))
@@ -78,8 +74,7 @@ export function balanceDockBounds(bounds, reference, edges) {
     }
     return { absX, absY, baseW, baseH };
 }
-// 画面端から margin だけ離れた位置でドックの領域を切り詰める。一番近い端が
-// 下なら下ドック、上なら上ドック、右なら右ドック、それ以外は左ドック。
+// Trims the dock to `margin` from the screen edge it is closest to.
 export function insetDockBounds(bounds, monitor, edges, margin, stableBaseW, stableBaseH) {
     let { absX, absY, baseW, baseH } = bounds;
     const { minCenterDist, distBottomCenter, distTopCenter, distRightCenter } = edges;
@@ -107,7 +102,7 @@ function insetSpan(start, size, edge, stableSize, leading) {
     else if (start + size > edge) {
         size -= (start + size) - edge;
     }
-    // Experimental: never grow past the last stable size.
+    // Never grow past the last stable size.
     if (size > stableSize)
         size = stableSize;
     return [start, size];

@@ -5,22 +5,11 @@ import { SAME_FRAME_WINDOW_US } from './frameSync.js';
 const MAX_INTERVAL_MS = 50;
 let _nextId = 0;
 const _tickers = new Map();
-// ─── Frame-clock animation driver ───────────────────────────────────────────
-//
-// [PERF C1] The menu / quick-settings open-close springs used to be stepped by
-// GLib.timeout_add(animation-interval-ms). That timer is not tied to the frame
-// clock at all: at the default 16ms it beats against the 16.67ms frame (a
-// double step every ~25 frames, a skipped one as often — see the same finding
-// for the text-colour tween, memo.md 追記12 C), and at the 1ms a user can dial
-// in it ran _syncGeometry() a thousand times a second — sixteen full geometry
-// syncs per frame, fifteen of which no frame ever showed (and 0ms was a busy
-// loop). Smoothness is decided by how finely the PHYSICS is stepped, not by
-// how often the actors are written: see Spring.update(), which sub-steps.
-//
-// addFrameTicker() calls `cb` at most once per frame, from a BEFORE_REDRAW
-// later (which also keeps the frame clock running while the animation lives),
-// optionally no more often than `minIntervalMs`. `cb` returns true to keep
-// going. The returned id stays valid across the internal reschedules.
+// Steps an animation at most once per frame from a BEFORE_REDRAW later, which
+// also keeps the frame clock running while the animation lives. A GLib timer
+// would beat against the frame; smoothness comes from sub-stepping the physics
+// (Spring.update()), not from writing the actors more often. `cb` returns true
+// to keep going; the returned id stays valid across the reschedules.
 export function addFrameTicker(cb, minIntervalMs = 0) {
     const id = ++_nextId;
     const ticker = { laterId: 0, cb, minUs: Math.max(0, minIntervalMs || 0) * 1000, last: 0 };
@@ -66,17 +55,13 @@ export function removeFrameTicker(id) {
     _tickers.delete(id);
     if (!ticker.laterId)
         return;
-    try {
-        global.compositor.get_laters().remove(ticker.laterId);
-    }
-    catch { }
+    global.compositor.get_laters().remove(ticker.laterId);
     ticker.laterId = 0;
 }
 /**
- * [PERF C1] The animation-interval-ms settings, reduced to what can actually
- * happen now that the animation is frame-driven: anything up to one 60Hz frame
- * (including the old 0/1ms values) means "every frame" (0); larger values are
- * a frame-rate cap, bounded to what the preferences offer.
+ * Maps animation-interval-ms onto what a frame-driven animation can do:
+ * anything up to one 60Hz frame means every frame (0); larger values cap the
+ * frame rate, bounded to what the preferences offer.
  */
 export function normalizeAnimationIntervalMs(v) {
     if (!Number.isFinite(v) || v <= 16)

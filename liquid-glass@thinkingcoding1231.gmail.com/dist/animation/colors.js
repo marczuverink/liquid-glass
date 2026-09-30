@@ -1,11 +1,27 @@
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import { isActorValid } from '../actors/lifecycle.js';
+// '#rrggbb' as normalized [r, g, b]; anything else gives white.
+export function hexToColorArray(hex) {
+    if (!hex || !hex.startsWith('#') || hex.length !== 7)
+        return [1.0, 1.0, 1.0];
+    return [
+        parseInt(hex.slice(1, 3), 16) / 255.0,
+        parseInt(hex.slice(3, 5), 16) / 255.0,
+        parseInt(hex.slice(5, 7), 16) / 255.0,
+    ];
+}
+export function hexToRgb(hex) {
+    const value = parseInt(hex.replace('#', ''), 16);
+    return { r: (value >> 16) & 255, g: (value >> 8) & 255, b: value & 255 };
+}
+export function rgbToHex(r, g, b) {
+    return '#' + (1 << 24 | r << 16 | g << 8 | b).toString(16).slice(1);
+}
 export function crossFadeColorAt(start, startAlpha, target, targetAlpha, progress) {
     const p = Math.max(0, Math.min(1, progress));
     if (p < 0.5) {
         const local = p / 0.5;
-        // easeInQuad on the fade-out: holds the readable colour a little longer.
         const a = startAlpha * (1 - local * local);
         return { r: start.r, g: start.g, b: start.b, a };
     }
@@ -14,22 +30,14 @@ export function crossFadeColorAt(start, startAlpha, target, targetAlpha, progres
     const e = 1 - (1 - local) * (1 - local);
     return { r: target.r, g: target.g, b: target.b, a: targetAlpha * e };
 }
-// Only a real light<->dark flip earns the dissolve. A small nudge (the theme's
-// own off-white to pure white, say) has no grey to walk through, and dipping
-// the alpha for it would invent a flicker where a plain lerp is invisible.
-// Rec. 709 luma, 0..1; the threshold is far below a white/black flip (1.0) and
-// far above any within-palette adjustment.
+// A small change (off-white to white) has no grey to pass through, and a
+// dissolve would only add a flicker. Rec. 709 luma difference, 0..1.
 const CROSS_FADE_LUMA_DELTA = 0.4;
 export function shouldCrossFadeColors(start, target) {
     const luma = (c) => (0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b) / 255;
     return Math.abs(luma(target) - luma(start)) > CROSS_FADE_LUMA_DELTA;
 }
-/**
- * The plain channel-by-channel interpolation, kept as the A/B alternative to
- * the dissolve. easeInOutQuad, exactly what every manager used to run inline.
- * It walks white->black through mid-grey, which is the legibility problem the
- * dissolve exists to avoid — that is the trade being switched between.
- */
+// Plain per-channel interpolation (easeInOutQuad), used for small changes.
 export function lerpColorAt(start, startAlpha, target, targetAlpha, progress) {
     const p = Math.max(0, Math.min(1, progress));
     const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
@@ -47,10 +55,7 @@ export function setAdaptiveColorMode(mode) {
 export function getAdaptiveColorMode() {
     return _adaptiveColorMode;
 }
-/**
- * True when this particular change should dissolve rather than lerp: only in
- * 'cross-fade' mode, and only for a real light<->dark flip.
- */
+// Whether this change should dissolve rather than interpolate.
 export function resolveCrossFade(start, target) {
     return _adaptiveColorMode === 'cross-fade' && shouldCrossFadeColors(start, target);
 }
@@ -66,9 +71,8 @@ class AdaptiveColorTweener {
         if (!actor)
             return;
         const prev = this._entries.get(actor);
-        // Restarting mid-tween: begin from what is actually on screen, not from
-        // the theme node — St has not necessarily re-resolved it yet this frame,
-        // and starting from a stale colour is a visible jump.
+        // Restarting mid-tween: start from what is on screen, not from the theme
+        // node, which St may not have re-resolved yet.
         const startRgb = prev?.last
             ? { r: prev.last.r, g: prev.last.g, b: prev.last.b }
             : entry.startRgb;
@@ -95,20 +99,12 @@ class AdaptiveColorTweener {
     _schedule() {
         if (this._laterId !== 0)
             return;
-        try {
-            this._laterId = global.compositor.get_laters().add(Meta.LaterType.BEFORE_REDRAW, () => { this._tick(); return false; });
-        }
-        catch {
-            this._laterId = 0;
-        }
+        this._laterId = global.compositor.get_laters().add(Meta.LaterType.BEFORE_REDRAW, () => { this._tick(); return false; });
     }
     _unschedule() {
         if (this._laterId === 0)
             return;
-        try {
-            global.compositor.get_laters().remove(this._laterId);
-        }
-        catch { }
+        global.compositor.get_laters().remove(this._laterId);
         this._laterId = 0;
     }
     _applyEntry(e, now) {
@@ -118,18 +114,14 @@ class AdaptiveColorTweener {
             ? crossFadeColorAt(e.startRgb, e.startAlpha, e.targetRgb, e.targetAlpha, progress)
             : lerpColorAt(e.startRgb, e.startAlpha, e.targetRgb, e.targetAlpha, progress);
         const a = Math.max(0, Math.min(1, c.a));
-        // set_style() re-parses CSS and dirties the actor's layout, so it is by
-        // far the expensive half of this. Skip it when the frame would write the
-        // value that is already there (the flat ends of the easing curve).
+        // set_style() re-parses CSS and relayouts, so skip frames that would
+        // write the same value (the flat ends of the curve).
         const same = e.coalesce !== false && e.last &&
             e.last.r === c.r && e.last.g === c.g && e.last.b === c.b &&
             Math.abs(e.last.a - a) < 0.002;
         if (!same) {
             e.last = { r: c.r, g: c.g, b: c.b, a };
-            try {
-                e.apply(c.r, c.g, c.b, a, progress);
-            }
-            catch { }
+            e.apply(c.r, c.g, c.b, a, progress);
         }
         return progress;
     }

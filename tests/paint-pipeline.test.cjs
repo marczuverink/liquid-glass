@@ -25,7 +25,7 @@ async function fixture(reference, method) {
     children: node.children?.map(describeNode) });
   return { ...f, effect, actor, paint() {
     const root = f.root(), repaints = effect.repaints;
-    effect.vfunc_paint_target(root, {});
+    effect.vfunc_paint_target(root, { get_framebuffer: () => ({}) });
     assert.equal(effect.repaints, repaints, 'painting must not request another repaint');
     return { draw: describeNode(root), fallbacks: effect.fallbacks,
       diag: effect._diagLast, errors: f.errors, textures: f.textures.length,
@@ -47,8 +47,7 @@ for (const method of [0, 1]) test(`paint stages match the original pipeline for 
     f => f.effect.setBlurRadius(20),
     f => { f.effect._diagEnabled = true; f.effect._cropPassEnabled = false; },
     f => { f.actor.get_size = () => [NaN, 0]; },
-    f => { f.failAllocation(true); f.effect.setResolution(1300, 900); f.actor.get_size = () => [1300, 900]; },
-    f => { f.failAllocation(false); },
+    f => { f.effect.setResolution(1300, 900); f.actor.get_size = () => [1300, 900]; },
     f => { f.effect.texture = null; },
     f => { f.effect.texture = f.texture(1000, 700); f.effect._shadersLoaded = false; },
     f => { f.effect._shadersLoaded = true; f.effect.actor = null; },

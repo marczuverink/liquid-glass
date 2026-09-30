@@ -5,136 +5,55 @@ export class GlassGeometry {
         this.blurEnabled = GlassGeometry.USE_BLUR_RECT;
         this.compositeEnabled = GlassGeometry.USE_COMPOSITE_RECT;
     }
-    // ── [PERF] Blurred sub-rect ────────────────────────────────────────────
-    // The glass geometry the shader was last told about, kept so the paint
-    // path can work out which part of the actor actually needs blurring.
-    // Same coordinate space as setResolution()/setGlassGeometry(). [x, y, w, h]
+    // The glass rect [x, y, w, h] last given to the shader, in the space of
+    // setResolution()/setGlassGeometry().
     rect = [0, 0, 0, 0];
     regions = [];
-    multiRegion = false; // multi-region mode
-    // Per-instance override of GlassGeometry.USE_BLUR_RECT.
+    multiRegion = false;
+    // Per-instance switches (global._lgGlass.blurRect()/compositeRect()).
     blurEnabled;
-    // Per-instance override of GlassGeometry.USE_COMPOSITE_RECT.
     compositeEnabled;
-    // ─── Blurred sub-rect (A3 alternative) ───────────────────────────────────
-    //
-    // The blur used to run over the whole capture, which for a full-screen FBO
-    // is 1920x1080 downsampled and Gaussian-blurred every frame — even when the
-    // only glass on it is a 600x100 dock. Almost all of that work was thrown
-    // away: glass.frag multiplies the refracted color by `alpha = insideMask`,
-    // so a pixel outside the glass body contributes nothing no matter what the
-    // blur texture holds there.
-    //
-    // The obvious fix — shrink the FBO to the glass — is the one thing we must
-    // NOT do. dockManager.ts sizes bgActor/liquidBox to the whole monitor
-    // precisely so the offscreen's origin coincides with the stage's, because a
-    // background-mode blur nested inside our subtree (Blur My Shell's panel)
-    // resolves its source rect in STAGE coordinates and then blits out of the
-    // CURRENT framebuffer. A dock-sized FBO makes those two spaces disagree and
-    // brings back the offset/cache-pollution bugs recorded there.
-    //
-    // So the FBO, the actor, computeCaptureLayout() and every stage coordinate
-    // stay exactly as they are, and only the region handed to the blur chain
-    // shrinks. glass.frag's blur_rect_* uniforms tell the shader where that
-    // region sits so layer 1 is sampled through the matching sub-rect mapping.
-    //
-    // global._lgGlass.blurRect(false) turns it off for A/B testing.
+    // Blur only the part of the capture the glass can sample. The capture
+    // itself stays monitor-sized: a background-mode blur inside it (Blur My
+    // Shell's panel) reads its source by stage coordinates from the current
+    // framebuffer, so the offscreen's origin has to match the stage's.
     static USE_BLUR_RECT = true;
-    // Mirrors EDGE_LENS_REACH in glass.frag, which clamps the bevel's
-    // displacement to this many pixels. That makes it the refraction's true
-    // reach, so the blur and capture margins below are derived from it — the
-    // two constants have to move together, or the rim starts sampling the
-    // blurred region's clamped border and streaks.
+    // Must match EDGE_LENS_REACH in glass.frag (the refraction's maximum
+    // displacement), or the rim samples past the blurred region and streaks.
     static EDGE_LENS_REACH = 96;
     static EDGE_FOOTPRINT_SPREAD = 0.9 * 32;
-    // Hard floor on the margin around the glass, on top of the computed
-    // refraction reach. Covers edge_smoothing's feather, the 4-tap RGSS spread
-    // and rounding.
+    // Extra margin for the edge feather, the 4-tap RGSS spread and rounding.
     static BLUR_RECT_MIN_MARGIN = 12;
-    // Below this the rect is not worth the extra uniforms: if it already covers
-    // essentially the whole actor there is nothing to save. Kept close to 1
-    // because an application window — where the glass IS the actor apart from
-    // the shadow margin — lands around 0.8, and those are the surfaces that
-    // paint most often.
+    // A rect covering more than this share of the actor saves nothing. Kept
+    // close to 1 so application windows (around 0.8) still benefit.
     static BLUR_RECT_MIN_SAVING = 0.95;
-    // The texture pool is keyed on the blurred region's SIZE, so every change
-    // to it destroys and reallocates three textures and three framebuffers.
-    // A menu whose width creeps by a pixel while it opens would do that on
-    // every frame of the animation. Rounding the size up to a multiple of this
-    // makes those changes land on the same pool; the rect's POSITION is free to
-    // move as much as it likes, since nothing is keyed on it.
+    // The texture pool is keyed on the rect's size, so the size is rounded up
+    // to this quantum; otherwise an opening menu would reallocate the pool
+    // every frame.
     static BLUR_RECT_QUANTUM = 64;
-    // [PERF ①] Slack added on top of the refraction + blur reach when clipping
-    // the CAPTURE (see getCaptureClipRect()). The clip is recomputed from the
-    // same frame's uniforms, so this is not covering a lag — it is covering
-    // rounding, the 4-tap RGSS spread, and the fact that being a little too
-    // generous here costs a few thousand pixels while being a little too tight
-    // shows up as a hard edge in the glass.
+    // Slack for the capture clip (see captureClip()): too generous costs a few
+    // pixels, too tight shows as a hard edge.
     static CAPTURE_CLIP_EXTRA_MARGIN = 24;
-    // Do not bother clipping when the rect already covers this much of the
-    // actor. Application windows sit above it (their glass IS the actor bar
-    // the shadow margin, and applicationManager's clipBox already clips the
-    // clone subtree), so they keep their current, un-scissored path.
+    // No clip above this share of the actor; application windows land here and
+    // their clipBox already clips the clones.
     static CAPTURE_CLIP_MIN_SAVING = 0.85;
-    // ─── Composite rect ──────────────────────────────────────────────────────
-    //
-    // The composite pass — glass.frag itself — was issued over the whole
-    // capture. For a full-screen FBO that means running the fragment shader on
-    // 1920x1080 pixels to light a 920x110 dock. The early exits at the top of
-    // main() make most of those pixels cheap, but "cheap" is not "free": the
-    // shader still starts, still evaluates the SDF, and the rasterisation and
-    // the blend still cost their memory bandwidth.
-    //
-    // Everything the shader can actually put on screen is
-    //   finalRgb = litColor * alpha + shadowColor * shadowContribution
-    //            + panelTerm.rgb
-    // and `alpha` is `insideMask`, which is 0 outside the body. So only the
-    // body, the drop shadow's reach, and (if it were ever switched on) the
-    // panel fallback fill can be non-transparent. The composite blend is
-    // `ADD(SRC_COLOR, DST_COLOR * (1 - SRC_COLOR[A]))`, under which a
-    // fully-transparent source is exactly a no-op — so NOT drawing those
-    // pixels is bit-for-bit what drawing them did.
-    //
-    // Unlike the blurred sub-rect this needs no refraction margin: refraction
-    // changes where a pixel SAMPLES from, not where it is drawn.
-    //
-    // global._lgGlass.compositeRect(false) turns it off for A/B testing.
+    // Run glass.frag only where it can draw something: the glass body and the
+    // drop shadow's reach. Everywhere else the source is fully transparent,
+    // which the premultiplied "over" blend leaves unchanged, so skipping those
+    // pixels changes nothing. Refraction moves where a pixel samples, not where
+    // it is drawn, so no refraction margin is needed.
     static USE_COMPOSITE_RECT = true;
-    // As with the blur rect: not worth the arithmetic if it saves nothing.
     static COMPOSITE_RECT_MIN_SAVING = 0.95;
     /**
-     * [PERF] Works out how much of the actor the composite pass has to cover.
-     *
-     * Returns integer [x, y, w, h] in the shader's own coordinate space
-     * (`resolution_x/y`), or null for "cover everything" — the pre-existing
-     * behavior, used whenever the answer is uncertain or not worth it.
-     *
-     * The shadow's real reach, from glass.frag:
-     *   effectiveRadius = min(shadow_radius * dirRadius, maxRadius), dirRadius <= 1
-     *   maxRadius       = max(shadow_max_radius, 5)
-     *   umbra/penumbra are 0 at d >= effectiveRadius, and
-     *   `shadowAlpha *= 1 - step(maxRadius, d)` zeroes it past maxRadius too.
-     * so nothing is drawn beyond min(shadow_radius, maxRadius) from the body.
-     * Multi-region mode sets shadowAlpha to 0 outright.
-     */
-    /**
-     * [PERF B2] The enclosing glass's region of interest, mapped into this
-     * glass's own shader space as [x0, y0, x1, y1], or null when this paint is
-     * not nested inside a re-rendering glass that published one.
-     *
-     * The ROI is in screen coordinates (see _captureOwners). A nested glass is
-     * painted through a clone that sits at its source's screen position with its
-     * source's scale and pivot, so mapping the ROI through this actor's REAL
-     * stage transform gives exactly where the enclosing capture's ROI falls in
-     * the space this composite is drawn in. Padded outwards by a couple of pixels
-     * on top of the ROI's own slack; a quad that is slightly too big costs a few
-     * pixels, one that is too small would be a visible cut.
+     * The rect [x, y, w, h] (shader space) the composite has to cover, or null
+     * for the whole actor. glass.frag draws no shadow beyond
+     * min(shadow_radius, max(shadow_max_radius, 5)) from the body, and none in
+     * multi-region mode.
      */
     compositeRect() {
         if (!this.compositeEnabled)
             return null;
-        // The debug visualisations are easier to read when they are not clipped
-        // to the rect being debugged.
+        // Debug views are easier to read unclipped.
         if ((this._uniforms.get('debug_view') ?? 0) > 0.5)
             return null;
         const resW = this._uniforms.get('resolution_x') ?? 0;
@@ -151,30 +70,13 @@ export class GlassGeometry {
         const reach = (this.multiRegion || !(shadowIntensity > 0))
             ? 0
             : Math.min(shadowRadius, shadowMax);
-        // The edge feather widens the body itself, and the rim/AO bands live
-        // inside it. 2px of slack absorbs the rounding.
+        // The feather widens the body; the rim and AO lie inside it.
         const feather = Math.max(this._uniforms.get('edge_smoothing') ?? 0, 0.75);
         const m = Math.ceil(reach + feather + 2);
         x0 -= m;
         y0 -= m;
         x1 += m;
         y1 += m;
-        // The panel fallback fill is drawn from panel_rect_* wherever
-        // panel_bg_a > 0, independently of the glass body — including from the
-        // first early exit. Nothing calls setPanelBackgroundColor() today, so
-        // this is dead, but it must not become a clipping bug if it is wired up.
-        if ((this._uniforms.get('panel_bg_a') ?? 0) > 0) {
-            const px = this._uniforms.get('panel_rect_x') ?? 0;
-            const py = this._uniforms.get('panel_rect_y') ?? 0;
-            const pw = this._uniforms.get('panel_rect_w') ?? 0;
-            const ph = this._uniforms.get('panel_rect_h') ?? 0;
-            if (pw > 0 && ph > 0) {
-                x0 = Math.min(x0, px - 2);
-                y0 = Math.min(y0, py - 2);
-                x1 = Math.max(x1, px + pw + 2);
-                y1 = Math.max(y1, py + ph + 2);
-            }
-        }
         const maxW = Math.round(resW);
         const maxH = Math.round(resH);
         const bx = Math.max(0, Math.floor(x0));
@@ -188,17 +90,9 @@ export class GlassGeometry {
         return [bx, by, bw, bh];
     }
     /**
-     * [PERF] The union of the glass BODIES the shader will draw, as
-     * [x0, y0, x1, y1] in the shader's coordinate space (`resolution_x/y`),
-     * or null when there is nothing to draw.
-     *
-     * The rect a manager hands us is the BACKGROUND actor's box; the body
-     * inside it is inset by `padding` on every side, which is exactly what the
-     * shader does (`actual_size = size - padding * 2`, in both the single-rect
-     * branch and findActiveRegion()). The dock branch insets by a further
-     * edgeFeather * 2, which is deliberately not replicated — erring larger is
-     * the safe direction. The inset matters most for application windows,
-     * where `padding` is the shadow margin and reaches 120px.
+     * The union [x0, y0, x1, y1] of the glass bodies, or null. The rect a
+     * manager passes is the background box; the shader insets the body by
+     * `padding` (the shadow margin for application windows).
      */
     _glassBodyUnion() {
         const pad = Math.max(this._uniforms.get('padding') ?? 0, 0);
@@ -208,9 +102,8 @@ export class GlassGeometry {
             const [rx, ry, rw, rh] = r;
             if (!(rw > 0) || !(rh > 0))
                 continue;
-            // Never let the inset turn the box inside out; the shader clamps the
-            // half-size to 1px, so a rect smaller than 2*padding is a 2px box at
-            // its own centre.
+            // The shader clamps the half-size to 1px, so the inset never inverts
+            // the box.
             const ix = Math.min(pad, Math.max(rw / 2 - 1, 0));
             const iy = Math.min(pad, Math.max(rh / 2 - 1, 0));
             if (rx + ix < x0)
@@ -227,35 +120,11 @@ export class GlassGeometry {
         return [x0, y0, x1, y1];
     }
     /**
-     * [PERF ①] The rect of the CAPTURE that this glass can possibly need, in
-     * shader space (= liquidBox-local pixels, the same space blurRect() and
-     * the dock_x/y/w/h uniforms use).
-     *
-     * Why this exists separately from blurRect():
-     *
-     *   blurRect() answers "which part of the capture has to be
-     *   BLURRED", and is allowed to return null whenever blurring the whole
-     *   actor is no worse (BLUR_RECT_MIN_SAVING), or when the blur sub-rect
-     *   feature is switched off. This one answers "which part of the capture
-     *   has to be DRAWN AT ALL", which is a different question with a
-     *   different safety margin and must stay available even when the blur
-     *   sub-rect is off.
-     *
-     * The margin on top of the glass body is:
-     *   - the sampling reach (the same _samplingReachPx() as blurRect(): the
-     *     shader samples the background through the displaced UV, so anything
-     *     a refracted ray can reach must exist in the capture),
-     *   - plus the blur's own reach. The blur passes sample the capture around
-     *     each texel; if the capture were cleared exactly at the blur rect's
-     *     border, those taps would pull in transparent pixels and smear them
-     *     back inward. radius is a sigma in original-resolution pixels and is
-     *     clamped to 30 by _setGaussianBlurRadius(), so 3 sigma is the whole
-     *     of it.
-     *
-     * Deliberately NOT tightened to the blur rect: the cost being removed here
-     * is fill rate over the REST of the monitor (a full-screen wallpaper clone
-     * plus every window clone), so a hundred extra pixels of margin costs
-     * nothing and buys immunity to an off-by-a-frame geometry read.
+     * The part of the capture this glass can need at all, in shader space. Not
+     * the blur rect: this one must exist even when the blur rect is switched
+     * off, and it adds the blur's own reach (3 sigma, sigma capped at 30) so the
+     * blur never pulls in cleared pixels. The margin is generous on purpose; the
+     * saving is the rest of the monitor.
      */
     captureClip(radius) {
         const resW = this._uniforms.get('resolution_x') ?? 0;
@@ -281,16 +150,13 @@ export class GlassGeometry {
         let ch = Math.min(maxH, Math.ceil(y1 + my)) - cy;
         if (!(cw >= 2) || !(ch >= 2))
             return null;
-        // Quantised like the blur rect so a menu animating by a pixel does not
-        // rewrite the clip (and therefore damage the whole glass) every frame.
+        // Quantised like the blur rect, so an animating menu does not rewrite the
+        // clip every frame.
         const q = GlassGeometry.BLUR_RECT_QUANTUM;
         cw = Math.min(maxW, Math.ceil(cw / q) * q);
         ch = Math.min(maxH, Math.ceil(ch / q) * q);
         cx = Math.max(0, Math.min(cx, maxW - cw));
         cy = Math.max(0, Math.min(cy, maxH - ch));
-        // Covering (almost) the whole actor already: clipping would only add a
-        // scissor for nothing. Application windows land here — their clipBox
-        // already clips the clone subtree to the glass box.
         if (cw * ch >= resW * resH * GlassGeometry.CAPTURE_CLIP_MIN_SAVING)
             return null;
         return [cx, cy, cw, ch];
@@ -301,33 +167,13 @@ export class GlassGeometry {
         return Math.min(0.30 * minRes, GlassGeometry.EDGE_LENS_REACH + GlassGeometry.EDGE_FOOTPRINT_SPREAD + chroma);
     }
     /**
-     * [PERF] Works out which part of the actor actually has to be blurred.
-     *
-     * Returns integer [x, y, w, h] in the shader's own coordinate space
-     * (`resolution_x/y`, the same space as dock_x/y/w/h), or null for "blur
-     * everything" — the pre-existing behavior, used whenever the answer is
-     * uncertain or not worth it.
-     *
-     * The margin is the distance a visible pixel's sample can travel away from
-     * the glass rect (_samplingReachPx()):
-     *
-     *   - Refraction. glass.frag clamps the bevel's displacement to
-     *     EDGE_LENS_REACH pixels, so no refracted sample lands further out.
-     *   - The footprint taps. sampleBackdrop() spreads its extra taps up to
-     *     0.9 * 32 px along the pixel's source footprint (EDGE_FOOTPRINT_SPREAD).
-     *   - Chromatic aberration: chroma_strength is in pixels.
-     *   - The 4-tap RGSS spread (at most 2.5px), the edge feather and
-     *     BLUR_RECT_MIN_MARGIN.
-     *
-     * All of it is capped at 0.30 of the shorter side, as the shader's own
-     * displacement once was. The margin used to be
-     * max(bend * displacement, EDGE_LENS_REACH), which could only ever be larger
-     * than anything the shader samples (at IOR 1.2 and refraction 200 it reached
-     * ~301px and the rect fell back to the whole screen).
-     *
-     * The drop shadow deliberately does NOT extend the rect: outside the body
-     * `alpha` is 0, so `litColor * alpha` — the only term the blur feeds — is 0
-     * there regardless of what layer 1 contains.
+     * The part of the actor that has to be blurred, [x, y, w, h] in shader
+     * space, or null for all of it. The margin is how far a visible pixel's
+     * sample can travel from the glass (_samplingReachPx()): the refraction
+     * (EDGE_LENS_REACH), the edge footprint taps (EDGE_FOOTPRINT_SPREAD) and the
+     * chromatic aberration, capped at 0.30 of the shorter side, plus the RGSS
+     * spread, the feather and BLUR_RECT_MIN_MARGIN. The drop shadow does not
+     * sample the blur.
      */
     blurRect() {
         if (!this.blurEnabled)
@@ -353,14 +199,13 @@ export class GlassGeometry {
         let bh = Math.min(maxH, Math.ceil(y1 + my)) - by;
         if (!(bw >= 2) || !(bh >= 2))
             return null;
-        // Round the size up (see BLUR_RECT_QUANTUM) and pull the origin back so
-        // the grown rect still contains the region it was computed to cover.
+        // Round the size up and pull the origin back so the rect still covers
+        // the region.
         const q = GlassGeometry.BLUR_RECT_QUANTUM;
         bw = Math.min(maxW, Math.ceil(bw / q) * q);
         bh = Math.min(maxH, Math.ceil(bh / q) * q);
         bx = Math.max(0, Math.min(bx, maxW - bw));
         by = Math.max(0, Math.min(by, maxH - bh));
-        // Not worth it when it barely shrinks anything.
         if (bw * bh >= resW * resH * GlassGeometry.BLUR_RECT_MIN_SAVING)
             return null;
         return [bx, by, bw, bh];

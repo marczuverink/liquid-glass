@@ -42,7 +42,7 @@ function stageFixture() {
     disconnect(id) { assert.ok(handlers.delete(id)); },
   };
   const globalThis = { global: { stage } };
-  const load = createModuleLoader({ globalThis, BMS_MODE: {} });
+  const load = createModuleLoader({ globalThis, global: globalThis.global, BMS_MODE: {} });
   return { handlers, stage, globalThis, load, clock: load(path.join(dist, 'rendering/frameClock.js')) };
 }
 
@@ -65,19 +65,10 @@ test('frame serial uses exactly one stage observer and can reconnect after clean
   clock.releaseFrameSerialHook();
 });
 
-test('an unavailable stage cannot make a frozen serial look like a live frame', () => {
-  const globalThis = {};
-  const clock = loadModule(path.join(dist, 'rendering/frameClock.js'), { globalThis });
-  assert.equal(clock.ensureFrameSerialHook(), false);
-  assert.equal(clock.frameSerialIsLive(), false);
-  globalThis.global = { stage: { connect() { throw new Error('stage unavailable'); } } };
-  assert.equal(clock.ensureFrameSerialHook(), false);
-  assert.equal(clock.frameSerialIsLive(), false);
-});
-
 test('disposing one effect keeps the shared frame clock until the last effect leaves', () => {
   const { load, clock, handlers, globalThis } = stageFixture();
   const registry = load(path.join(dist, 'diagnostics/glass.js'));
+  registry.installGlassDiagnostics();
   const effects = [{}, {}];
   effects.forEach(effect => registry.registerGlassEffect(effect));
   clock.ensureFrameSerialHook();
@@ -88,6 +79,8 @@ test('disposing one effect keeps the shared frame clock until the last effect le
   registry.unregisterGlassEffect(effects[1]);
   assert.equal(handlers.size, 0);
   assert.equal(globalThis.global._lgGlass.count(), 0);
+  registry.removeGlassDiagnostics();
+  assert.equal(globalThis.global._lgGlass, undefined);
 });
 
 function passesFixture() {

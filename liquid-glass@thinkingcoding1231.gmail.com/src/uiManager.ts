@@ -1,7 +1,6 @@
 import { stepMenuSpring, applyMenuFrame, showMenuAtRest } from './animation/menuSpring.js';
 import { addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs } from './animation/frameTicker.js';
 import { Spring, SwiftSpring } from './animation/spring.js';
-// src/uiManager.ts
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
@@ -20,17 +19,13 @@ import { startLaterLoop, stopLaterLoop } from './animation/frameLoops.js';
 import { excludeOtherGlass } from './capture/glassExclusions.js';
 import { placeScreenGlass, resolveGlassOrigin, applyGlassScale, GLASS_SHADOW_MAX_RADIUS } from './actors/glassBounds.js';
 import { syncGlassCaptureClip } from './capture/clip.js';
-import { resolveCrossFade, adaptiveColorTweener } from './animation/colors.js';
+import { resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb, rgbToHex } from './animation/colors.js';
 
 import { Logger } from './logger.js';
 
-// ========== Configuration Parameters ==========
-
-// Transparent padding outside the glass area.
-// This prevents the shader distortion or rounded corners from being clipped by the actor bounds.
+// Room around the glass rect for the shader's edge effects.
 const SHADER_PADDING = 20;
 
-// Adaptive text color flags
 const SAMPLE_PER_ELEMENT = false;
 
 interface CustomBannerActor extends St.Widget {
@@ -40,12 +35,14 @@ interface CustomBannerActor extends St.Widget {
   _isUpdatingAlpha?: boolean;
 }
 
-// ==============================================
 const MIN_MENU_SCALE = 0.5;
 const MENU_MEASURE_FRAMES = 30;
+const MENU_MEASURE_STABLE_FRAMES = 3;
+
+// Quick Settings' open height, measured once for every menu that matches it,
+// and the callbacks waiting for a measurement in progress.
 let _quickSettingsHeight = 0;
 let _quickSettingsWaiting: ((height: number) => void)[] | null = null;
-const MENU_MEASURE_STABLE_FRAMES = 3;
 
 export class UIManager {
   private extensionPath: string;
@@ -68,10 +65,6 @@ export class UIManager {
   private get _frameSlot() {
     return { get: () => this._frameSyncId, set: (id: number) => { this._frameSyncId = id; } };
   }
-  // [FIX] Set by cleanup() before anything that can throw. Read by the
-  // per-frame loop so an orphaned one stops itself even if cleanup() never
-  // reached the call that stops it. See the note on DockManager's frameTick.
-  private _torndown: boolean = false;
   private _glassExpand: number;
   private _menuXoffset: number;
   private _menuYoffset: number;
@@ -81,7 +74,7 @@ export class UIManager {
   private _settledHeightScale: number | null = null;
   private _measuringHeights: boolean = false;
   private _ownOpenHeight: number = 0;
-  private _measureLaterId: number = 0;
+  private _measureLaterIds: Set<number> = new Set();
   private _restoreQuickSettings: (() => void) | null = null;
   private _tickId: number;
   private _contrastSampler: StageContrastSampler;
@@ -106,13 +99,12 @@ export class UIManager {
   private _lastBgX: number | undefined;
   private _lastBgY: number | undefined;
 
-  // Spring physics parameters
   private _springScale: Spring;
   private _springStiffness: number;
   private _springDamping: number;
   private _springMass: number;
 
-  // SwiftUI Animation parameters
+  // The alternative SwiftUI-style spring; not exposed in the preferences.
   private _swiftAnimation: boolean = false;
   private _swiftResponse: number = 0.3;
   private _swiftDampingFraction: number = 0.65;
@@ -123,6 +115,7 @@ export class UIManager {
 
   private _interfaceSettings: Gio.Settings | null = null;
   private _accentColorSignalId: number = 0;
+  private _accentColorTimeoutId: number = 0;
 
   private _dynamicCssFile: Gio.File | null = null;
   private _cornerRadius: number = 0;
@@ -133,26 +126,16 @@ export class UIManager {
   private _lastScreenW: number | undefined;
   private _lastScreenH: number | undefined;
 
-  // The uiGroup-direct ancestor of this menu. Kept so the glass can be put
-  // back directly beneath it whenever the menu opens — see _restackGlass().
+  // The menu's ancestor that is a direct child of uiGroup; see _restackGlass().
   private _menuRoot: Clutter.Actor | null = null;
 
   constructor(extensionPath: string, settings: Gio.Settings, logger: Logger,
               panelButton: any = Main.panel.statusArea.dateMenu, ownsAccentCss: boolean = true,
               private _enableKey: string = 'enable-menu-glass',
-              /**
-               * GSettings namespace this instance reads its appearance from.
-               * The date menu keeps `menu-*`; PanelMenuManager passes
-               * `panel-menu` so detected top-bar dropdowns are tuned
-               * independently, the way every other surface already is.
-               */
+              // Settings prefix: `menu` for the calendar, `panel-menu` for the
+              // other panel menus (see PanelMenuManager).
               private _keyPrefix: string = 'menu',
-              /**
-               * Diagnostic tag. Reaches LiquidEffect's owner, UILayerSampler's
-               * log prefix and every clone actor's name, so a journal from a
-               * session with several panel menus says which one it is talking
-               * about instead of five lines that all read "menu".
-               */
+              // Names this glass in logs, dumps and actor names.
               private _label: string = 'menu',
               private _ownsSettingsNamespace: boolean = true) {
     this.extensionPath = extensionPath;
@@ -174,7 +157,6 @@ export class UIManager {
     this._menuXoffset = 0;
     this._menuYoffset = 0;
 
-    // Custom spring physics parameters for the open/close animation
     this._springScale = new Spring(120, 8, 1.0);
     this._springStiffness = 120;
     this._springDamping = 8;
@@ -193,14 +175,13 @@ export class UIManager {
     this._settingsSignals = [];
     this._isEffectActive = false;
 
-    // Listen for the menu opening/closing to trigger our custom physics animation
     this._animSignalId = this.menu.connect('open-state-changed', (menu: any, isOpen: boolean) => {
       if (!this._isEffectActive) return;
       if (isOpen) {
         this._applyMenuScale();
-        this._startAnimation(1); // Target scale: 1.0 (fully open)
+        this._startAnimation(1);
       } else {
-        this._startAnimation(0); // Target scale: 0.0 (closed)
+        this._startAnimation(0);
       }
     });
     this._destroySignalId = this.targetActor.connect('destroy', () => {
@@ -227,15 +208,17 @@ export class UIManager {
     this._springScale.updateParams(this._springStiffness, this._springDamping, this._springMass);
 
     this._interfaceSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.interface' });
+    // The theme context picks up the new accent colour a moment later.
     this._accentColorSignalId = this._interfaceSettings.connect('changed::accent-color', () => {
-      // console.log(`[Liquid Glass] System accent color changed.`);
-      GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+      if (this._accentColorTimeoutId)
+        GLib.Source.remove(this._accentColorTimeoutId);
+      this._accentColorTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+        this._accentColorTimeoutId = 0;
         this._applySystemAccentColor();
         return GLib.SOURCE_REMOVE;
       });
     });
 
-    // 初回実行
     this._applySystemAccentColor();
 
     if (this._settings.get_boolean(this._enableKey)) {
@@ -245,46 +228,29 @@ export class UIManager {
 
   /**
    * The accent colour and its foreground as [background, foreground] hex.
-   *
-   * [FIX] Asked of St directly, not read off a themed dummy. The dummy
-   * (`.calendar > .calendar-day.calendar-today`) only answers with the accent
-   * when the shell theme paints today in it unconditionally, as Adwaita does.
-   * MacTahoe paints an unselected today in `rgba(222, 222, 222, 0.1)` and
-   * keeps the accent for `:selected`, so the dummy read back #dedede (its
-   * alpha dropped) and the rule below then forced that pale grey onto today
-   * in every state — a white circle instead of the accent. Which answer came
-   * back depended on whether the user theme had been loaded yet when this
-   * ran. The dummy stays as the fallback for a shell without
-   * get_accent_color(), marked :selected so such themes resolve the accent.
+   * Asked of St rather than read off a themed dummy widget, because themes
+   * such as MacTahoe only paint today's date in the accent while selected.
+   * The dummy (marked :selected) remains the fallback when St has no accent.
    */
   private _resolveAccentColors(): [string, string] {
-    try {
-      const [accent, accentFg] = (St.ThemeContext.get_for_stage(global.stage) as any).get_accent_color();
-      if (accent && accentFg)
-        return [this._rgbToHex(accent.red, accent.green, accent.blue),
-          this._rgbToHex(accentFg.red, accentFg.green, accentFg.blue)];
-    } catch { }
+    const [accent, accentFg] = St.ThemeContext.get_for_stage(global.stage).get_accent_color();
+    if (accent && accentFg)
+      return [rgbToHex(accent.red, accent.green, accent.blue),
+        rgbToHex(accentFg.red, accentFg.green, accentFg.blue)];
 
-    // 1. 親要素と子要素を作成して、GNOMEテーマが要求する正しい階層を再現
+    // The theme's selectors need the calendar ancestry.
     const parent = new UnpickableWidget({ style_class: 'calendar' });
     const child = new UnpickableWidget({ style_class: 'calendar-day calendar-today' });
     child.add_style_pseudo_class('selected');
     parent.add_child(child);
 
-    // 2. UIグループに追加してスタイルを強制計算させる
     Main.layoutManager.uiGroup.add_child(parent);
     child.ensure_style();
-
-    // 3. 計算済みの色を取得
-    const themeNode = child.get_theme_node();
-    const bgColor = themeNode.get_background_color();
-
-    // 4. 用が済んだらすぐお掃除
+    const bgColor = child.get_theme_node().get_background_color();
     Main.layoutManager.uiGroup.remove_child(parent);
     parent.destroy();
 
-    // 5. HEXに変換
-    return [this._rgbToHex(bgColor.red, bgColor.green, bgColor.blue), '#ffffff'];
+    return [rgbToHex(bgColor.red, bgColor.green, bgColor.blue), '#ffffff'];
   }
 
   private _applySystemAccentColor() {
@@ -292,7 +258,8 @@ export class UIManager {
 
     const [colorStr, fgStr] = this._resolveAccentColors();
 
-    // console.log(`[Liquid Glass] Set system accent color to ${colorStr}`);
+    // St loads stylesheets only from files, so the rule goes through the cache
+    // directory.
     const cssContent = `
       .liquid-glass-menu-root .calendar-today,
       .liquid-glass-menu-root .calendar-today:hover,
@@ -305,6 +272,7 @@ export class UIManager {
       }
     `;
 
+    // Writing the file and parsing the stylesheet both throw a GError on failure.
     try {
       const cacheDir = GLib.get_user_cache_dir();
       const filePath = GLib.build_filenamev([cacheDir, 'liquid-glass-accent.css']);
@@ -327,28 +295,11 @@ export class UIManager {
     }
   }
 
-  // Utility: Convert HEX color string to normalized RGB array
-  _hexToColorArray(hex: string): [number, number, number] {
-    if (!hex || typeof hex !== 'string' || !hex.startsWith('#') || hex.length !== 7) return [1.0, 1.0, 1.0];
-    let r = parseInt(hex.slice(1, 3), 16) / 255.0;
-    let g = parseInt(hex.slice(3, 5), 16) / 255.0;
-    let b = parseInt(hex.slice(5, 7), 16) / 255.0;
-    return [r, g, b];
-  }
-
   _allocatedHeightOf(actor: any): number {
-    if (!actor || !isActorValid(actor))
+    if (!actor || !isActorValid(actor) || !actor.has_allocation())
       return 0;
-
-    try {
-      if (!actor.has_allocation?.())
-        return 0;
-      const [, allocated] = getAllocatedSize(actor);
-      if (allocated > 1)
-        return allocated;
-    } catch { }
-
-    return 0;
+    const [, allocated] = getAllocatedSize(actor);
+    return allocated > 1 ? allocated : 0;
   }
 
   _firstHeight(actors: any[], measure: (actor: any) => number): number {
@@ -360,6 +311,8 @@ export class UIManager {
     return 0;
   }
 
+  // Measures a menu's height once it has stopped changing for a few frames
+  // (it grows while its content lays out), within MENU_MEASURE_FRAMES.
   _settleHeight(menu: any, done: (height: number) => void): void {
     const actor = menu?.actor;
     if (!actor || !isActorValid(actor)) {
@@ -371,41 +324,42 @@ export class UIManager {
     let tallest = 0;
     let repeats = 0;
     const tick = () => {
-      this._measureLaterId = 0;
-      let height = 0;
-      try {
-        height = this._firstHeight([actor, menu.box], a => this._allocatedHeightOf(a));
-      } catch { }
+      const height = this._firstHeight([actor, menu.box], a => this._allocatedHeightOf(a));
 
       repeats = height > 0 && height === tallest ? repeats + 1 : 0;
       if (height > tallest) tallest = height;
 
-      if (repeats < MENU_MEASURE_STABLE_FRAMES && --framesLeft > 0 && !this._torndown) {
-        this._measureLaterId = this._addMeasureLater(tick);
-        return GLib.SOURCE_REMOVE;
-      }
-
-      done(tallest);
-      return GLib.SOURCE_REMOVE;
+      if (repeats < MENU_MEASURE_STABLE_FRAMES && --framesLeft > 0)
+        this._addMeasureLater(tick);
+      else
+        done(tallest);
     };
 
-    this._measureLaterId = this._addMeasureLater(tick);
+    this._addMeasureLater(tick);
   }
 
-  _addMeasureLater(callback: () => boolean): number {
-    return global.compositor?.get_laters?.().add(Meta.LaterType.BEFORE_REDRAW, callback) ?? 0;
+  _addMeasureLater(callback: () => void): void {
+    const id = global.compositor.get_laters().add(Meta.LaterType.BEFORE_REDRAW, () => {
+      this._measureLaterIds.delete(id);
+      callback();
+      return GLib.SOURCE_REMOVE;
+    });
+    this._measureLaterIds.add(id);
   }
 
   _cancelHeightMeasurement(): void {
-    if (this._measureLaterId !== 0) {
-      if (global.compositor?.get_laters)
-        global.compositor.get_laters().remove(this._measureLaterId);
-      this._measureLaterId = 0;
-    }
+    for (const id of this._measureLaterIds)
+      global.compositor.get_laters().remove(id);
+    this._measureLaterIds.clear();
 
+    // This menu was measuring Quick Settings: close it again, and drop the
+    // waiting callbacks, which would otherwise never be called.
     const restore = this._restoreQuickSettings;
     this._restoreQuickSettings = null;
-    if (restore) restore();
+    if (restore) {
+      restore();
+      _quickSettingsWaiting = null;
+    }
   }
 
   _withQuickSettingsHeight(done: (height: number) => void): void {
@@ -439,23 +393,18 @@ export class UIManager {
       return;
     }
 
+    // Opened invisibly, measured, and closed again.
     const opacity = actor.opacity;
     let restored = false;
     const restore = () => {
       if (restored) return;
       restored = true;
-      try { menu.close(0); } catch { }
-      try { actor.opacity = opacity; } catch { }
+      menu.close(0);
+      actor.opacity = opacity;
     };
 
-    try {
-      menu.open(0);
-      actor.opacity = 0;
-    } catch {
-      restore();
-      settle(0);
-      return;
-    }
+    menu.open(0);
+    actor.opacity = 0;
 
     this._restoreQuickSettings = restore;
     this._settleHeight(menu, height => {
@@ -466,7 +415,7 @@ export class UIManager {
   }
 
   _measureHeightScale(): void {
-    if (this._torndown || !this.menu) return;
+    if (!this.menu) return;
 
     _quickSettingsHeight = 0;
     this._ownOpenHeight = 0;
@@ -474,7 +423,7 @@ export class UIManager {
   }
 
   _noteOwnOpenedHeight(): void {
-    if (this._torndown || !this._matchQuickSettingsHeight) return;
+    if (!this._matchQuickSettingsHeight) return;
     if (this._measuringHeights || _quickSettingsHeight <= 0) return;
 
     this._measuringHeights = true;
@@ -524,9 +473,7 @@ export class UIManager {
     this._settledHeightScale = ratio;
     if (!this._ownsSettingsNamespace) return;
 
-    try {
-      this._settings.set_double(this._key('settled-height-scale'), ratio);
-    } catch { }
+    this._settings.set_double(this._key('settled-height-scale'), ratio);
   }
 
   _applyMenuScale() {
@@ -553,21 +500,10 @@ export class UIManager {
   }
 
   /**
-   * Keeps the glass directly beneath the menu it backs.
-   *
-   * [FIX] This used to pin bgActor just above Main.layoutManager.panelBox,
-   * near the BOTTOM of uiGroup, while the menu's own actor sits near the top.
-   * Anything added to uiGroup in between therefore painted over the glass but
-   * under the menu — most visibly a Dash to Dock container and its own glass,
-   * which produced a dropdown whose text and highlights were above the dock
-   * while its backdrop was below it. GNOME stacks a panel dropdown above the
-   * dock as one piece, and every other manager here already places its glass
-   * immediately below its own root; this now matches them.
-   *
-   * Re-asserted on open because uiGroup's child order is not ours to keep: an
-   * indicator, an extension or a dock rebuild that lands after setup() moves
-   * relative to us. set_child_below_sibling() is a list splice, and the
-   * index check below skips even that whenever the order is already right.
+   * Keeps the glass directly beneath the menu it backs, as the other surfaces
+   * do; placed anywhere lower, a dock between the two would cover the glass
+   * but not the menu. Re-asserted on every open, because other extensions
+   * and dock rebuilds change uiGroup's order.
    */
   private _restackGlass(): void {
     const uiGroup = Main.layoutManager.uiGroup;
@@ -584,24 +520,22 @@ export class UIManager {
     uiGroup.set_child_below_sibling(this.bgActor, root);
   }
 
-  /** Appearance key in this instance's namespace — see _keyPrefix. */
+  // A key in this instance's settings namespace; see _keyPrefix.
   private _key(suffix: string): string {
     return `${this._keyPrefix}-${suffix}`;
   }
 
-  /** The odd one out: the animation switch is named `enable-<surface>-animation`. */
+  // The animation switch is named `enable-<prefix>-animation`.
   private _animationKey(): string {
     return `enable-${this._keyPrefix}-animation`;
   }
 
-  // 設定の動的反映
   _bindSettings() {
     const connectSetting = (key: string, callback: Function) => {
       let id = this._settings.connect(`changed::${key}`, callback.bind(this));
       this._settingsSignals.push(id);
     };
 
-    // ON/OFF切り替え
     connectSetting(this._enableKey, () => {
       let enabled = this._settings.get_boolean(this._enableKey);
       if (enabled && !this._isEffectActive) this._applyEffect();
@@ -633,7 +567,7 @@ export class UIManager {
 
     connectSetting(this._key('tint-color'), () => {
       if (this.effect) {
-        let colorArray = this._hexToColorArray(this._settings.get_string(this._key('tint-color')));
+        let colorArray = hexToColorArray(this._settings.get_string(this._key('tint-color')));
         this.effect.setTintColor(...colorArray);
       }
     });
@@ -726,12 +660,11 @@ export class UIManager {
 
     if (!this.targetActor) return;
 
-    // Remove default GNOME styling and make the background transparent
+    // The menu's own background is made transparent over the glass.
     this.targetActor.add_style_class_name('liquid-glass-transparent');
     this.animActor.add_style_class_name('liquid-glass-transparent');
     this.animActor.add_style_class_name('liquid-glass-menu-root');
 
-    // Shift the menu to apply user offsets
     this._menuXoffset = this._settings.get_int(this._key('x-offset'));
     this._menuYoffset = this._settings.get_int(this._key('y-offset'));
     this.animActor.translation_x = this._menuXoffset;
@@ -749,38 +682,32 @@ export class UIManager {
         this._settings.get_string(this._key('adaptive-text-preference'))),
     };
 
-    // 1. bgActor: full monitor, no effect — starts 1×1, _syncGeometry expands it immediately
+    // Sized to the monitor by _syncGeometry().
     this.bgActor = new UnpickableActor();
     this.bgActor.set_name('liquid-glass-bg-actor');
     this.bgActor.set_size(1.0, 1.0);
 
-    // 2. liquidBox: outer layer — LiquidEffect with built-in dual-Kawase blur
     this.liquidBox = new UnpickableActor();
     this.liquidBox.set_name("liquid-box");
     this.liquidBox.set_clip_to_allocation(true);
     this.bgActor.add_child(this.liquidBox);
 
-    // dummyBreaker: transparent actor to prevent BMS black-screen optimization bug
+    // A transparent 1x1 child that works around Blur My Shell turning the
+    // glass black.
     let dummyBreaker = new UnpickableActor();
     dummyBreaker.set_name("optimization-breaker");
     dummyBreaker.set_size(1.0, 1.0);
     dummyBreaker.set_opacity(0);
     this.liquidBox.add_child(dummyBreaker);
 
-    // 3. _cloneContainer: explicit sub-container inside liquidBox.
-    //    UILayerSampler deposits its _uiClonesContainer here.
-    //    WindowCloneManager places bgClone + windowClonesContainer directly in liquidBox.
     this._cloneContainer = new UnpickableActor();
     this._cloneContainer.set_name("clone-container");
     this.liquidBox.add_child(this._cloneContainer);
 
-    // Set pivot points for scaling.
-    // The menu scales from the top-center (0.5, 0.0)
+    // The menu scales from its top centre; the glass follows it by geometry.
     this.animActor.set_pivot_point(0.5, 0.0);
-    // bgActor scales from the top-left because we manually sync its exact coordinates
     this.bgActor.set_pivot_point(0.0, 0.0);
 
-    // Find the uiGroup-direct ancestor of the menu actor so we can insert bgActor below it
     let menuRoot: Clutter.Actor = this.menu.actor;
     while (menuRoot.get_parent() && menuRoot.get_parent() !== Main.layoutManager.uiGroup) {
       const p = menuRoot.get_parent();
@@ -788,7 +715,7 @@ export class UIManager {
       menuRoot = p;
     }
 
-    // Insert bgActor below menuRoot in uiGroup to prevent recursive clone loops
+    // Below the menu, so the glass does not clone itself or the menu.
     this._menuRoot = menuRoot;
     if (menuRoot.get_parent() === Main.layoutManager.uiGroup) {
       Main.layoutManager.uiGroup.insert_child_below(this.bgActor, menuRoot);
@@ -796,11 +723,8 @@ export class UIManager {
       Main.layoutManager.uiGroup.add_child(this.bgActor);
     }
 
-    // 4. WindowCloneManager: handles wallpaper clone + window actor clones
     this._windowCloneManager = new WindowCloneManager(this.liquidBox, this._cloneContainer, `lg-${this._label}`);
 
-    // 5. UILayerSampler: handles uiGroup child clones (panels, notifications, overview, etc.)
-    //    Exclude menuRoot and window groups to prevent recursive cloning and BMS loops.
     this._uiSampler = new UILayerSampler(
       this.bgActor,
       this.liquidBox,
@@ -817,10 +741,9 @@ export class UIManager {
     let saturation = this._settings.get_double(this._key('saturation'));
     this._cornerRadius = this._settings.get_double(this._key('corner-radius'));
 
-    // Apply our custom GLSL liquid shader to liquidBox (includes built-in dual-Kawase blur)
     this.effect = new LiquidEffect({ extensionPath: this.extensionPath, settings: this._settings, owner: this._label } as any);
     this.effect.setPadding(SHADER_PADDING);
-    this.effect.setTintColor(...this._hexToColorArray(tintColorStr));
+    this.effect.setTintColor(...hexToColorArray(tintColorStr));
     this.effect.setTintStrength(tintStrength);
     this.effect.setCornerRadius(this._cornerRadius);
     this.effect.setIsDock(false);
@@ -832,35 +755,16 @@ export class UIManager {
 
     this.bgActor.hide();
 
-    // Starts the render loop and builds fresh clones when the menu is opened
+    // Runs every frame while the menu is shown, with fresh clones.
     const startFrameSync = () => {
       if (this._frameSyncId !== 0) return;
       this._buildClones();
-      // Render loop: called every frame while the menu is visible.
-      // startLaterLoop() re-arms before running the step and catches what it
-      // throws — see the comment on DockManager's frameTick: a throw that
-      // skipped the reschedule used to freeze this glass instance's clones
-      // until the menu was closed and reopened.
       startLaterLoop(this._frameSlot, {
-        // [FIX] Hard stop after teardown. A cleanup() that does not reach
-        // stopLaterLoop() — because an earlier step threw — would otherwise
-        // leave a self-rescheduling chain running forever against destroyed
-        // actors, holding this whole manager (and its settings and logger)
-        // alive. The next enable() then builds a second set on top of a live
-        // first set, which is the "the extension can no longer be enabled"
-        // symptom. Stopping the loop is still done in cleanup(); this is the
-        // backstop that does not depend on cleanup() getting that far.
-        alive: () => !this._torndown && !!this.bgActor && this.targetActor.mapped,
-        // [DIAG] See setFrameSyncFrozen() in animation/frameSync.ts. The loop
-        // keeps running but does nothing, so the cost of this poll can be
-        // measured directly.
+        alive: () => !!this.bgActor && this.targetActor.mapped,
         honourFreeze: true,
         errorTag: 'UIManager',
         step: () => {
-          // Repair the subtree if Clutter has stopped allocating it. Sampled
-          // here, at the top of the tick, because the previous frame's relayout
-          // has settled by now and this frame's sync has not dirtied anything
-          // yet. See ensureGlassAllocated().
+          // Checked before this frame's sync dirties anything.
           ensureGlassAllocated(this.bgActor);
           this._syncGeometry();
         },
@@ -868,8 +772,7 @@ export class UIManager {
     };
     const stopFrameSync = () => stopLaterLoop(this._frameSlot);
 
-    // Clear the cached size whenever the menu opens so it can recalculate
-    // based on any new notifications or calendar events
+    // The cached size is dropped on every open; the content may have changed.
     this._signals.push({
       target: this.menu,
       id: this.menu.connect('open-state-changed', (menu: any, isOpen: boolean) => {
@@ -886,7 +789,6 @@ export class UIManager {
       })
     });
 
-    // Stop the render loop when the menu is fully hidden (mapped = false)
     this._signals.push({
       target: this.menu.actor,
       id: this.menu.actor.connect('notify::mapped', () => {
@@ -910,7 +812,6 @@ export class UIManager {
     }
   }
 
-  // Rebuild clones (called on menu open): delegate entirely to WindowCloneManager + UILayerSampler
   _buildClones() {
     if (!this.bgActor) return;
     excludeOtherGlass(this._uiSampler, this.bgActor);
@@ -921,20 +822,16 @@ export class UIManager {
     this._uiSampler?.refresh();
   }
 
-  // Calculates and synchronizes the position/size of the glass background every frame
   _syncGeometry() {
     if (!this._syncBgVisibility()) return;
     const { w, h, scaleX, scaleY } = this._measureMenu();
     const [animAbsX, animAbsY] = this._resolveMenuOrigin(w);
 
-    // The background needs to be larger than the UI to account for the glass expansion
-    // and the extra padding required by the shader for edge refraction.
     let bgW = w + (this._glassExpand * 2) + (SHADER_PADDING * 2);
     let bgH = h + (this._glassExpand * 2) + (SHADER_PADDING * 2);
     let bgX = animAbsX - this._glassExpand - SHADER_PADDING;
     let bgY = animAbsY - this._glassExpand - SHADER_PADDING;
 
-    // Monitor geometry — always valid (defaults to 0 if monitor is null)
     let monitor = this._getMenuMonitorGeometry();
     let monitorX = monitor?.x ?? 0;
     let monitorY = monitor?.y ?? 0;
@@ -965,12 +862,8 @@ export class UIManager {
   }
 
   private _measureMenu(): { w: number, h: number, scaleX: number, scaleY: number } {
-    // The ALLOCATION, not get_size(). A hover restyle invalidates the layout,
-    // and while a relayout is pending get_size() answers with the preferred
-    // size, CSS margins included, although nothing on screen has moved. The
-    // old "GNOME Shell Hover Bug Compensation" subtracted those margins by hand
-    // whenever the inner and outer sizes agreed; reading the allocation makes
-    // the glass immune to it instead (see menu-geometry.test.cjs).
+    // The allocation: a hover restyle leaves a relayout pending, during
+    // which get_size() reports the preferred size including CSS margins.
     let [inW, inH] = getAllocatedSize(this.animActor);
     let [scaleX, scaleY] = this.animActor.get_scale();
 
@@ -985,7 +878,6 @@ export class UIManager {
     this._stableBaseW = Math.round(inW);
     this._stableBaseH = Math.round(inH);
 
-    // Multiply by the current animation scale.
     return {
       w: Math.max(1, this._stableBaseW * scaleX),
       h: Math.max(1, this._stableBaseH * scaleY),
@@ -1004,22 +896,18 @@ export class UIManager {
 
   private _applyGlassBounds(bgActor: Clutter.Actor, bgX: number, bgY: number, bgW: number, bgH: number,
     monitorX: number, monitorY: number, screenW: number, screenH: number) {
-    // Only update positions/sizes if they actually changed to save CPU cycles
     if (this._lastBgW === bgW && this._lastBgH === bgH &&
       this._lastBgX === bgX && this._lastBgY === bgY &&
       this._lastScreenW === screenW && this._lastScreenH === screenH) return;
 
-    // Menu position in monitor-local coordinates (shader uses these)
+    // Monitor-local, as the shader uses them.
     let localBgX = bgX - monitorX;
     let localBgY = bgY - monitorY;
     placeScreenGlass(bgActor, this.liquidBox, monitorX, monitorY, screenW, screenH,
       { x: localBgX, y: localBgY, w: bgW, h: bgH }, false);
 
     this.effect?.setShadowMaxRadius(GLASS_SHADOW_MAX_RADIUS);
-    // 4. Update shader with full-screen resolution
     this.effect?.setResolution(screenW, screenH);
-    // 5. Tell the shader where the menu lives within the full-screen FBO
-    //    (matches the dockManager setGlassGeometry pattern)
     this.effect?.setGlassGeometry(localBgX, localBgY, bgW, bgH);
 
     this._lastBgW = bgW; this._lastBgH = bgH;
@@ -1032,18 +920,10 @@ export class UIManager {
   }
 
   private _syncCaptureLayers(monitorX: number, monitorY: number, screenW: number, screenH: number) {
-    // Clone sync every frame (dockManager pattern).
-    // WindowCloneManager handles background + window actor clones.
-    // UILayerSampler handles all uiGroup children — including the overview actors
-    // automatically, so no separate overview/isOverview branch is needed.
     this._windowCloneManager?.setOffset(-monitorX, -monitorY);
     this._uiSampler?.refresh();
 
-    // [PERF ①/①b] Clip the offscreen CAPTURE to the region this glass can
-    // actually show, and hide the clones that fall outside it. Must sit
-    // between setGlassGeometry() (which makes the effect's uniforms describe
-    // this frame) and the two sync() calls below (which consume the cull
-    // rect this sets). See syncGlassCaptureClip() in capture/clip.ts.
+    // After setGlassGeometry() and before the samplers sync (see capture/clip.ts).
     syncGlassCaptureClip({
       cloneContainer: this._cloneContainer,
       effect: this.effect,
@@ -1057,7 +937,6 @@ export class UIManager {
     this._windowCloneManager?.sync();
   }
 
-  // Updates the shader resolution based on the current background actor size
   _updateResolution() {
     if (!this.bgActor || !this.effect) return;
     let [width, height] = this.bgActor.get_size();
@@ -1066,7 +945,6 @@ export class UIManager {
     }
   }
 
-  // Utility function to safely check if an actor has a specific style class
   _hasStyleClass(actor: Clutter.Actor, className: string) {
     return actor instanceof St.Widget &&
       actor.has_style_class_name(className);
@@ -1086,21 +964,18 @@ export class UIManager {
       }
     }
 
-    let children = typeof actor.get_children === 'function' ? actor.get_children() : [];
-    for (let i = 0; i < children.length; i++) {
-      this._findAllTextActors(children[i], foundActors);
-    }
+    for (const child of actor.get_children())
+      this._findAllTextActors(child, foundActors);
 
     return foundActors;
   }
 
-  // Initiates the color change for a specific actor
   _setActorColor(actor: CustomBannerActor, color: string, skipAnimations = false, batchStart?: number) {
-    if (!actor || typeof actor.set_style !== 'function') return;
+    // Clutter.Text targets have no St style.
+    if (!(actor instanceof St.Widget)) return;
 
     if (!this._styledActors.has(actor)) {
-      let origStyle = typeof actor.get_style === 'function' ? actor.get_style() : null;
-      this._styledActors.set(actor, origStyle || '');
+      this._styledActors.set(actor, actor.get_style() || '');
 
       actor.connect('destroy', () => {
         adaptiveColorTweener.cancel(actor);
@@ -1110,35 +985,22 @@ export class UIManager {
 
     let isInsensitive = false;
     if (actor instanceof St.Button) {
-      isInsensitive = (actor.reactive === false) || (typeof actor.has_style_pseudo_class === 'function' && actor.has_style_pseudo_class('insensitive'));
+      isInsensitive = !actor.reactive || actor.has_style_pseudo_class('insensitive');
     }
 
     if (actor._currentTargetColor === color && actor._currentInsensitiveState === isInsensitive) return;
-    // A light<->dark flip used to be snapped here, because interpolating the
-    // two in RGB passes through the background's own grey and the label
-    // disappears mid-tween. _animateActorColor() now cross-dissolves that case
-    // instead (see crossFadeColorAt() in animation/colors.ts), so it is animated like any
-    // other change.
     actor._currentTargetColor = color;
     actor._currentInsensitiveState = isInsensitive;
 
     this._animateActorColor(actor, color, isInsensitive, 380, skipAnimations, batchStart);
   }
 
-  // Removes all dynamically applied adaptive text color styles and stops related animations
   _clearAdaptiveStyles() {
     for (const [actor, originalStyle] of this._styledActors.entries() as MapIterator<[CustomBannerActor, string]>) {
-      if (actor && typeof actor.set_style === 'function') {
-        adaptiveColorTweener.cancel(actor);
-        actor._currentTargetColor = undefined;
-        actor._currentInsensitiveState = undefined;
-        try {
-          actor.remove_style_class_name('adaptive-text-transition');
-          actor.remove_style_class_name('adaptive-color-light');
-          actor.remove_style_class_name('adaptive-color-dark');
-          actor.set_style(originalStyle || null);
-        } catch { }
-      }
+      adaptiveColorTweener.cancel(actor);
+      actor._currentTargetColor = undefined;
+      actor._currentInsensitiveState = undefined;
+      actor.set_style(originalStyle || null);
     }
     this._styledActors.clear();
     this._backdropColored.clear();
@@ -1148,37 +1010,35 @@ export class UIManager {
   _disconnectHoverWatchers(): void {
     this._pendingBackdropRoots.clear();
     if (this._backdropRefreshId !== 0) {
-      if (global.compositor?.get_laters)
-        global.compositor.get_laters().remove(this._backdropRefreshId);
+      global.compositor.get_laters().remove(this._backdropRefreshId);
       this._backdropRefreshId = 0;
     }
 
     for (const [actor, id] of this._hoverSignals.entries()) {
-      try {
-        if (isActorValid(actor)) actor.disconnect(id);
-      } catch { }
+      if (isActorValid(actor)) actor.disconnect(id);
     }
     this._hoverSignals.clear();
   }
 
+  // A hovered row restyles its parent (the highlight); watching that lets the
+  // text colours follow the highlight instead of the glass behind it.
   _watchHoverFor(targets: Clutter.Actor[]): void {
     const restyled = new Set(targets);
     for (const target of targets) {
-      const holder = (target as any).get_parent?.();
-      if (!holder || restyled.has(holder)) continue;
-      if (this._hoverSignals.has(holder) || typeof holder.connect !== 'function') continue;
-      try {
-        this._hoverSignals.set(holder, holder.connect('style-changed', () => {
-          if (this._applyingColors) return;
-          this._queueBackdropRefresh(holder);
-        }));
-      } catch { }
+      const holder = target.get_parent();
+      if (!holder || restyled.has(holder) || this._hoverSignals.has(holder)) continue;
+      // Only St widgets emit style-changed.
+      if (!(holder instanceof St.Widget)) continue;
+      this._hoverSignals.set(holder, holder.connect('style-changed', () => {
+        if (this._applyingColors) return;
+        this._queueBackdropRefresh(holder);
+      }));
     }
 
-    for (const [actor, id] of [...this._hoverSignals.entries()]) {
-      if (isActorValid(actor)) continue;
-      this._hoverSignals.delete(actor);
-      try { actor.disconnect(id); } catch { }
+    // Forget holders that have been destroyed; their handlers went with them.
+    for (const actor of [...this._hoverSignals.keys()]) {
+      if (!isActorValid(actor))
+        this._hoverSignals.delete(actor);
     }
   }
 
@@ -1207,20 +1067,18 @@ export class UIManager {
 
     const root = this.menu?.actor ?? null;
     const batchStart = GLib.get_monotonic_time();
+    // Our own restyles emit style-changed too; see _watchHoverFor().
     this._applyingColors = true;
-    try {
-      for (const actor of new Set(targets)) {
-        const color = this._contrastSampler._backdropColorFor(actor, this._adaptiveConfig, root);
-        if (color) {
-          this._backdropColored.add(actor);
-          this._setActorColor(actor as unknown as CustomBannerActor, color, true, batchStart);
-        } else {
-          this._backdropColored.delete(actor);
-        }
+    for (const actor of new Set(targets)) {
+      const color = this._contrastSampler._backdropColorFor(actor, this._adaptiveConfig, root);
+      if (color) {
+        this._backdropColored.add(actor);
+        this._setActorColor(actor as unknown as CustomBannerActor, color, true, batchStart);
+      } else {
+        this._backdropColored.delete(actor);
       }
-    } finally {
-      this._applyingColors = false;
     }
+    this._applyingColors = false;
   }
 
   // Iterates through the color map and applies the new target colors to the respective actors
@@ -1228,22 +1086,16 @@ export class UIManager {
     if (!colorMap || colorMap.size === 0)
       return;
 
-    // One timestamp for the whole map. Every actor that flips in this round
-    // then runs off the same clock, so a row of labels moves as one instead of
-    // each starting whenever its own source first fired.
+    // One timestamp for the whole map, so a row of labels flips together.
     const batchStart = GLib.get_monotonic_time();
     this._applyingColors = true;
-    try {
-      for (const [actor, color] of colorMap.entries()) {
-        if (this._backdropColored.has(actor)) continue;
-        this._setActorColor(actor as unknown as CustomBannerActor, color, skipAnimations, batchStart);
-      }
-    } finally {
-      this._applyingColors = false;
+    for (const [actor, color] of colorMap.entries()) {
+      if (this._backdropColored.has(actor)) continue;
+      this._setActorColor(actor as unknown as CustomBannerActor, color, skipAnimations, batchStart);
     }
+    this._applyingColors = false;
   }
 
-  // Starts the timer for periodically sampling contrast and updating adaptive text colors
   _startAdaptiveColorSampling(skipAnimations = false) {
     if (!this._adaptiveConfig.enabled)
       return;
@@ -1269,7 +1121,6 @@ export class UIManager {
     );
   }
 
-  // Stops the adaptive color sampling timer
   _stopAdaptiveColorSampling() {
     if (this._adaptiveTimerId !== 0) {
       GLib.source_remove(this._adaptiveTimerId);
@@ -1277,7 +1128,6 @@ export class UIManager {
     }
   }
 
-  // Collects target actors, samples their contrast, and triggers color updates
   _updateAdaptiveTextColors(skipAnimations = false) {
     if (!this._adaptiveConfig.enabled || this._adaptiveInFlight)
       return;
@@ -1292,8 +1142,6 @@ export class UIManager {
 
     this._contrastSampler
       .chooseColorsForActors(targets, this._adaptiveConfig, this.menu?.actor,
-        // [PERF B4] Skip the capture while the glass under the text has not
-        // been repainted since the last one. See chooseColorsForActors().
         () => this.effect?.paintCount ?? NaN)
       .then(colorMap => {
         if (!this._isEffectActive || this._actorDestroyed) return;
@@ -1307,42 +1155,24 @@ export class UIManager {
       });
   }
 
-  // Converts a hexadecimal color code string to an RGB object.
-  _hexToRgb(hex: string) {
-    let bigint = parseInt(hex.replace('#', ''), 16);
-    return {
-      r: (bigint >> 16) & 255,
-      g: (bigint >> 8) & 255,
-      b: bigint & 255
-    };
-  }
-
-  // Converts RGB numerical values to a hexadecimal color string.
-  _rgbToHex(r: number, g: number, b: number) {
-    return "#" + (1 << 24 | r << 16 | g << 8 | b).toString(16).slice(1);
-  }
-
   _animateActorColor(actor: CustomBannerActor, targetHexColor: string, isInsensitive: boolean,
     durationMs = 380, skipAnimations = false, batchStart?: number) {
-    if (!actor || Object.keys(actor).length === 0) return;
-
-    // NOT cancelled here: add() below reads the entry this may already have,
-    // so that an interrupted tween restarts from the colour that is actually
-    // on screen rather than from a theme node St has not re-resolved yet.
-    // The snap path does cancel, because nothing should keep stepping after it.
+    // An existing tween is not cancelled: add() restarts from the colour it
+    // last applied.
     const originalStyle = (this._styledActors.get(actor) || '').trim();
     const stylePrefix = originalStyle ? `${originalStyle.replace(/;$/, '')}; ` : '';
     let themeNode = actor.get_theme_node();
     let startColor = themeNode.get_foreground_color();
 
-    let targetRgb = this._hexToRgb(targetHexColor);
+    let targetRgb = hexToRgb(targetHexColor);
 
+    // Insensitive items keep their dimmed look.
     let targetAlpha = isInsensitive ? 0.5 : 1.0;
     let startAlpha = startColor.alpha / 255.0;
 
     const apply = (r: number, g: number, b: number, a: number) => {
       const rgba = `rgba(${r}, ${g}, ${b}, ${a.toFixed(3)})`;
-      try { actor.set_style(`${stylePrefix}color: ${rgba}; -st-icon-foreground-color: ${rgba};`); } catch { }
+      actor.set_style(`${stylePrefix}color: ${rgba}; -st-icon-foreground-color: ${rgba};`);
     };
 
     if (skipAnimations) {
@@ -1352,8 +1182,6 @@ export class UIManager {
     }
 
     const startRgb = { r: startColor.red, g: startColor.green, b: startColor.blue };
-    // One shared frame-clock driver, one shared start time per batch — see
-    // AdaptiveColorTweener in animation/colors.ts for why this is not a per-actor timer.
     adaptiveColorTweener.add(actor, {
       startRgb, startAlpha,
       targetRgb, targetAlpha,
@@ -1363,13 +1191,12 @@ export class UIManager {
     }, batchStart);
   }
 
-  // Handles the custom bounce/spring physics when the menu opens or closes
+  // The spring open/close animation.
   _startAnimation(targetValue: number) {
     if (this._tickId !== 0) {
       removeFrameTicker(this._tickId);
       this._tickId = 0;
     }
-    // If animation is disabled, just reset to default state
     if (!this._enableAnimation) {
       showMenuAtRest(this.bgActor, this.animActor);
       return;
@@ -1389,9 +1216,6 @@ export class UIManager {
     if (this._tickId === 0) {
       let lastTime = GLib.get_monotonic_time();
 
-      // [PERF C1] Stepped by the frame clock, once per frame at most — see
-      // addFrameTicker(). The spring itself sub-steps, so the motion is as
-      // fine as the old 1ms timer's while the actors are written once a frame.
       this._tickId = addFrameTicker(() => {
         if (!this.bgActor || !this.targetActor) {
           this._tickId = 0;
@@ -1416,28 +1240,30 @@ export class UIManager {
 
     this._stopAdaptiveColorSampling();
     this._clearAdaptiveStyles();
-    this._teardownStep('disconnectEffectSources', () => this._disconnectEffectSources());
-    this._teardownStep('restoreMenuActors', () => this._restoreMenuActors());
-    this._teardownStep('releaseGlass', () => this._releaseGlass());
+    this._disconnectEffectSources();
+    this._restoreMenuActors();
+    this._releaseGlass();
   }
 
   private _disconnectEffectSources() {
-    // Disconnect all event listeners
-    for (let sig of this._signals) {
-      try {
-        if (sig && sig.id) sig.target.disconnect(sig.id);
-      } catch { }
-    }
+    for (let sig of this._signals)
+      sig.target.disconnect(sig.id);
     this._signals = [];
 
-    if (this._tickId && this._tickId !== 0) {
+    if (this._tickId) {
       removeFrameTicker(this._tickId);
       this._tickId = 0;
     }
 
-    // Stop the render frame loop
     stopLaterLoop(this._frameSlot);
+    this._disconnectAccentColor();
+  }
 
+  private _disconnectAccentColor() {
+    if (this._accentColorTimeoutId) {
+      GLib.Source.remove(this._accentColorTimeoutId);
+      this._accentColorTimeoutId = 0;
+    }
     if (this._interfaceSettings && this._accentColorSignalId) {
       this._interfaceSettings.disconnect(this._accentColorSignalId);
       this._accentColorSignalId = 0;
@@ -1446,7 +1272,6 @@ export class UIManager {
   }
 
   private _restoreMenuActors() {
-    // Remove transparent CSS overrides
     if (!this._actorDestroyed) this.targetActor.remove_style_class_name('liquid-glass-transparent');
     if (!this._actorDestroyed && this.animActor) {
       this.animActor.remove_style_class_name('liquid-glass-transparent');
@@ -1480,15 +1305,12 @@ export class UIManager {
   }
 
   private _releaseGlass() {
-    // DESTROY EFFECT FIRST
+    // The effect is cleaned up before its actor is destroyed.
     if (this.effect) {
       this.effect.cleanup();
       this.effect = null;
     }
 
-    // DESTROY ACTOR SECOND
-    // bgActor.destroy() cascades through liquidBox → _cloneContainer
-    // and its children, so we only need to null the references afterwards.
     if (this.bgActor) {
       this.bgActor.destroy();
       this.bgActor = null;
@@ -1497,7 +1319,6 @@ export class UIManager {
     this._cloneContainer = null;
     this._menuRoot = null;
 
-    // Clean up managers (try-catch in their destroy() handles already-destroyed actors)
     this._uiSampler?.destroy();
     this._uiSampler = null;
     this._windowCloneManager?.destroy();
@@ -1507,62 +1328,25 @@ export class UIManager {
     this._stableBaseH = undefined;
   }
 
-  // [FIX] Teardown must not be all-or-nothing.
-  //
-  // These steps used to run bare, one after another, so the first one that
-  // threw skipped every step after it — signal handlers, actors, effects and
-  // (worst of all) the per-frame later chain stayed alive, and the next
-  // enable() built a second set on top. Disabling is exactly when a throw is
-  // most likely: the shell is destroying the same actors we are.
-  private _teardownStep(name: string, fn: () => void): void {
-    try {
-      fn();
-    } catch (e) {
-      try {
-        this._logger?.error(`[Liquid Glass] ${this.constructor.name}.${name} failed during cleanup: ${e}`);
-      } catch {
-        console.error(`[Liquid Glass] ${name} failed during cleanup: ${e}`);
-      }
-    }
-  }
-
   cleanup() {
-    this._torndown = true;
+    this._cancelHeightMeasurement();
+    stopLaterLoop(this._frameSlot);
 
-    this._teardownStep('heightMeasurement', () => this._cancelHeightMeasurement());
+    for (let sigId of this._settingsSignals)
+      this._settings.disconnect(sigId);
+    this._settingsSignals = [];
 
-    // The later chain goes first and unconditionally — see _teardownStep().
-    this._teardownStep('frameSync', () => stopLaterLoop(this._frameSlot));
+    // These exist even while the effect is off.
+    if (this._animSignalId) {
+      this.menu.disconnect(this._animSignalId);
+      this._animSignalId = 0;
+    }
+    if (this._destroySignalId) {
+      this.targetActor.disconnect(this._destroySignalId);
+      this._destroySignalId = 0;
+    }
+    this._disconnectAccentColor();
 
-    this._teardownStep('settingsSignals', () => {
-      for (let sigId of this._settingsSignals) {
-        try { this._settings.disconnect(sigId); } catch { }
-      }
-      this._settingsSignals = [];
-    });
-
-    // These connections also exist when the global menu effect is disabled,
-    // so they cannot be left to _removeEffect() below.
-    this._teardownStep('menuSignals', () => {
-      if (this._animSignalId) {
-        this.menu.disconnect(this._animSignalId);
-        this._animSignalId = 0;
-      }
-      if (this._destroySignalId) {
-        this.targetActor.disconnect(this._destroySignalId);
-        this._destroySignalId = 0;
-      }
-      if (this._interfaceSettings && this._accentColorSignalId) {
-        this._interfaceSettings.disconnect(this._accentColorSignalId);
-        this._accentColorSignalId = 0;
-        this._interfaceSettings = null;
-      }
-    });
-
-    // [FIX] This used to be `if (!this.targetActor) return;`, which skipped
-    // _removeEffect() entirely whenever the date menu had gone away —
-    // leaving the signal handlers, the glass actors and the per-frame later
-    // chain in place across disable().
-    this._teardownStep('removeEffect', () => this._removeEffect());
+    this._removeEffect();
   }
 }

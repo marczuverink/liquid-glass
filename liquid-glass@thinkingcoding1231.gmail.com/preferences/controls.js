@@ -143,7 +143,7 @@ export class PreferenceControls {
     row.add_suffix(scale);
     // Adw.SpinRow packs its spin button into the suffix box first; move the
     // slider in front of it so the row reads title, slider, number.
-    scale.get_parent?.()?.reorder_child_after?.(scale, null);
+    scale.get_parent().reorder_child_after(scale, null);
     row._slider = scale;
   }
 

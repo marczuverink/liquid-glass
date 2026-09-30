@@ -1,4 +1,4 @@
-// Logger class. Used by other classes and initialized in extension.js.
+// Writes only while the `output-logs` setting is on.
 export class Logger {
     _settings;
     _outputLogs;
@@ -17,11 +17,7 @@ export class Logger {
             this._outputLogs = this._settings.get_boolean('output-logs');
         });
     }
-    /**
-     * Whether log()/error() currently write anything. Callers that build an
-     * expensive message (or query Clutter) purely to log it should check this
-     * first — log() itself only discards the finished string.
-     */
+    // Check this before building an expensive message only to log it.
     get enabled() {
         return this._outputLogs;
     }
@@ -46,11 +42,8 @@ export class Logger {
         console.debug(...args);
     }
     cleanup() {
-        if (this._settings) {
-            for (const id of this._settingsIds) {
-                this._settings.disconnect(id);
-            }
-            this._settingsIds = [];
-        }
+        for (const id of this._settingsIds)
+            this._settings.disconnect(id);
+        this._settingsIds = [];
     }
 }

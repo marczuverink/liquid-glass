@@ -1,9 +1,9 @@
-// [PERF C1] The longest frame the physics follows in full: covers the 20fps
-// cap the preferences offer, so a capped animation runs at the same speed.
-// Longer gaps (a stall) are clamped rather than jumped over.
+// The longest frame the physics follows in full. It covers the 20fps cap the
+// preferences offer, so a capped animation keeps its speed; longer gaps (a
+// stall) are clamped instead of jumped over.
 export const MAX_STEP_S = 0.066;
 const SUB_STEP_S = 0.002;
-// A straightforward mathematical implementation of Hooke's Law for spring physics
+// Damped spring (Hooke's law), integrated with semi-implicit Euler.
 export class Spring {
     stiffness;
     damping;
@@ -12,77 +12,67 @@ export class Spring {
     velocity;
     target;
     constructor(stiffness, damping, mass) {
-        this.stiffness = stiffness; // How rigid the spring is (higher = faster, more snappy)
-        this.damping = damping; // Friction (higher = less bounce, settles quicker)
-        this.mass = mass; // Weight of the object
-        this.value = 0; // Current position/scale
-        this.velocity = 0; // Current speed
-        this.target = 0; // Destination value
-    }
-    updateParams(stiffness, damping, mass) {
-        this.stiffness = stiffness; // How rigid the spring is (higher = faster, more snappy)
-        this.damping = damping; // Friction (higher = less bounce, settles quicker)
-        this.mass = mass; // Weight of the object
-    }
-    update(elapsedMs) {
-        // Cap max delta time to prevent the spring from violently exploding during heavy CPU load
-        let dt = elapsedMs / 1000;
-        if (dt > MAX_STEP_S)
-            dt = MAX_STEP_S;
-        // [PERF C1] Sub-stepped. The integrator is explicit (semi-implicit Euler),
-        // and with the stiffness the preferences allow a 16.7ms frame is not a
-        // stable step. The old 1ms GLib timer hid that by stepping — and repainting
-        // — a thousand times a second. Now the physics keeps its fine step while
-        // the frame driver writes the actors once per frame.
-        const mass = this.mass > 1e-3 ? this.mass : 1e-3;
-        let remaining = dt;
-        while (remaining > 1e-6) {
-            const h = Math.min(remaining, SUB_STEP_S);
-            // F = -k * x
-            const springForce = -this.stiffness * (this.value - this.target);
-            // F = -c * v
-            const dampingForce = -this.damping * this.velocity;
-            // a = F / m
-            const acceleration = (springForce + dampingForce) / mass;
-            // Semi-implicit Euler
-            this.velocity += acceleration * h;
-            this.value += this.velocity * h;
-            remaining -= h;
-        }
-        // Return true if the spring has virtually stopped moving and reached its destination
-        return Math.abs(this.velocity) < 0.01 && Math.abs(this.value - this.target) < 0.001;
-    }
-}
-export class SwiftSpring {
-    response;
-    dampingFraction;
-    mass;
-    value;
-    velocity;
-    target;
-    constructor(response, dampingFraction, mass = 1.0) {
-        this.response = typeof response === 'number' && !isNaN(response) && response > 0.01 ? response : 0.4;
-        this.dampingFraction = typeof dampingFraction === 'number' && !isNaN(dampingFraction) && dampingFraction >= 0 ? dampingFraction : 0.7;
-        this.mass = typeof mass === 'number' && !isNaN(mass) && mass > 0.01 ? mass : 1.0;
+        this.stiffness = stiffness;
+        this.damping = damping;
+        this.mass = mass;
         this.value = 0;
         this.velocity = 0;
         this.target = 0;
     }
+    updateParams(stiffness, damping, mass) {
+        this.stiffness = stiffness;
+        this.damping = damping;
+        this.mass = mass;
+    }
+    update(elapsedMs) {
+        let dt = elapsedMs / 1000;
+        if (dt > MAX_STEP_S)
+            dt = MAX_STEP_S;
+        // Sub-stepped: with the stiffness the preferences allow, a whole frame is
+        // not a stable step for an explicit integrator.
+        const mass = this.mass > 1e-3 ? this.mass : 1e-3;
+        let remaining = dt;
+        while (remaining > 1e-6) {
+            const h = Math.min(remaining, SUB_STEP_S);
+            const springForce = -this.stiffness * (this.value - this.target);
+            const dampingForce = -this.damping * this.velocity;
+            const acceleration = (springForce + dampingForce) / mass;
+            this.velocity += acceleration * h;
+            this.value += this.velocity * h;
+            remaining -= h;
+        }
+        // Settled.
+        return Math.abs(this.velocity) < 0.01 && Math.abs(this.value - this.target) < 0.001;
+    }
+}
+// A spring described by response (period, seconds) and damping fraction, as
+// SwiftUI does, solved analytically so it cannot diverge at any stiffness.
+export class SwiftSpring {
+    response = 0.4;
+    dampingFraction = 0.7;
+    mass = 1.0;
+    value = 0;
+    velocity = 0;
+    target = 0;
+    constructor(response, dampingFraction, mass = 1.0) {
+        this.updateParams(response, dampingFraction, mass);
+    }
+    // Out-of-range values (including NaN) keep the previous parameter.
     updateParams(response, dampingFraction, mass = 1.0) {
-        if (typeof response === 'number' && !isNaN(response) && response > 0.01)
+        if (response > 0.01)
             this.response = response;
-        if (typeof dampingFraction === 'number' && !isNaN(dampingFraction) && dampingFraction >= 0)
+        if (dampingFraction >= 0)
             this.dampingFraction = dampingFraction;
-        if (typeof mass === 'number' && !isNaN(mass) && mass > 0.01)
+        if (mass > 0.01)
             this.mass = mass;
     }
     update(elapsedMs) {
         let dt = elapsedMs / 1000;
-        if (isNaN(dt) || dt <= 0)
+        if (!(dt > 0))
             return false;
         if (dt > 0.1)
             dt = 0.1;
-        if (isNaN(this.value) || !isFinite(this.value) || isNaN(this.velocity) || !isFinite(this.velocity)) {
+        if (!Number.isFinite(this.value) || !Number.isFinite(this.velocity)) {
             this.value = this.target;
             this.velocity = 0;
             return true;
@@ -98,9 +88,8 @@ export class SwiftSpring {
         const zeta = this.dampingFraction;
         let x_t = 0;
         let v_t = 0;
-        // Analytical solution — no numerical explosion regardless of spring stiffness
         if (zeta < 0.999) {
-            // 1. Underdamped — standard bouncy motion
+            // Underdamped
             const omegaD = omega0 * Math.sqrt(1.0 - zeta * zeta);
             const alpha = zeta * omega0;
             const exp = Math.exp(-alpha * dt);
@@ -110,7 +99,7 @@ export class SwiftSpring {
             v_t = exp * (v0 * cos - ((alpha * v0 + omega0 * omega0 * x0) / omegaD) * sin);
         }
         else if (zeta > 1.001) {
-            // 2. Overdamped — slow, viscous motion
+            // Overdamped
             const beta = omega0 * Math.sqrt(zeta * zeta - 1.0);
             const gamma1 = -zeta * omega0 + beta;
             const gamma2 = -zeta * omega0 - beta;
@@ -122,14 +111,14 @@ export class SwiftSpring {
             v_t = c1 * gamma1 * exp1 + c2 * gamma2 * exp2;
         }
         else {
-            // 3. Critically damped — fastest settle without overshoot
+            // Critically damped
             const exp = Math.exp(-omega0 * dt);
             x_t = exp * (x0 + (v0 + omega0 * x0) * dt);
             v_t = exp * (v0 - omega0 * (v0 + omega0 * x0) * dt);
         }
         this.value = x_t + this.target;
         this.velocity = v_t;
-        if (isNaN(this.value) || !isFinite(this.value)) {
+        if (!Number.isFinite(this.value)) {
             this.value = this.target;
             this.velocity = 0;
             return true;

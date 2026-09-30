@@ -6,12 +6,10 @@ export class BlurRenderer {
     _pipelines;
     _passes;
     _repaint;
-    _logger;
-    constructor(_pipelines, _passes, _repaint, _logger) {
+    constructor(_pipelines, _passes, _repaint) {
         this._pipelines = _pipelines;
         this._passes = _passes;
         this._repaint = _repaint;
-        this._logger = _logger;
     }
     get radius() { return this._targetRadius; }
     get downscale() { return this._blurDownscale; }
@@ -72,8 +70,7 @@ export class BlurRenderer {
         if (factor === this._blurDownscale)
             return;
         this._blurDownscale = factor;
-        // Level 0 changes size, so the pool is stale; the next paint rebuilds
-        // it through resize() once it sees the mismatch.
+        // Level 0 changes size; the next paint rebuilds the pool.
         this._destroyTexturePool();
         this.setBlurRadius(this._targetRadius);
         this._repaint();
@@ -89,7 +86,6 @@ export class BlurRenderer {
         this._destroyTexturePool();
         this._gaussianHPipeline = null;
         this._gaussianVPipeline = null;
-        // Reset the dynamic Gaussian shader generation state too.
         this._gaussianKernel = null;
         this._pendingGaussianKernel = null;
         this._gaussianPipelineDirty = false;
@@ -107,80 +103,45 @@ export class BlurRenderer {
             gaussianPipelines: !!(this._gaussianHPipeline && this._gaussianVPipeline),
         };
     }
-    // ── Blur texture pool ──
-    // Index 0 = w/2 × h/2 (first half-res level)
-    // Index N = w/(2^(N+1)) × h/(2^(N+1))
+    // The texture pool; see resize() for the sizes.
     _blurTextures = [];
     _blurFbos = [];
-    // ── Intermediate buffers for the Gaussian blur ──
-    // Holds the output of the horizontal pass (same resolution as _blurTextures
-    // at the corresponding index).
+    // The Gaussian horizontal pass output, per level.
     _gaussianTempTextures = [];
     _gaussianTempFbos = [];
-    // [FIX round 12] Dedicated output targets, one per pool level, so no pass
-    // ever writes into a framebuffer that an earlier pass read from.
-    //
-    // Immediate-mode drawing let the passes ping-pong freely: each pass ran and
-    // flushed on the spot, so reusing _blurFbos[i] as both a downsample target
-    // and an upsample target was harmless. Deferred paint nodes make Cogl build
-    // a real dependency graph between framebuffers, and that ping-pong is a
-    // CYCLE in it (_blurFbos[0] reads the Gaussian temp buffer while the temp
-    // buffer reads _blurFbos[0]; adjacent Kawase levels do the same). Cogl
-    // detects the cycle, refuses the dependency
-    // ("_cogl_framebuffer_add_dependency: assertion '!find_cycle (...)' failed")
-    // and the passes lose their ordering, so the composite samples an
-    // never-written blur texture — which is exactly the flat tint with no
-    // background in it, while the rim lighting (which does not read the blur
-    // layer) kept working.
-    //
-    // Writing upsample/vertical output into separate targets makes the pass
-    // graph a strict DAG. Costs one extra half-resolution texture per level.
+    // Separate output targets per level, so no pass writes a framebuffer that
+    // an earlier pass read. Deferred paint nodes make Cogl track dependencies
+    // between framebuffers, and ping-ponging is a cycle it rejects; the passes
+    // then lose their order and the composite reads an unwritten blur.
     _upTextures = [];
     _upFbos = [];
-    // The texture holding the finished blur for this frame; set by whichever
-    // blur runner executed, read by the composite.
+    // This frame's finished blur, read by the composite.
     _blurResultTex = null;
-    // Separable Gaussian
-    _gaussianHPipeline = null; // horizontal pass
-    _gaussianVPipeline = null; // vertical pass
-    // ── Active blur method (0: Gaussian, 1: Dual Kawase) ──
-    _blurMethod = 1; // default: Dual Kawase
-    // ── State for dynamic Gaussian shader generation ──
-    // The kernel currently compiled into the H/V pipelines (its tap count
-    // determines the shader's structure).
+    _gaussianHPipeline = null;
+    _gaussianVPipeline = null;
+    _blurMethod = 1;
+    // The kernel compiled into the H/V pipelines, and one waiting to be
+    // compiled on the next paint.
     _gaussianKernel = null;
-    // A kernel waiting to be compiled; picked up safely inside vfunc_paint_target.
     _pendingGaussianKernel = null;
-    // While true, the Gaussian H/V pipelines will be recompiled on the next paint.
     _gaussianPipelineDirty = false;
-    // The sigma (in half-res texels) that the currently compiled kernel targets.
-    // Small changes in radius that don't change the tap count are absorbed via
-    // the kernel_scale ratio below instead of triggering a recompile.
+    // The sigma the compiled kernel was built for; radius changes that keep
+    // the tap count only change kernel_scale = sigma / _gaussianBaseSigma.
     _gaussianBaseSigma = 0;
-    // kernel_scale uniform sent to the shader (= current sigma / _gaussianBaseSigma).
     _gaussianScale = 1.0;
-    // Number of fetch pairs in the currently compiled (or pending) kernel.
     _gaussianFetchPairs = 0;
     _poolWidth = 0;
     _poolHeight = 0;
     // glass-blur-downscale: 2 = half resolution (default), 4 = quarter.
     _blurDownscale = 2;
-    // Number of blur passes. Each direction runs PASS_COUNT passes.
-    // With 4: 1/2 → 1/4 → 1/8 → 1/16 → (turnaround) → 1/8 → 1/4 → 1/2
+    // Passes per direction. With 4: 1/2 → 1/4 → 1/8 → 1/16 → 1/8 → 1/4 → 1/2.
     PASS_COUNT = 4;
-    // Blur radius, forwarded to the down/upsample shaders' blur_radius uniform.
-    // Any real number >= 0.5; larger values produce a stronger blur.
-    // Default for downsample is 0.5 (the original Kawase value), default for
-    // upsample is 1.0 (the original tent-filter value).
+    // The Kawase shaders' blur_radius uniforms.
     _blurRadiusDown = 0.5;
     _blurRadiusUp = 1.0;
-    // The last radius requested by the caller (before method-specific mapping).
+    // The requested radius, before the per-method mapping.
     _targetRadius = 15.0;
-    /**
-     * Compiles the H/V pipelines from a dynamically generated GaussianKernel.
-     * The caller is responsible for having already dropped any previous
-     * pipeline reference (we never call run_dispose(), see _destroyTexturePool).
-     */
+    // The caller drops the previous pipelines first.
     _compileGaussianPipelines(ctx, kernel) {
         this._gaussianHPipeline = Cogl.Pipeline.new(ctx);
         configureSamplerLayer(this._gaussianHPipeline, 0);
@@ -198,22 +159,10 @@ export class BlurRenderer {
         this._gaussianPipelineDirty = false;
         this._pendingGaussianKernel = null;
     }
-    // ─── Texture pool management ─────────────────────────────────────────────────
     /**
-     * Allocates the blur texture + FBO pairs for resolution (w, h).
-     *
-     * Index-to-resolution mapping (with glass-blur-downscale at its default 2):
-     *   [0]: w>>1 × h>>1  (= w/2)
-     *   [1]: w>>2 × h>>2  (= w/4)
-     *   ...
-     *   [PASS_COUNT-1]: w >> PASS_COUNT
-     *
-     * [PERF] glass-blur-downscale = 4 shifts the whole ladder down one more
-     * step, so level 0 is w/4 × h/4 — a quarter of the fill and a quarter of
-     * the texture memory of the default, at the cost of a visibly coarser
-     * blur. See _setGaussianBlurRadius(), which converts the radius into the
-     * matching texel space, and _runGaussianBlur()'s pre-pass, which switches
-     * filter to keep a 4x downsample from aliasing.
+     * Allocates the pool for a (w, h) capture. Level i is w >> (i + 1) wide
+     * (level 0 at half resolution); glass-blur-downscale = 4 shifts every level
+     * down one more step.
      */
     resize(ctx, w, h) {
         this._destroyTexturePool();
@@ -221,45 +170,25 @@ export class BlurRenderer {
         let pw = Math.max(w >> shift, 1);
         let ph = Math.max(h >> shift, 1);
         for (let i = 0; i < this.PASS_COUNT; i++) {
-            try {
-                // Main buffer, shared by Dual Kawase and Gaussian.
-                const tex = Cogl.Texture2D.new_with_size(ctx, pw, ph);
-                const fbo = Cogl.Offscreen.new_with_texture(tex);
-                this._blurTextures.push(tex);
-                this._blurFbos.push(fbo);
-                // Intermediate buffer for the Gaussian horizontal pass (same resolution).
-                const tmpTex = Cogl.Texture2D.new_with_size(ctx, pw, ph);
-                const tmpFbo = Cogl.Offscreen.new_with_texture(tmpTex);
-                this._gaussianTempTextures.push(tmpTex);
-                this._gaussianTempFbos.push(tmpFbo);
-                // [FIX round 12] Output target for this level (see _upTextures).
-                const upTex = Cogl.Texture2D.new_with_size(ctx, pw, ph);
-                const upFbo = Cogl.Offscreen.new_with_texture(upTex);
-                this._upTextures.push(upTex);
-                this._upFbos.push(upFbo);
-            }
-            catch (e) {
-                this._logger?.error(`[Liquid Glass] Failed to build texture pool at pass ${i} (${pw}x${ph}): ${e}`);
-                this._destroyTexturePool();
-                return;
-            }
+            const tex = Cogl.Texture2D.new_with_size(ctx, pw, ph);
+            this._blurTextures.push(tex);
+            this._blurFbos.push(Cogl.Offscreen.new_with_texture(tex));
+            const tmpTex = Cogl.Texture2D.new_with_size(ctx, pw, ph);
+            this._gaussianTempTextures.push(tmpTex);
+            this._gaussianTempFbos.push(Cogl.Offscreen.new_with_texture(tmpTex));
+            const upTex = Cogl.Texture2D.new_with_size(ctx, pw, ph);
+            this._upTextures.push(upTex);
+            this._upFbos.push(Cogl.Offscreen.new_with_texture(upTex));
             pw = Math.max(pw >> 1, 1);
             ph = Math.max(ph >> 1, 1);
         }
         this._poolWidth = w;
         this._poolHeight = h;
     }
-    /**
-     * Runs the Dual Kawase blur.
-     *
-     *   Downsample phase: srcTex → [0] → [1] → ... → [PASS_COUNT-1]
-     *   Upsample phase:   [PASS_COUNT-1] → ... → [0]
-     *
-     * The result ends up in _blurTextures[0].
-     */
+    // Dual Kawase: downsample srcTex through every level, then upsample back
+    // into the _up* targets.
     _runDualKawaseBlur(parentNode, srcTex, srcUV) {
         let currentSrc = srcTex;
-        // ── Downsample phase ────────────────────────────────────────────────────
         for (let i = 0; i < this.PASS_COUNT; i++) {
             const destFbo = this._blurFbos[i];
             const destTex = this._blurTextures[i];
@@ -267,18 +196,10 @@ export class BlurRenderer {
             const destH = destTex.get_height();
             const invW = 1.0 / currentSrc.get_width();
             const invH = 1.0 / currentSrc.get_height();
-            // [FIX] Only the FIRST pass reads the raw capture, which may carry
-            // padding; it samples just the valid sub-rect via srcUV. Every later
-            // pass reads one of our own pool textures, which contain the
-            // padding-free region already and so use the full 0..1 range.
-            // inv_size stays 1/textureSize either way — it is a texel step in
-            // texture space, unaffected by which sub-rect we sample.
+            // Only the first pass reads the padded capture, through srcUV.
             const uv = (i === 0) ? srcUV : [0, 0, 1, 1];
-            // [PERF] glass-blur-downscale = 4 makes the FIRST pass a 4x reduction
-            // rather than 2x, and Kawase's kernel is not a 4x minification filter —
-            // at the smallest radius _blurRadiusDown is 0.0, which collapses all
-            // five taps onto one texel. The box filter is used for that one pass
-            // instead; the remaining passes still give the blur its character.
+            // At downscale 4 the first pass is a 4x reduction, which Kawase's
+            // kernel does not filter properly; the box filter does.
             const boxFirst = i === 0 && this._blurDownscale >= 4 && this._pipelines.boxDown !== null;
             const pipeline = boxFirst
                 ? this._passes.pipeline('kawase-down-0-box', this._pipelines.boxDown)
@@ -290,18 +211,11 @@ export class BlurRenderer {
             this._passes.add(parentNode, destFbo, pipeline, destW, destH, uv);
             currentSrc = destTex;
         }
-        // ── Upsample phase ──────────────────────────────────────────────────────
-        // [FIX round 12] Reads the downsample chain but writes into the separate
-        // _up* targets, so no framebuffer is ever both an input to one pass and
-        // the output of a later one. That mutual dependency is what Cogl's cycle
-        // check rejected once the passes became deferred nodes.
         if (this.PASS_COUNT <= 1) {
             this._blurResultTex = this._blurTextures[0];
             return;
         }
         for (let i = this.PASS_COUNT - 1; i > 0; i--) {
-            // First step reads the deepest downsample level; later steps read the
-            // previous upsample output.
             const srcTexture = (i === this.PASS_COUNT - 1)
                 ? this._blurTextures[i]
                 : this._upTextures[i];
@@ -319,19 +233,9 @@ export class BlurRenderer {
         }
         this._blurResultTex = this._upTextures[0];
     }
-    /**
-     * Runs the separable Gaussian blur.
-     *
-     * PASS_COUNT is always fixed to 1 for this method, and the texture pool
-     * only uses a single w/2 × h/2 level (no pool rebuild / pass-count change
-     * happens when the radius changes).
-     *
-     *   srcTex → [gaussianTemp[0]] (horizontal pass) → [blurTextures[0]] (vertical pass)
-     *
-     * The H/V pipelines are the ones dynamically built from the kernel
-     * computed in setBlurRadius() (fully unrolled). Result ends up in
-     * _blurTextures[0].
-     */
+    // Separable Gaussian on pool level 0 only: a downsampling pre-pass into
+    // _blurTextures[0], the horizontal pass into the temp texture, and the
+    // vertical pass into _upTextures[0].
     _runGaussianBlur(parentNode, srcTex, srcUV) {
         const tempFbo = this._gaussianTempFbos[0];
         const tempTex = this._gaussianTempTextures[0];
@@ -339,43 +243,23 @@ export class BlurRenderer {
         const destTex = this._blurTextures[0];
         const destW = destTex.get_width();
         const destH = destTex.get_height();
-        // ── 0. Pre-pass: srcTex (full res) → destTex (half res) ─────────────────
-        // A plain bilinear downsample so the H/V passes can operate entirely in
-        // half-resolution space.
-        // [PERF] Uses the snippet-less passthrough pipeline rather than
-        // downsample.frag with blur_radius = 0. Identical output (the collapsed
-        // kernel averaged four fetches of the same texel), one fetch instead of
-        // five. No inv_size / blur_radius to set — the pipeline has no uniforms.
-        // [PERF] At the default downscale of 2 a single bilinear fetch already
-        // averages the 2x2 source footprint exactly, so the passthrough is both
-        // cheapest and correct. At 4 it would point-sample one texel in sixteen,
-        // so the exact 4x4 box filter is used instead — see ShaderPipelines.boxDown.
+        // At downscale 2 one bilinear fetch averages the 2x2 footprint exactly;
+        // at 4 the box filter is needed.
         const wideDownsample = this._blurDownscale >= 4 && this._pipelines.boxDown !== null;
         const prePipeline = wideDownsample
             ? this._passes.pipeline('gauss-pre-box', this._pipelines.boxDown)
             : this._passes.pipeline('gauss-pre', this._pipelines.passthrough);
         prePipeline.set_layer_texture(0, srcTex);
         if (wideDownsample) {
-            // inv_size is a texel step in the SOURCE texture, so it uses the
-            // capture's own size regardless of which sub-rect we sample.
             setPipelineVec2(prePipeline, 'inv_size', 1.0 / srcTex.get_width(), 1.0 / srcTex.get_height());
         }
-        // [FIX] Sample only the valid sub-rect of the raw capture (see the
-        // matching comment in _runDualKawaseBlur()). The H/V passes below read
-        // our own pool textures and keep the full 0..1 range.
         this._passes.add(parentNode, destFbo, prePipeline, destW, destH, srcUV);
-        // ── 1. Horizontal pass: destTex (half res) → tempTex (half res) ─────────
-        // Input is already half-resolution, so inv_size uses destW/destH directly.
         const hPipeline = this._passes.pipeline('gauss-h', this._gaussianHPipeline);
         hPipeline.set_layer_texture(0, destTex);
         setPipelineVec2(hPipeline, 'inv_size', 1.0 / destW, 1.0 / destH);
         setPipelineFloat(hPipeline, 'kernel_scale', this._gaussianScale);
         this._passes.add(parentNode, tempFbo, hPipeline, destW, destH, [0, 0, 1, 1]);
-        // ── 2. Vertical pass: tempTex (half res) → destTex (half res) ───────────
-        // [FIX round 12] Writes into the separate output target rather than back
-        // into destFbo. Going back would make destFbo depend on tempFbo while
-        // tempFbo already depends on destFbo (the horizontal pass read destTex) —
-        // the exact cycle Cogl rejects now that these passes are deferred nodes.
+        // Not back into destFbo, which the horizontal pass read (see _upTextures).
         const vPipeline = this._passes.pipeline('gauss-v', this._gaussianVPipeline);
         vPipeline.set_layer_texture(0, tempTex);
         setPipelineVec2(vPipeline, 'inv_size', 1.0 / destW, 1.0 / destH);
@@ -384,14 +268,8 @@ export class BlurRenderer {
         this._passes.add(parentNode, outFbo, vPipeline, destW, destH, [0, 0, 1, 1]);
         this._blurResultTex = this._upTextures[0];
     }
-    /**
-     * Drops the texture pool and resets the related fields.
-     *
-     * We never call run_dispose() on these GJS-managed Cogl objects: GJS's own
-     * garbage collector would later try to unref them again, causing a double
-     * free ("free(): invalid size" → SIGABRT). Simply clearing the references
-     * lets the GC reclaim the VRAM safely.
-     */
+    // Dropping the references frees the textures; GJS owns them, so
+    // run_dispose() would free them twice.
     _destroyTexturePool() {
         this._blurFbos = [];
         this._blurTextures = [];
@@ -400,25 +278,13 @@ export class BlurRenderer {
         this._upFbos = [];
         this._upTextures = [];
         this._blurResultTex = null;
-        // [PERF B1] Nothing cached survives the pool (and the key holds a
-        // reference to the old capture texture).
+        // The reuse key holds the old capture texture.
         this._renderedKey = null;
         this._poolWidth = 0;
         this._poolHeight = 0;
     }
-    /**
-     * Dynamically switches the blur method.
-     *
-     * @param method 0: separable Gaussian blur, 1: Dual Kawase blur
-     *
-     * The Dual Kawase pipelines are already compiled by
-     * ShaderPipelines.initialize() on the first frame. The Gaussian pipelines are built dynamically: setBlurRadius()
-     * computes the kernel for the current radius, and it's lazily compiled on
-     * the next vfunc_paint_target only if needed.
-     * The texture pool is shared between both methods (see resize()),
-     * so no manual rebuild is required when switching — queue_repaint() alone
-     * is enough for the new method to take effect on the next frame.
-     */
+    // Both methods share the pool, and the Gaussian kernel is compiled on the
+    // next paint, so a repaint is all a switch needs.
     setBlurMethod(method) {
         if (this._blurMethod === method)
             return;
@@ -426,10 +292,6 @@ export class BlurRenderer {
         this.setBlurRadius(this._targetRadius);
         this._repaint();
     }
-    /**
-     * Dynamically sets the blur radius. The calculation branches depending on
-     * the active method (Gaussian / Dual Kawase).
-     */
     setBlurRadius(radius) {
         this._targetRadius = radius;
         if (this._blurMethod === 0) {
@@ -439,49 +301,17 @@ export class BlurRenderer {
         this._setDualKawaseBlurRadius(radius);
     }
     /**
-     * Radius setter for the separable Gaussian blur (dynamic shader generation).
-     *
-     * Basic approach:
-     *   - PASS_COUNT is always fixed to 1. The texture pool only uses a single
-     *     w/2 × h/2 level, so changing the radius never triggers a pool
-     *     rebuild (avoids visible stutter).
-     *   - The number of fetch pairs (tap count) is derived from the radius
-     *     (= sigma, in original-resolution pixels). As long as the fetch count
-     *     doesn't change, the existing compiled shader is reused as-is and only
-     *     the kernel_scale uniform is updated (skips an unnecessary recompile).
-     *
-     * Derivation:
-     *   1. Compute the effective standard deviation sigma in half-resolution
-     *      space: sigma = radius / RES_SCALE (RES_SCALE = 2.0; at half
-     *      resolution, 1 texel = 2 original pixels).
-     *   2. Clamp to a maximum radius of 30px (15 texels in half-res space).
-     *   3. Determine how many one-sided taps are needed for the Gaussian
-     *      weights to decay close enough to zero (the "3 sigma" rule), then
-     *      convert that into a fetch-pair count (2 taps merged per fetch).
-     *   4. If the fetch-pair count matches the previous one, skip regenerating
-     *      the shader string and recompiling the pipeline — just update
-     *      kernel_scale = sigma / base sigma.
-     *      If it changed, stage a new kernel in _pendingGaussianKernel to be
-     *      compiled safely on the next vfunc_paint_target.
+     * The Gaussian uses one pool level, so a radius change never rebuilds the
+     * pool. The tap count follows a 4-sigma cutoff; while it stays the same,
+     * only kernel_scale changes and nothing is recompiled.
      */
     _setGaussianBlurRadius(radius) {
-        // [PERF] glass-blur-downscale: 2 (half res, 1 texel = 2 original px) or
-        // 4 (quarter res, 1 texel = 4). The radius the user asks for is in
-        // original pixels either way, so the conversion is the only thing that
-        // changes — and because MAX_SIGMA_TEXEL is a texel cap, quarter
-        // resolution also raises the largest reachable blur from 30px to 60px.
+        // The radius is in screen pixels; one texel is RES_SCALE of them. The
+        // sigma cap is in texels, so quarter resolution reaches twice as far.
         const RES_SCALE = this._blurDownscale >= 4 ? 4.0 : 2.0;
-        const MAX_SIGMA_TEXEL = 15.0; // texel cap: 30px at half res, 60px at quarter
-        // ── Minimum sigma guarantee ────────────────────────────────────────────
-        // Downsampling to half resolution (bilinear 2x) is effectively a 2px-wide
-        // box filter, which aliases high-frequency content such as text. To
-        // counteract that aliasing, the H/V kernel's effective width needs to
-        // exceed 1.0 half-res texel (= 2 original pixels).
-        // So sigma is floored at MIN_SIGMA_TEXEL = 1.0, guaranteeing at least a
-        // minimal amount of smoothing even for a very small requested radius.
-        // For small radii, kernel_scale ends up < 1.0, pulling the taps toward
-        // the center — functioning simply as a "weaker blur" (the anti-aliasing
-        // effect is preserved).
+        const MAX_SIGMA_TEXEL = 15.0;
+        // The kernel is at least one texel wide so it absorbs the downsample's
+        // aliasing; a smaller radius only lowers kernel_scale.
         const MIN_SIGMA_TEXEL = 1.0;
         if (radius <= 0) {
             if (this.PASS_COUNT !== 0) {
@@ -493,14 +323,9 @@ export class BlurRenderer {
             return;
         }
         const sigmaTexel = Math.min(radius / RES_SCALE, MAX_SIGMA_TEXEL);
-        // Use a sigma floored at MIN_SIGMA_TEXEL to decide the kernel shape
-        // (fetch-pair count), so a wide-enough kernel gets compiled even for
-        // small radii.
         const kernelSigma = Math.max(sigmaTexel, MIN_SIGMA_TEXEL);
-        // Number of one-sided taps needed to satisfy the 4-sigma rule (changed from 3
-        // to prevent abrupt truncation ringing/grid artifacts at integer multiples),
-        // converted to fetch pairs (2 taps per fetch). At least 2 pairs (5-tap equivalent)
-        // are guaranteed so bilinear-downsample aliasing is reliably absorbed.
+        // A 4-sigma cutoff (3 sigma truncated visibly), two taps per fetch, and
+        // at least two pairs.
         const sideTaps = Math.max(2, Math.ceil(kernelSigma * 4));
         const fetchPairs = Math.max(2, Math.ceil(sideTaps / 2));
         const needsRecompile = this._gaussianFetchPairs !== fetchPairs ||
@@ -511,66 +336,44 @@ export class BlurRenderer {
             this._gaussianPipelineDirty = true;
             this._gaussianFetchPairs = fetchPairs;
             this._gaussianBaseSigma = kernelSigma;
-            // kernel_scale = actual sigma / sigma at compile time.
-            // When sigmaTexel < kernelSigma, scale < 1.0, giving a weaker blur.
             this._gaussianScale = sigmaTexel / kernelSigma;
         }
         else {
-            // Fetch count (shader structure) is unchanged — only update
-            // kernel_scale and skip the recompile.
             this._gaussianScale = this._gaussianBaseSigma > 0
                 ? sigmaTexel / this._gaussianBaseSigma
                 : 1.0;
         }
-        // Gaussian always uses a single level (w/2 × h/2).
-        // A pool rebuild is only needed when PASS_COUNT transitions 0 → 1
-        // (recovering from a disabled-blur state).
+        // Coming from no blur or from Dual Kawase: the next paint rebuilds the pool.
         if (this.PASS_COUNT !== 1) {
             this.PASS_COUNT = 1;
-            // Only force a rebuild if the pool wasn't built yet, or previously had
-            // a different number of levels (e.g. coming from Dual Kawase). The
-            // actual rebuild happens next frame once vfunc_paint_target notices
-            // the resolution mismatch.
             this._destroyTexturePool();
         }
         this._repaint();
     }
-    /**
-     * Radius setter for the Dual Kawase blur (original implementation, logic unchanged).
-     */
+    // An empirical mapping (the preferences say a Dual Kawase radius is not
+    // pixel-accurate). It is not scaled for glass-blur-downscale, since that
+    // would also change the pass count; at quarter resolution the same value
+    // gives a wider blur.
     _setDualKawaseBlurRadius(radius) {
-        // [PERF] Deliberately NOT compensated for glass-blur-downscale, unlike
-        // _setGaussianBlurRadius()'s RES_SCALE. This mapping is empirical — the
-        // prefs slider already warns that a Dual Kawase radius is not
-        // pixel-accurate — and its pass count is what decides how deep the
-        // pyramid goes, so scaling it here would trade one arbitrary mapping for
-        // another while also changing the number of passes. At quarter
-        // resolution the same slider position therefore reads as a wider blur,
-        // which is consistent with what the setting says it does.
         let newPassCount = 0;
         let offsetDown = 0.0;
         let offsetUp = 0.0;
         if (radius > 0) {
-            // 1. Derive the optimal integer pass count P from the physical radius R
-            //    (empirical blur-falloff model).
             let p = Math.floor(Math.log2(radius + 1));
-            // Clamp the pass count to the shader/FBO limit of [1, 4].
             newPassCount = Math.max(1, Math.min(4, p));
-            // 2. Compute a linear normalized progress t within the pass interval.
+            // Position within this pass count's radius range, eased with a cubic
+            // Hermite (C1 continuous) and mapped onto the tap offset.
             let baseR = (newPassCount === 1) ? 0 : Math.pow(2, newPassCount) - 1;
             let nextR = Math.pow(2, newPassCount + 1) - 1;
             let t = (radius - baseR) / (nextR - baseR);
             t = Math.max(0.0, Math.min(1.0, t));
-            // 3. A piecewise cubic Hermite spline, chosen for C1 continuity.
             let s = 0.25 * Math.pow(t, 3) - 0.75 * Math.pow(t, 2) + 1.5 * t;
-            // 4. Map to an offset range that guarantees anti-aliasing.
             let minOffset = (newPassCount === 1) ? 0.0 : 0.5;
             let maxOffset = 1.0;
             let r = minOffset + s * (maxOffset - minOffset);
             offsetDown = r;
             offsetUp = r * 1.5;
         }
-        // Check whether anything actually changed.
         if (this.PASS_COUNT !== newPassCount ||
             this._blurRadiusDown !== offsetDown ||
             this._blurRadiusUp !== offsetUp) {
@@ -578,10 +381,8 @@ export class BlurRenderer {
             this.PASS_COUNT = newPassCount;
             this._blurRadiusDown = offsetDown;
             this._blurRadiusUp = offsetUp;
-            // A pass-count change requires rebuilding the FBO pool.
-            if (passCountChanged) {
+            if (passCountChanged)
                 this._destroyTexturePool();
-            }
             this._repaint();
         }
     }

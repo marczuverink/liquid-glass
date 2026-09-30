@@ -5,7 +5,7 @@ const dist = path.join(__dirname, '../../liquid-glass@thinkingcoding1231.gmail.c
 
 function gpuFixture() {
   const textures = [], pipelines = [], layers = [], errors = [], stageHandlers = new Map();
-  let failAllocation = false, nextSignal = 1;
+  let nextSignal = 1;
   const texture = (w, h) => ({ get_width: () => w, get_height: () => h,
     run_dispose() { assert.fail('GJS-managed resources must not be disposed manually'); } });
   class Pipeline {
@@ -45,17 +45,20 @@ function gpuFixture() {
     PipelineWrapMode: { CLAMP_TO_EDGE: 1 }, PipelineFilter: { LINEAR: 1 }, SnippetHook: { FRAGMENT: 1 },
     Snippet: { new: (_hook, decl) => ({ decl, set_replace(body) { this.body = body; } }) },
     Texture2D: { new_with_size: (_ctx, w, h) => {
-      if (failAllocation) throw new Error('allocation failed');
       const result = texture(w, h); textures.push(result); return result;
     } },
-    Offscreen: { new_with_texture: texture => ({ texture, orthographic() {} }) },
+    Offscreen: class Offscreen {
+      static new_with_texture(texture) { const fbo = new Offscreen(); fbo.texture = texture; return fbo; }
+      orthographic() {}
+      get_texture() { return this.texture; }
+    },
     Color: class { init_from_4f(...values) { this.values = values; } },
   };
   const globalThis = { global: { _lgGlass: {}, stage: {
     connect(_name, cb) { const id = nextSignal++; stageHandlers.set(id, cb); return id; },
     disconnect(id) { assert.ok(stageHandlers.delete(id)); },
   } } };
-  const bindings = { Clutter, Cogl, globalThis, GObject: { registerClass: (_params, klass) => klass },
+  const bindings = { Clutter, Cogl, globalThis, global: globalThis.global, GObject: { registerClass: (_params, klass) => klass },
     GLib: { get_monotonic_time: () => 2e6 },
     Gio: { File: { new_for_path: () => ({
       load_contents_async(_cancel, callback) { queueMicrotask(() => callback(null, null)); },
@@ -69,8 +72,7 @@ function gpuFixture() {
   const { RenderPasses } = load(path.join(dist, 'rendering/passes.js'));
   const bases = new ShaderPipelines(logger), passes = new RenderPasses(logger);
   const root = () => ({ children: [], add_child(child) { this.children.push(child); } });
-  return { bindings, load, logger, context, bases, passes, root, texture, textures, pipelines, layers, errors, stageHandlers,
-    failAllocation(value) { failAllocation = value; } };
+  return { bindings, load, logger, context, bases, passes, root, texture, textures, pipelines, layers, errors, stageHandlers };
 }
 
 module.exports = { gpuFixture, dist };
