@@ -2,6 +2,7 @@ import { isActorValid } from '../actors/lifecycle.js';
 import { isCaptureClipEnabled, isCloneCullEnabled, isCullSiteEnabled } from './options.js';
 import { unionRectInto, rectsIntersect } from '../actors/geometry.js';
 import { setClipIfChanged } from '../actors/writes.js';
+
 /**
  * Per-frame update of the capture clip and the clone cull rect. Call it after
  * the effect's geometry is set for this frame and before the samplers sync,
@@ -89,6 +90,7 @@ export function syncGlassCaptureClip(opts) {
     // composite to the same rect (rendering/nestedRoi.ts).
     effect._lgCaptureScreenRect = screenRect;
 }
+
 function applyCaptureClip(cloneContainer, rect) {
     if (isCaptureClipEnabled() && cloneContainer && isActorValid(cloneContainer)) {
         setClipIfChanged(cloneContainer, rect[0], rect[1], rect[2], rect[3]);

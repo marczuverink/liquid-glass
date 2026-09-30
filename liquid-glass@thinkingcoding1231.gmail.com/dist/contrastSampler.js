@@ -31,25 +31,30 @@ export const AdaptiveContrastConfig = {
     // 'light'/'dark' name the text colour to favour; 'auto' favours neither.
     preference: 'auto',
 };
+
 // Anything unrecognised in the setting counts as 'auto'.
 export function sanitizeColorPreference(value) {
     return (value === 'light' || value === 'dark') ? value : 'auto';
 }
+
 function _clamp(v, min, max) {
     return Math.min(max, Math.max(min, v));
 }
+
 function _srgbToLinear(c) {
     const n = c / 255.0;
     if (n <= 0.04045)
         return n / 12.92;
     return Math.pow((n + 0.055) / 1.055, 2.4);
 }
+
 function _luminanceFromRgb(r, g, b) {
     const rl = _srgbToLinear(r);
     const gl = _srgbToLinear(g);
     const bl = _srgbToLinear(b);
     return 0.2126 * rl + 0.7152 * gl + 0.0722 * bl;
 }
+
 function _trimmedMean(values, trimRatio = 0.1) {
     if (values.length === 0)
         return null;
@@ -62,6 +67,7 @@ function _trimmedMean(values, trimRatio = 0.1) {
         sum += sorted[i];
     return sum / (end - start);
 }
+
 function _getActorRect(actor) {
     if (!actor)
         return null;
@@ -79,6 +85,7 @@ function _getActorRect(actor) {
         return null;
     return { x: left, y: top, width: right - left, height: bottom - top };
 }
+
 function _mergeRects(rects) {
     if (rects.length === 0)
         return null;
@@ -100,19 +107,23 @@ function _mergeRects(rects) {
         height: Math.max(1, maxY - minY),
     };
 }
+
 // The samples come from Shell.Screenshot as a PNG in memory. A direct GPU
 // read-back (Stage.paint_to_buffer(), Cogl.Texture.get_data()) is not usable
 // from GJS: their output buffers are annotated as input arrays, so GJS passes
 // a temporary copy and the pixels never come back.
 let _capturePathLogged = false;
+
 function _reportCapturePath(msg) {
     if (_capturePathLogged)
         return;
     _capturePathLogged = true;
     utilsLog(`[Liquid Glass][contrast] ${msg}`);
 }
+
 // Pixels are sampled on a grid of about this many steps per edge.
 const SAMPLE_MAX_EDGE = 48;
+
 /**
  * Captures a screen rectangle into memory, only to measure the brightness
  * behind the text. Nothing is written to disk or kept after the measurement.
@@ -152,6 +163,7 @@ function _captureViaScreenshot(screenshot, rect) {
         });
     });
 }
+
 export function backdropLuminance(actor, root = null) {
     let node = actor;
     for (let depth = 0; node && depth < BACKDROP_SEARCH_DEPTH; depth++) {
@@ -169,6 +181,7 @@ export function backdropLuminance(actor, root = null) {
     }
     return null;
 }
+
 function _visibleTargets(actors) {
     const targets = [];
     const rects = [];
@@ -181,22 +194,26 @@ function _visibleTargets(actors) {
     }
     return { targets, rects };
 }
+
 function _rootOrMergedRect(root, rects) {
     const rootRect = root ? _getActorRect(root) : null;
     return rootRect ?? _mergeRects(rects);
 }
+
 function _readSignature(paintSignature) {
     if (!paintSignature)
         return null;
     const v = paintSignature();
     return Number.isFinite(v) ? v : null;
 }
+
 // The decision also depends on the configuration, not only on pixels.
 function _skipKey(rects, config) {
     return rects
         .map(r => `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}`)
         .join(';') + `|${config.samplePerElement ? 'e' : 'm'}|${config.preference ?? 'auto'}|${config.lightTextColor}|${config.darkTextColor}`;
 }
+
 function _pixelLuminance(data, idx, channels) {
     if (channels <= 3)
         return _luminanceFromRgb(data[idx], data[idx + 1], data[idx + 2]);
@@ -210,6 +227,7 @@ function _pixelLuminance(data, idx, channels) {
     const unpremultiply = (c) => _clamp(Math.round(c * inv), 0, 255);
     return _luminanceFromRgb(unpremultiply(data[idx]), unpremultiply(data[idx + 1]), unpremultiply(data[idx + 2]));
 }
+
 export function luminanceSamples(shot) {
     const { data, width, height, stride, channels, step } = shot;
     const values = [];
@@ -223,6 +241,7 @@ export function luminanceSamples(shot) {
     }
     return values;
 }
+
 export class StageContrastSampler {
     // Created on the first sample; many samplers are never used.
     _screenshot = null;
@@ -240,11 +259,13 @@ export class StageContrastSampler {
     // configuration it measured; see chooseColorsForActors().
     _unchangedSignature = null;
     _unchangedKey = '';
+
     // The next call always samples.
     invalidate() {
         this._unchangedSignature = null;
         this._unchangedKey = '';
     }
+
     async sampleLuminance(rect) {
         if (!rect || rect.width <= 0 || rect.height <= 0)
             return null;
@@ -265,6 +286,7 @@ export class StageContrastSampler {
         // the glyphs from moving the result, so a flip cannot flip itself back.
         return _trimmedMean(values, 0.30);
     }
+
     decideTextColor(luminance, config = AdaptiveContrastConfig) {
         if (luminance === null || luminance === undefined)
             return null;
@@ -349,15 +371,18 @@ export class StageContrastSampler {
         this._lastIsBright = isBright;
         return isBright ? config.darkTextColor : config.lightTextColor;
     }
+
     _inSettleHold(now = GLib.get_monotonic_time()) {
         return this._lastSwitchAt !== null && now - this._lastSwitchAt < SWITCH_SETTLE_MS * 1000;
     }
+
     _backdropColorFor(actor, config, root) {
         const backdrop = backdropLuminance(actor, root);
         if (backdrop === null)
             return null;
         return this.decideTextColor(backdrop.luminance, { ...config, samplePerElement: true });
     }
+
     /**
      * @param paintSignature Optional counter that advances whenever the glass
      *   under the text is painted. Anything that changes under the text
@@ -395,6 +420,7 @@ export class StageContrastSampler {
             return new Map();
         return this._chooseMerged(targets, merged, config, settle);
     }
+
     _resetIfRegionMoved(merged) {
         const last = this._lastRect;
         const moved = !last || ['x', 'y', 'width', 'height'].some(k => Math.abs(merged[k] - last[k]) > 2);
@@ -407,6 +433,7 @@ export class StageContrastSampler {
         }
         this._lastRect = merged;
     }
+
     async _chooseMerged(targets, merged, config, settle) {
         const result = new Map();
         this._resetIfRegionMoved(merged);
@@ -426,6 +453,7 @@ export class StageContrastSampler {
                 result.set(actor, color);
         return result;
     }
+
     async _choosePerElement(targets, rects, config, settle) {
         const result = new Map();
         for (let i = 0; i < targets.length; i++) {

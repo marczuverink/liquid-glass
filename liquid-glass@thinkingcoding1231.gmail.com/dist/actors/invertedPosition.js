@@ -1,5 +1,6 @@
 import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
+
 // Keeps an actor at the negated position of `source` plus an offset, so a
 // clone inside a moving container stays fixed relative to the screen.
 export const InvertedPositionConstraint = GObject.registerClass({
@@ -12,6 +13,7 @@ export const InvertedPositionConstraint = GObject.registerClass({
 }, class InvertedPositionConstraint extends Clutter.Constraint {
     _sourceXId = 0;
     _sourceYId = 0;
+
     _init(props) {
         super._init(props);
         this.connect('notify::source', this._onSourceChanged.bind(this));
@@ -24,9 +26,11 @@ export const InvertedPositionConstraint = GObject.registerClass({
             this._onSourceChanged();
         }
     }
+
     _queueRelayout() {
         this.get_actor()?.queue_relayout();
     }
+
     // Sets both offsets, skipping the work when neither changed (the usual
     // case, since this is called every frame).
     setOffset(x, y) {
@@ -38,6 +42,7 @@ export const InvertedPositionConstraint = GObject.registerClass({
         this.offset_y = ny;
         this._queueRelayout();
     }
+
     _onSourceChanged() {
         this._disconnectSignals();
         if (this.source) {
@@ -46,6 +51,7 @@ export const InvertedPositionConstraint = GObject.registerClass({
             this._queueRelayout();
         }
     }
+
     _disconnectSignals() {
         if (!this.source)
             return;
@@ -58,6 +64,7 @@ export const InvertedPositionConstraint = GObject.registerClass({
             this._sourceYId = 0;
         }
     }
+
     vfunc_update_allocation(actor, allocation) {
         if (!this.source)
             return;

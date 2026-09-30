@@ -1,5 +1,6 @@
 import Clutter from 'gi://Clutter';
 import Mtk from 'gi://Mtk';
+
 /**
  * Snapshots a screen rectangle (the top panel) into a Clutter.Content, for the
  * blurred-panel backdrop inside the glass.
@@ -29,6 +30,7 @@ export class SelfExcludingSnapshotCapture {
     // While this returns false the capture is dormant (e.g. its popup is
     // closed) and costs nothing.
     _activeCheck;
+
     constructor(stage, hideActor, rectGetter, label = 'snapshot', activeCheck = null) {
         this._stage = stage;
         this._label = label;
@@ -44,7 +46,9 @@ export class SelfExcludingSnapshotCapture {
             this._captureOnce();
         });
     }
+
     retain() { this._refCount++; }
+
     release() {
         this._refCount--;
         if (this._refCount <= 0) {
@@ -53,16 +57,19 @@ export class SelfExcludingSnapshotCapture {
         }
         return false;
     }
+
     /** Registers another Liquid Glass instance's root as needing to be hidden during capture. */
     addHideActor(actor) {
         if (actor)
             this._hideActors.add(actor);
     }
+
     /** Unregisters a previously-added hide actor (called when that instance releases the capture). */
     removeHideActor(actor) {
         if (actor)
             this._hideActors.delete(actor);
     }
+
     // A failed capture otherwise looks like a working one (the glass just shows
     // the layers below), so report the first two failures and every 300th.
     _report(kind, detail) {
@@ -72,6 +79,7 @@ export class SelfExcludingSnapshotCapture {
                 `successes=${this._okCount}): ${detail}`);
         }
     }
+
     _captureOnce() {
         if (this._activeCheck && !this._activeCheck())
             return;
@@ -106,6 +114,7 @@ export class SelfExcludingSnapshotCapture {
                 actor.show();
         }
     }
+
     _hideCaptureActors(hidden) {
         for (const actor of this._hideActors) {
             if (actor.visible) {
@@ -114,9 +123,11 @@ export class SelfExcludingSnapshotCapture {
             }
         }
     }
+
     getContent() {
         return this._content;
     }
+
     destroy() {
         if (this._afterPaintId) {
             this._stage.disconnect(this._afterPaintId);
@@ -124,8 +135,10 @@ export class SelfExcludingSnapshotCapture {
         }
     }
 }
+
 // Glasses that capture the same Blur My Shell target share one capture.
 const _selfExcludingSnapshotRegistry = new Map();
+
 export function acquireSelfExcludingSnapshot(sourceActor, stage, hideActor, rectGetter, label = 'bms') {
     let cap = _selfExcludingSnapshotRegistry.get(sourceActor);
     if (!cap) {
@@ -138,6 +151,7 @@ export function acquireSelfExcludingSnapshot(sourceActor, stage, hideActor, rect
     cap.retain();
     return cap;
 }
+
 export function releaseSelfExcludingSnapshot(sourceActor, hideActor) {
     const cap = _selfExcludingSnapshotRegistry.get(sourceActor);
     if (!cap)

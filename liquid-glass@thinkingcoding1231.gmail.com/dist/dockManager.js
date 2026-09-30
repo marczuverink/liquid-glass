@@ -16,6 +16,7 @@ import { hexToColorArray } from './animation/colors.js';
 import { clipDockBounds, dockEdges, balanceDockBounds, insetDockBounds, visibleDockSize } from './actors/dockGeometry.js';
 // Room around the glass rect for the shader's edge effects.
 const SHADER_PADDING = 20;
+
 export class DashManager {
     extensionPath;
     targetActor;
@@ -59,6 +60,7 @@ export class DashManager {
     _uiSampler = null;
     _windowCloneManager = null;
     _logger;
+
     constructor(extensionPath, targetActor, settings, logger) {
         this.extensionPath = extensionPath;
         this.targetActor = targetActor;
@@ -71,6 +73,7 @@ export class DashManager {
         this._frameSyncId = 0;
         this._isEffectActive = false;
     }
+
     setup() {
         if (!this.targetActor || !this._settings)
             return;
@@ -79,6 +82,7 @@ export class DashManager {
             this._applyEffect();
         }
     }
+
     _bindSettings() {
         const connectSetting = (key, callback) => {
             let id = this._settings.connect(`changed::${key}`, callback.bind(this));
@@ -141,6 +145,7 @@ export class DashManager {
             }
         });
     }
+
     // Moves the dock away from the screen edge it is closest to by
     // dock-margin-bottom.
     _applyMargin() {
@@ -177,6 +182,7 @@ export class DashManager {
         this._currentMarginStyle = marginStyle;
         this.targetActor.set_style(`${this._originalStyle} ${marginStyle}`);
     }
+
     _applyEffect() {
         if (this._isEffectActive)
             return;
@@ -303,6 +309,7 @@ export class DashManager {
             startFrameSync();
         }
     }
+
     // Runs at paint time (see LiquidEffect.setLiveGeometryHook()), when the
     // dock's allocation is current. _syncGeometry() keeps per-frame state and
     // must run once per frame, so only the glass rect's position is corrected
@@ -318,6 +325,7 @@ export class DashManager {
             return;
         this.effect.setGlassGeometry(ref.rect[0] + (nx - ref.rawX), ref.rect[1] + (ny - ref.rawY), ref.rect[2], ref.rect[3]);
     }
+
     _syncGeometry() {
         if (!this.bgActor || !this.targetActor || !this.targetActor.mapped)
             return;
@@ -350,12 +358,15 @@ export class DashManager {
         this._syncDockVisibility(bounds, monitor);
         this._syncDockCapture(bounds, monitor);
     }
+
     _actorBounds(actor) {
         const [baseW, baseH] = actor.get_size();
         const [absX, absY] = actor.get_transformed_position();
         return { absX, absY, baseW, baseH };
     }
+
     _liveSource = null;
+
     _readDockBounds() {
         let sourceActor = this.targetActor;
         let children = this.targetActor.get_children();
@@ -374,6 +385,7 @@ export class DashManager {
         const bounds = { absX, absY, baseW, baseH };
         return sourceActor === this.targetActor ? bounds : clipDockBounds(bounds, this._actorBounds(this.targetActor));
     }
+
     _stabilizeDockBounds(bounds, edges) {
         let { baseW, baseH } = bounds;
         const { minCenterDist, distTopCenter, distBottomCenter } = edges;
@@ -394,6 +406,7 @@ export class DashManager {
         this._lastBaseH = baseH;
         return { ...bounds, baseW, baseH };
     }
+
     _applyDockMargin(bounds, monitor, edges) {
         const marginValue = this._marginValue || 0;
         if (!monitor || !(marginValue > 0))
@@ -423,6 +436,7 @@ export class DashManager {
         let stableBaseH = tH + this._stableDeltaH;
         return isMoving ? bounds : insetDockBounds(bounds, monitor, edges, marginValue, stableBaseW, stableBaseH);
     }
+
     _syncDockVisibility(bounds, monitor) {
         const { absX, absY, baseW, baseH } = bounds;
         const [visibleW, visibleH] = visibleDockSize(bounds, monitor);
@@ -446,6 +460,7 @@ export class DashManager {
             this.bgActor.opacity = this.targetActor.opacity;
         }
     }
+
     _syncDockCapture(bounds, monitor) {
         const { absX, absY, baseW, baseH } = bounds;
         const w = Math.max(1.0, baseW), h = Math.max(1.0, baseH);
@@ -507,15 +522,19 @@ export class DashManager {
         this._uiSampler?.sync(monitor.x, monitor.y, screenW, screenH);
         this._windowCloneManager?.sync();
     }
+
     get _frameSlot() {
         return { get: () => this._frameSyncId, set: (id) => { this._frameSyncId = id; } };
     }
+
     get _frameSignalSlot() {
         return { get: () => this._frameSignalId, set: (id) => { this._frameSignalId = id; } };
     }
+
     _stopFrameSync() {
         stopStageLoop(this._frameSignalSlot, this._frameSlot);
     }
+
     _removeEffect() {
         if (!this._isEffectActive)
             return;
@@ -555,6 +574,7 @@ export class DashManager {
         this.liquidBox = null;
         this._cloneContainer = null;
     }
+
     cleanup() {
         this._liveRef = null;
         this._stopFrameSync();
@@ -563,6 +583,7 @@ export class DashManager {
             this._settings.disconnect(id);
         this._settingsSignals = [];
     }
+
     // The first running-app indicator inside the dock (Dash to Dock's
     // IndicatorDrawingArea), used to balance the gaps around the icons.
     _findReferenceActor(actor) {

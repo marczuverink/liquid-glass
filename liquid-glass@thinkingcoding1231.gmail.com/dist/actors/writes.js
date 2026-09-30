@@ -6,12 +6,15 @@ import { utilsLog, utilsLogEnabled } from '../diagnostics/logging.js';
 // cheaper than reading the GObject property back.
 // global._lgGlass.diffWrites(false) restores unconditional writes.
 let _diffWritesEnabled = true;
+
 export function setDiffWritesEnabled(enabled) {
     _diffWritesEnabled = !!enabled;
 }
+
 export function isDiffWritesEnabled() {
     return _diffWritesEnabled;
 }
+
 /** Drops the cache so the next sync writes unconditionally. */
 export function invalidateCloneWriteCache(actor) {
     if (!actor)
@@ -20,6 +23,7 @@ export function invalidateCloneWriteCache(actor) {
     c._lgTx = c._lgTy = c._lgW = c._lgH = undefined;
     c._lgSx = c._lgSy = c._lgPx = c._lgPy = c._lgOpacity = undefined;
 }
+
 export function setTranslationIfChanged(actor, x, y) {
     const c = actor;
     if (_diffWritesEnabled && c._lgTx === x && c._lgTy === y)
@@ -30,6 +34,7 @@ export function setTranslationIfChanged(actor, x, y) {
     actor.translation_y = y;
     return true;
 }
+
 export function setSizeIfChanged(actor, w, h) {
     const c = actor;
     if (_diffWritesEnabled && c._lgW === w && c._lgH === h)
@@ -39,6 +44,7 @@ export function setSizeIfChanged(actor, w, h) {
     actor.set_size(w, h);
     return true;
 }
+
 export function setScaleIfChanged(actor, sx, sy) {
     const c = actor;
     if (_diffWritesEnabled && c._lgSx === sx && c._lgSy === sy)
@@ -48,6 +54,7 @@ export function setScaleIfChanged(actor, sx, sy) {
     actor.set_scale(sx, sy);
     return true;
 }
+
 export function setPivotIfChanged(actor, px, py) {
     const c = actor;
     if (_diffWritesEnabled && c._lgPx === px && c._lgPy === py)
@@ -57,6 +64,7 @@ export function setPivotIfChanged(actor, px, py) {
     actor.set_pivot_point(px, py);
     return true;
 }
+
 export function setClipIfChanged(actor, x, y, w, h) {
     const c = actor;
     if (_diffWritesEnabled &&
@@ -69,6 +77,7 @@ export function setClipIfChanged(actor, x, y, w, h) {
     actor.set_clip(x, y, w, h);
     return true;
 }
+
 export function setPositionIfChanged(actor, x, y) {
     const c = actor;
     if (_diffWritesEnabled && c._lgPosX === x && c._lgPosY === y)
@@ -78,6 +87,7 @@ export function setPositionIfChanged(actor, x, y) {
     actor.set_position(x, y);
     return true;
 }
+
 /**
  * Culls a clone by opacity rather than visibility. clutter_actor_paint()
  * returns early for a zero-opacity actor, so the clone's source (and any
@@ -112,10 +122,12 @@ export function setCloneCulled(actor, culled, why) {
     // the glass's OffscreenEffect keeps painting its cached capture.
     actor.get_parent()?.queue_redraw();
 }
+
 /** True while setCloneCulled() is holding this clone at zero opacity. */
 export function isCloneCulled(actor) {
     return !!(actor && actor._lgCulled);
 }
+
 export function setOpacityIfChanged(actor, opacity) {
     const c = actor;
     // Held at 0 while culled; setCloneCulled(false) releases it.

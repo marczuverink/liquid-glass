@@ -32,11 +32,13 @@ import { computeCaptureLayout } from './actors/geometry.js';
 import { registerGlassEffect, unregisterGlassEffect, isLiveGlassEffect, blurCacheDefault, nestedRoiDefault } from './diagnostics/glass.js';
 import { registerCaptureOwner, unregisterCaptureOwner, nestedCompositeRoi, clampToRoi } from './rendering/nestedRoi.js';
 import { frameSerial, ensureFrameSerialHook, frameSerialIsLive } from './rendering/frameClock.js';
+
 export const LiquidEffect = GObject.registerClass({
     GTypeName: 'LiquidGlassEffect',
 }, class LiquidEffect extends Clutter.OffscreenEffect {
     // Must match glass.frag's `#define MAX_GLASS_REGIONS 16`.
     static MAX_GLASS_REGIONS = 16;
+
     _init(params) {
         const extensionPath = params.extensionPath;
         const settings = params.settings;
@@ -87,6 +89,7 @@ export const LiquidEffect = GObject.registerClass({
         this._material.initialize();
         this._loadAllShadersAsync();
     }
+
     // The glass draws nothing until its shaders have loaded.
     async _loadAllShadersAsync() {
         const start = GLib.get_monotonic_time();
@@ -105,6 +108,7 @@ export const LiquidEffect = GObject.registerClass({
             this._logger?.error(`[Liquid Glass] Failed to load shaders asynchronously: ${e}`);
         }
     }
+
     // Only observes ACTOR_DIRTY, the one sign from JS that the offscreen is
     // about to be re-rendered; vfunc_paint_target() runs either way.
     vfunc_paint(node, paintContext, flags) {
@@ -112,6 +116,7 @@ export const LiquidEffect = GObject.registerClass({
             this._recaptureSerial++;
         super.vfunc_paint(node, paintContext, flags);
     }
+
     // Where OffscreenEffect would draw its texture to the screen, queue the blur
     // passes and the glass composite instead.
     vfunc_paint_target(_paintNode, paintContext) {
@@ -168,6 +173,7 @@ export const LiquidEffect = GObject.registerClass({
             return;
         this._snapshotPaint(srcTex, effectiveTex, capture, paintOpacity);
     }
+
     // A paint count that stops advancing means Clutter is skipping this actor.
     _notePaint() {
         this._diagPaintCount++;
@@ -187,6 +193,7 @@ export const LiquidEffect = GObject.registerClass({
             }
         }
     }
+
     _runLiveGeometryHook() {
         if (!this._liveGeometryHook)
             return;
@@ -198,6 +205,7 @@ export const LiquidEffect = GObject.registerClass({
             this._inLiveGeometry = false;
         }
     }
+
     _preparePaint() {
         if (!this._shadersLoaded)
             return false;
@@ -211,6 +219,7 @@ export const LiquidEffect = GObject.registerClass({
             this._blur.compilePending(this._getCoglContext());
         return true;
     }
+
     _captureLayout(srcTex) {
         const srcW = srcTex.get_width();
         const srcH = srcTex.get_height();
@@ -257,6 +266,7 @@ export const LiquidEffect = GObject.registerClass({
             : srcUV;
         return { actor, srcW, srcH, effectiveW, effectiveH, layout, srcUV, resW, resH, blurRect, blurW, blurH, blurSrcUV };
     }
+
     _blurReuse(srcTex, capture, firstPaintThisFrame) {
         const { blurRect, blurW, blurH, blurSrcUV, srcUV } = capture;
         // Reuse needs the same pool and the same rect: geometry can move between
@@ -284,6 +294,7 @@ export const LiquidEffect = GObject.registerClass({
         const reuseBlur = reuseSameFrame || reuseCrossFrame;
         return { reuseBlur, reuseCrossFrame, blurInputKey };
     }
+
     // The crop gives the blur a padding-free input. It only runs for a paint
     // that blurs the whole actor: with a blur rect the blur reads a slice of
     // the raw capture anyway. glass.frag samples only layer 1, and both layers
@@ -296,6 +307,7 @@ export const LiquidEffect = GObject.registerClass({
         }
         return srcTex;
     }
+
     _resizeBlur(blurW, blurH, reuseBlur) {
         if (!reuseBlur && (blurW !== this._blur.width || blurH !== this._blur.height)) {
             this._crop.clear();
@@ -303,6 +315,7 @@ export const LiquidEffect = GObject.registerClass({
         }
         return this._blur.ready;
     }
+
     // Binds the blurred background for glass.frag. The draw space is capture
     // texels from the texture's corner (Clutter folds the FBO offset into the
     // transform), so the quad is layout.dest; see computeCaptureLayout().
@@ -334,6 +347,7 @@ export const LiquidEffect = GObject.registerClass({
         this._uniforms.flush();
         return layer0UV;
     }
+
     _compositePaint(_paintNode, paintContext, capture, layer0UV) {
         const { actor, resW, resH, effectiveW, effectiveH, layout } = capture;
         // glass.frag multiplies its premultiplied output by the pipeline colour,
@@ -387,6 +401,7 @@ export const LiquidEffect = GObject.registerClass({
         this._passes.composite(_paintNode, this._pipelines.composite, drawRect, drawUV, drawUV);
         return paintOpacity;
     }
+
     _snapshotPaint(srcTex, effectiveTex, capture, paintOpacity) {
         const { srcW, srcH, effectiveW, effectiveH, layout } = capture;
         this._diagCompositedPaintCount++;
@@ -438,9 +453,11 @@ export const LiquidEffect = GObject.registerClass({
             };
         }
     }
+
     getCaptureClipRect() {
         return this._geometry.captureClip(this._blur.radius);
     }
+
     /** Shader-space size of this glass, i.e. the resolution_x/y uniforms. */
     getResolution() {
         return [
@@ -448,17 +465,21 @@ export const LiquidEffect = GObject.registerClass({
             this._uniforms.values.get('resolution_y') ?? 0,
         ];
     }
+
     // The crop's default; global._lgGlass.cropPass() switches it per instance.
     static USE_CROP_PASS = true;
+
     // Repaints only when a uniform actually changed; see UniformState.takeDirty().
     _queueRepaintIfDirty() {
         if (!this._uniforms.takeDirty())
             return;
         this.queue_repaint();
     }
+
     _getCoglContext() {
         return Clutter.get_default_backend().get_cogl_context();
     }
+
     cleanup() {
         // The hook's closure holds the manager and its actors.
         this._liveGeometryHook = null;
@@ -473,64 +494,80 @@ export const LiquidEffect = GObject.registerClass({
         this._pipelines.clear();
         this._uniforms.clear();
     }
+
     // The setters below back the global._lgGlass switches.
     setCropPassEnabled(enabled) {
         this._cropPassEnabled = enabled;
         this.queue_repaint();
     }
+
     get paintCount() {
         return this._diagPaintCount;
     }
+
     setNestedRoiEnabled(enabled) {
         this._nestedRoiEnabled = !!enabled;
         this.queue_repaint();
     }
+
     setBlurCacheEnabled(enabled) {
         this._blurCacheEnabled = !!enabled;
         this.queue_repaint();
     }
+
     setBlurRectEnabled(enabled) {
         this._geometry.blurEnabled = enabled;
         // The pool is sized for the old rect.
         this._blur.invalidate();
         this.queue_repaint();
     }
+
     setCompositeRectEnabled(enabled) {
         this._geometry.compositeEnabled = enabled;
         this.queue_repaint();
     }
+
     setEdgeTapsEnabled(enabled) {
         this._uniforms.set('edge_taps_enabled', enabled ? 1.0 : 0.0);
         this._queueRepaintIfDirty();
     }
+
     // The early exits are meant to match the full path exactly; any visible
     // difference with them off is a threshold bug.
     setEarlyExitEnabled(enabled) {
         this._uniforms.set('early_exit_enabled', enabled ? 1.0 : 0.0);
         this._queueRepaintIfDirty();
     }
+
     setDebugView(mode) {
         this._uniforms.set('debug_view', mode);
         this._queueRepaintIfDirty();
     }
+
     setIsDock(isDock) {
         this._uniforms.set('isDock', isDock ? 1.0 : 0.0);
     }
+
     // The rim, specular and sheen highlights as a group; the drop shadow and
     // the inner AO are not affected. Off for application windows.
     setSurfaceLightEnabled(enabled) {
         this._uniforms.set('surface_light_enabled', enabled ? 1.0 : 0.0);
         this._queueRepaintIfDirty();
     }
+
     setPadding(pad) {
         this._uniforms.set('padding', pad);
     }
+
     // How far the drop shadow may extend before the background actor's clip.
     setShadowMaxRadius(radius) {
         this._uniforms.set('shadow_max_radius', radius);
     }
+
     setBlurMethod(method) { this._blur.setBlurMethod(method); }
+
     setBlurRadius(radius) { this._blur.setBlurRadius(radius); }
+
     // Recompiles the pipelines on the next paint, for shader development. The
     // buffered uniforms are kept and re-applied to the new pipeline.
     reloadShaders() {
@@ -539,24 +576,29 @@ export const LiquidEffect = GObject.registerClass({
         this._blur.reload();
         this.queue_repaint();
     }
+
     setTintColor(r, g, b) {
         this._uniforms.set('tint_r', r);
         this._uniforms.set('tint_g', g);
         this._uniforms.set('tint_b', b);
         this._queueRepaintIfDirty();
     }
+
     setTintStrength(strength) {
         this._uniforms.set('tint_strength', strength);
         this._queueRepaintIfDirty();
     }
+
     setCornerRadius(radius) {
         this._uniforms.set('corner_radius', radius);
         this._queueRepaintIfDirty();
     }
+
     setAnimationScale(scale) {
         if (this._material.setAnimationScale(scale))
             this._queueRepaintIfDirty();
     }
+
     // The actor's size in shader space. The texture pool follows the capture
     // size on its own.
     setResolution(width, height) {
@@ -564,6 +606,7 @@ export const LiquidEffect = GObject.registerClass({
         this._uniforms.set('resolution_y', height);
         this._queueRepaintIfDirty();
     }
+
     // The glass rect inside the monitor-sized capture (glass.frag's dock_*).
     setGlassGeometry(x, y, w, h) {
         this._uniforms.set('dock_x', x);
@@ -576,6 +619,7 @@ export const LiquidEffect = GObject.registerClass({
         this._geometry.rect[3] = h;
         this._queueRepaintIfDirty();
     }
+
     // Draws up to MAX_GLASS_REGIONS rounded rects (setGlassRegions()) instead of
     // the single glass rect; used by Quick Settings' toggle-button mode.
     setMultiRegionMode(enabled) {
@@ -583,6 +627,7 @@ export const LiquidEffect = GObject.registerClass({
         this._geometry.multiRegion = enabled;
         this._queueRepaintIfDirty();
     }
+
     /**
      * Registers a callback run at the start of every vfunc_paint_target().
      *
@@ -599,9 +644,11 @@ export const LiquidEffect = GObject.registerClass({
     setLiveGeometryHook(fn) {
         this._liveGeometryHook = fn;
     }
+
     beginBatch() {
         this._batchDepth = (this._batchDepth || 0) + 1;
     }
+
     endBatch() {
         if (!this._batchDepth)
             return;
@@ -612,6 +659,7 @@ export const LiquidEffect = GObject.registerClass({
             Clutter.Effect.prototype.queue_repaint.call(this);
         }
     }
+
     // A plain JS override of Clutter.Effect.queue_repaint(), so every call in
     // this class goes through the batching.
     queue_repaint() {
@@ -625,6 +673,7 @@ export const LiquidEffect = GObject.registerClass({
         // @ts-ignore
         super.queue_repaint();
     }
+
     /**
      * The regions for multi-region mode, in the space of setGlassGeometry(),
      * truncated to MAX_GLASS_REGIONS. Each carries the element's own base
@@ -663,14 +712,17 @@ export const LiquidEffect = GObject.registerClass({
         this._uniforms.setArray('region_base_strength', rBaseStrength);
         this._queueRepaintIfDirty();
     }
+
     setBrightness(brightness) {
         this._uniforms.set('brightness', brightness);
         this._queueRepaintIfDirty();
     }
+
     setContrast(contrast) {
         this._uniforms.set('contrast', contrast);
         this._queueRepaintIfDirty();
     }
+
     setSaturation(saturation) {
         this._uniforms.set('saturation', saturation);
         this._queueRepaintIfDirty();
