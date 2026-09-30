@@ -6,23 +6,20 @@ export function syncDamageHooks(
 ): void {
   for (const source of sources.keys()) {
     if (hooks.has(source) || !isActorValid(source) || !innerGlassEffectOf(source)) continue;
-    try {
-      hooks.set(source, source.connect('damaged', onDamage));
-    } catch { }
+    hooks.set(source, source.connect('damaged', onDamage));
   }
-  // Drop handlers for windows this glass no longer clones, or that lost their
-  // inner glass, so the map cannot grow with every window that has ever been
-  // behind this one (and cannot keep those actors alive).
+  // Drop windows this glass no longer clones, so the map does not keep every
+  // window that was ever behind it alive.
   for (const [source, id] of hooks) {
     if (sources.has(source) && isActorValid(source) && innerGlassEffectOf(source)) continue;
-    try { if (isActorValid(source)) source.disconnect(id); } catch { }
+    if (isActorValid(source)) source.disconnect(id);
     hooks.delete(source);
   }
 }
 
 export function releaseDamageHooks(hooks: Map<any, number>): void {
   for (const [source, id] of hooks) {
-    try { if (isActorValid(source)) source.disconnect(id); } catch { }
+    if (isActorValid(source)) source.disconnect(id);
   }
   hooks.clear();
 }

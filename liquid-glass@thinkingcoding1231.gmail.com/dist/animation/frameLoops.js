@@ -3,13 +3,16 @@ import Meta from 'gi://Meta';
 import { reportFrameLoopError } from '../diagnostics/logging.js';
 import { isFrameSyncFrozen } from './frameSync.js';
 export function addBeforeRedraw(callback) {
-    return global.compositor?.get_laters?.().add(Meta.LaterType.BEFORE_REDRAW, callback) ?? 0;
+    return global.compositor.get_laters().add(Meta.LaterType.BEFORE_REDRAW, callback);
 }
 export function removeBeforeRedraw(id) {
     if (!id)
         return;
-    global.compositor?.get_laters?.().remove(id);
+    global.compositor.get_laters().remove(id);
 }
+// A self-rescheduling BEFORE_REDRAW chain. The next tick is scheduled before
+// step() runs, so an exception in step() is reported (rate-limited) instead of
+// silently ending the chain and freezing the glass.
 export function startLaterLoop(slot, loop) {
     if (slot.get() !== 0)
         return false;
@@ -36,6 +39,9 @@ export function stopLaterLoop(slot) {
     slot.set(0);
     removeBeforeRedraw(id);
 }
+// Follows the stage's own frames instead of requesting them, so an idle
+// desktop does not keep the frame clock running. `first` covers the frame in
+// which the loop starts.
 export function startStageLoop(signal, first, tick) {
     if (signal.get() !== 0)
         return false;
@@ -50,11 +56,7 @@ export function startStageLoop(signal, first, tick) {
 export function stopStageLoop(signal, first) {
     const signalId = signal.get();
     signal.set(0);
-    try {
-        if (signalId)
-            global.stage.disconnect(signalId);
-    }
-    finally {
-        stopLaterLoop(first);
-    }
+    if (signalId)
+        global.stage.disconnect(signalId);
+    stopLaterLoop(first);
 }

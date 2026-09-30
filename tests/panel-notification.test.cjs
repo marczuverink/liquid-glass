@@ -152,7 +152,7 @@ test('removing a banner before deferred setup cancels its glass', () => {
   f.manager._setupBannerEffect = () => setups++;
   f.manager._cleanupCurrentBanner = () => { f.manager.currentBanner = null; };
   f.manager._applyEffect();
-  const banner = { get_parent: () => f.tray._bannerBin };
+  const banner = { get_parent: () => f.tray._bannerBin, get_name: () => 'banner' };
   f.tray._bannerBin.emit('child-added', banner);
   f.tray._bannerBin.emit('child-removed', banner); f.flush();
   assert.equal(setups, 0);

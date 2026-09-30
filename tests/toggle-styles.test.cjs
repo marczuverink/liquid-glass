@@ -22,7 +22,7 @@ function fixture() {
     get_theme_node() { return { get_background_color: () => {
       const [red, green, blue, alpha] = this.style?.includes('background-color: transparent') ? [0,0,0,0] : this.background;
       return { red, green, blue, alpha };
-    } }; }
+    }, get_background_gradient: () => [0, null, null] }; }
     connect(name, callback) { const id = this.nextId++; this.handlers.set(id, { name, callback }); return id; }
     disconnect(id) { assert.ok(this.handlers.delete(id)); }
   }
@@ -31,7 +31,7 @@ function fixture() {
     timeout_add(_priority, _interval, callback) { const id = next++; timers.set(id, callback); return id; },
     source_remove(id) { assert.ok(timers.delete(id)); } };
   const { ToggleStyles } = loadModule(path.join(__dirname,
-    '../liquid-glass@thinkingcoding1231.gmail.com/dist/quickSettings/toggleStyles.js'), { St: { Widget }, GLib });
+    '../liquid-glass@thinkingcoding1231.gmail.com/dist/quickSettings/toggleStyles.js'), { St: { Widget, GradientType: { NONE: 0 } }, GLib });
   const styles = new ToggleStyles({ log() {} }, () => open);
   const root = new Widget('menu', [36, 36, 36, 255]);
   const tick = () => { for (const [id, callback] of [...timers]) if (!callback()) timers.delete(id); };

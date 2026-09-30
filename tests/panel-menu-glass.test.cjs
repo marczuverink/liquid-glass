@@ -191,7 +191,7 @@ function panelFixture() {
       built.push(this);
     }
     setup() { }
-    cleanup() { this.cleaned++; if (this.failCleanup) throw Error(`cleanup blew up: ${this.label}`); }
+    cleanup() { this.cleaned++; }
   }
   const panel = { statusArea: {}, contains: b => b.attached,
     _leftBox: new Signals(), _centerBox: new Signals(), _rightBox: new Signals() };
@@ -220,14 +220,3 @@ test('each detected menu gets the panel namespace and its own diagnostic label',
   assert.deepEqual([...new Set(f.built.map(m => m.enableKey))], ['enable-extra-menu-glass']);
 });
 
-test('one menu failing to clean up does not strand the others', () => {
-  const f = panelFixture();
-  f.add('alpha'); f.add('beta'); f.add('gamma'); f.flush();
-  assert.equal(f.built.length, 3);
-  f.built[1].failCleanup = true;
-
-  f.manager.cleanup();
-  assert.deepEqual(f.built.map(m => m.cleaned), [1, 1, 1]);
-  // The step after the throwing menu still ran.
-  assert.deepEqual(f.settings.get_strv('detected-extra-menus'), []);
-});

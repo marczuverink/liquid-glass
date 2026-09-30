@@ -40,3 +40,22 @@ test('internal consumers use owning modules, not the compatibility utils barrel'
       assert.doesNotMatch(node.moduleSpecifier.text, /(^|\/)utils\.js$/, name);
   }
 });
+
+test('extension and preferences entry points import only files that exist', () => {
+  const seen = new Set();
+  function visit(file) {
+    if (seen.has(file)) return;
+    seen.add(file);
+    const ast = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.ES2022, true);
+    for (const node of ast.statements) {
+      if (!ts.isImportDeclaration(node) && !ts.isExportDeclaration(node)) continue;
+      const specifier = node.moduleSpecifier?.text;
+      if (!specifier?.startsWith('.')) continue;
+      const target = path.resolve(path.dirname(file), specifier);
+      assert.ok(fs.existsSync(target), `${path.relative(extension, file)}: missing ${specifier}`);
+      visit(target);
+    }
+  }
+  visit(path.join(extension, 'extension.js'));
+  visit(path.join(extension, 'prefs.js'));
+});

@@ -6,13 +6,15 @@ const path = require('node:path');
 function fixture() {
   let clock = 0;
   const laters = { added: 0, add() { this.added++; return this.added; }, remove() {} };
-  const stage = {
+  const emitter = () => ({
     handlers: new Map(),
     next: 1,
     connect(name, fn) { const id = this.next++; this.handlers.set(id, { name, fn }); return id; },
     disconnect(id) { this.handlers.delete(id); },
     emit(name) { for (const h of [...this.handlers.values()]) if (h.name === name) h.fn(); },
-  };
+  });
+  const stage = emitter();
+  const display = emitter();
   const settings = {
     get_boolean: () => false, get_strv: () => [], get_double: () => 1.0,
     get_int: () => 0, get_string: () => '#ffffff', connect: () => 1, disconnect() {},
@@ -26,14 +28,14 @@ function fixture() {
     GLib: { idle_add: () => 1, Source: { remove() {} }, SOURCE_REMOVE: false, PRIORITY_DEFAULT_IDLE: 0,
       get_monotonic_time: () => (clock += 20000) },
     SAME_FRAME_WINDOW_US: 4000,
-    global: { stage, compositor: { get_laters: () => laters } },
+    global: { stage, display, compositor: { get_laters: () => laters } },
     isFrameSyncFrozen: () => false,
     ensureWindowActorAllocated: () => null,
     ensureGlassAllocated: () => {},
   };
   const C = new Function(...Object.keys(bindings), `${code}\nreturn ApplicationManager;`)(...Object.values(bindings));
   const manager = new C('/ext', settings, { log() {}, error() {} });
-  return { manager, stage, laters };
+  return { manager, stage, display, laters };
 }
 
 test('window glass follows compositor frames instead of requesting them', () => {
@@ -64,17 +66,13 @@ test('repeated starts keep exactly one frame observer and stopping removes it', 
   assert.equal(stage.handlers.size, 1);
 });
 
-test('a torn-down manager stops syncing even if frames keep arriving', () => {
-  const { manager, stage } = fixture();
-  let syncs = 0;
-  const windowActor = { get_meta_window: () => ({ get_title: () => 'window' }) };
-  manager._states.set(windowActor, { windowActor, effect: {} });
-  manager._syncState = () => { syncs++; };
+test('cleanup disconnects the frame observer and every display handler', () => {
+  const { manager, stage, display } = fixture();
+  manager.setup();
   manager._startFrameSync();
-  stage.emit('before-update');
-  assert.ok(syncs > 0);
-  const seen = syncs;
-  manager._torndown = true;
-  stage.emit('before-update');
-  assert.equal(syncs, seen);
+  assert.equal(stage.handlers.size, 1);
+  assert.ok(display.handlers.size > 0);
+  manager.cleanup();
+  assert.equal(stage.handlers.size, 0);
+  assert.equal(display.handlers.size, 0);
 });

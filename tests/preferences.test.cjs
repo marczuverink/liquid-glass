@@ -55,7 +55,9 @@ function fixture(overrides = {}, dbusResponses = []) {
     add_row(child) { this.add(child); }
     append(child) { this.add(child); }
     remove(child) { this.children = this.children.filter(item => item !== child); }
-    add_prefix() {} add_suffix() {} add_css_class() {} set_header_suffix() {} set_default_size() {}
+    add_prefix() {} add_suffix(child) { child._parent = this; } add_css_class() {} set_header_suffix() {} set_default_size() {}
+    get_parent() { return this._parent ?? null; }
+    reorder_child_after() {}
     get_first_child() { return this.children[0] ?? null; }
     get_next_sibling() { return null; }
     connect(signal, fn) { const id = nextId++; this.signals.set(id, {signal, fn}); return id; }
@@ -71,6 +73,7 @@ function fixture(overrides = {}, dbusResponses = []) {
   const Adw = Object.fromEntries(['PreferencesPage', 'PreferencesGroup', 'SwitchRow', 'ComboRow', 'SpinRow', 'ActionRow', 'EntryRow', 'ExpanderRow'].map(name => [name, class extends Widget {}]));
   const Gtk = {Adjustment: Widget, ColorDialogButton: Widget, ColorDialog: Widget, Button: Widget, ListBox: Widget,
     Scale: Widget, Orientation: {HORIZONTAL: 0},
+    SignalListItemFactory: Widget, Box: Widget, Label: Widget, Image: Widget,
     StringList: {new: titles => titles}, Align: {CENTER: 0}, SelectionMode: {NONE: 0}};
   const dbusCalls = [];
   const Gio = {Settings, SettingsBindFlags: {GET: 1, DEFAULT: 0}, DBusCallFlags: {NONE: 0},

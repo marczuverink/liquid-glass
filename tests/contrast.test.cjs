@@ -57,6 +57,8 @@ test('a moved menu does not inherit the previous region color decision', async (
   assert.equal((await sampler.chooseColorsForActors([actor])).get(actor), config.darkTextColor);
 });
 
+const colorHelpers = load('animation/colors.js', 'hexToRgb, hexToColorArray, rgbToHex');
+
 class Actor {
   constructor(style = 'font-weight: bold; padding: 4px;') { this.style = style; this.visible = true; }
   get_style() { return this.style; }
@@ -64,18 +66,21 @@ class Actor {
   connect() { return 1; }
   get_theme_node() { return { get_foreground_color: () => ({ red: 242, green: 242, blue: 242, alpha: 255 }), get_background_color: () => ({red: 0, green: 0, blue: 0}) }; }
   remove_style_class_name() {}
+  has_style_class_name() { return false; }
 }
 for (const [file, name] of [['uiManager.js', 'UIManager'], ['notificationManager.js', 'NotificationManager'], ['osdManager.js', 'OsdManager'], ['quickSettingsManager.js', 'QuickSettingsManager']]) {
   test(`${name}: switches directly, preserves and restores native inline style`, () => {
     // Only the color methods run, with no frame loop or shader allocation.
-    const C = load(file, name, { St: { Button: Actor },
+    const C = load(file, name, { St: { Button: Actor, Widget: Actor },
       GLib: { get_monotonic_time: () => 0, source_remove() {}, timeout_add() { throw Error('Unexpected color fade'); } },
-      adaptiveColorTweener: { cancel() {} },
+      adaptiveColorTweener: { cancel() {} }, ...colorHelpers,
     })[name];
     const manager = Object.create(C.prototype);
     manager._styledActors = new Map(); manager._hoverSignals = new Map();
     manager._pendingBackdropRoots = new Set(); manager._backdropRefreshId = 0;
     manager._backdropColored = new Set();
+    Object.assign(manager, { _backdropColors: new Map(), _backdropSignals: new Map(),
+      _sampleColors: new Map(), _dirtyBackdropRoots: new Set(), _adaptiveGeneration: 0 });
     manager._adaptiveConfig = config;
     const actor = new Actor(); const original = actor.style;
     manager._setActorColor(actor, '#1a1a1a', true);
@@ -168,13 +173,13 @@ function hoverFixture(rowCount = 1) {
   const laters = { pending: [], add(_, fn) { this.pending.push(fn); return this.pending.length; }, remove() {} };
   class Unused {}
   const C = load('uiManager.js', 'UIManager', {
-    St: { Button: Actor, Label: Unused, Icon: Unused, Widget: Unused },
+    St: { Button: Actor, Label: Unused, Icon: Unused, Widget: Actor },
     Clutter: { Text: Unused },
     GLib: { get_monotonic_time: () => 0, source_remove() {}, SOURCE_REMOVE: false,
       timeout_add() { throw Error('Unexpected color fade'); } },
     Meta: { LaterType: { BEFORE_REDRAW: 0 } },
     global: { compositor: { get_laters: () => laters } },
-    adaptiveColorTweener: { cancel() {} },
+    adaptiveColorTweener: { cancel() {} }, ...colorHelpers,
     isActorValid: () => true,
   })['UIManager'];
 
@@ -200,12 +205,13 @@ function hoverFixture(rowCount = 1) {
     });
     row.get_children = () => [];
     row.connect = () => 100 + i;
-    const holder = {
+    // The row's parent is an St widget too (the menu item's box).
+    const holder = Object.assign(Object.create(Actor.prototype), {
       get_parent: () => null,
       get_children: () => [row],
       connect: (name, fn) => { if (name === 'style-changed') handlers.push(fn); return 7 + i; },
       disconnect() {},
-    };
+    });
     row.get_parent = () => holder;
     rows.push(row);
   }

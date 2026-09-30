@@ -4,12 +4,9 @@ import Cogl from 'gi://Cogl';
 import Shell from 'gi://Shell';
 import { getAllocatedSize, computeCaptureLayout } from './geometry.js';
 /**
- * Paints a captured texture stretched to fill its own allocation, without
- * ever triggering the source actor's own paint. Used for the "read an
- * existing OffscreenEffect's texture" fallback path (see
- * UILayerSampler._createExistingEffectBlitActor): unlike Clutter.Clone,
- * this never re-evaluates the source's effect chain, so it can't cause the
- * "two consumers" ownership conflict described on SelfExcludingSnapshotCapture.
+ * Paints another OffscreenEffect's texture stretched over its allocation.
+ * Unlike a Clutter.Clone it never paints the source, so the source's effect
+ * does not run a second time (see UILayerSampler._createExistingEffectBlitActor).
  */
 export const TextureBlitActor = GObject.registerClass({
   GTypeName: 'LiquidGlassTextureBlitActor',
@@ -36,24 +33,16 @@ export const TextureBlitActor = GObject.registerClass({
     this._sourceActor = actor;
   }
 
-  private _getCoglContext(): Cogl.Context | null {
-    try {
-      const backend = Clutter.get_default_backend();
-      return backend.get_cogl_context() as Cogl.Context;
-    } catch {
-      return null;
-    }
+  private _getCoglContext(): Cogl.Context {
+    return Clutter.get_default_backend().get_cogl_context() as Cogl.Context;
   }
 
   private _textureUV(tex: Cogl.Texture2D): number[] {
     const texW = tex.get_width();
     const texH = tex.get_height();
 
-    // A ClutterOffscreenEffect's captured texture is a few pixels larger
-    // than the actor's logical size, and — contrary to what this used to
-    // assume — that padding is NOT centred: it is 2px on the left/top and
-    // 1px on the right/bottom (see computeCaptureLayout()). Sample only
-    // the sub-rectangle that actually holds the source's own pixels.
+    // The captured texture is padded unevenly around the actor (see
+    // computeCaptureLayout()); sample only the source's own pixels.
     let uMin = 0, vMin = 0, uMax = 1, vMax = 1;
     const src = this._sourceActor;
     if (src) {
@@ -74,28 +63,23 @@ export const TextureBlitActor = GObject.registerClass({
     const tex = this._getTexture();
     if (!tex) return;
 
-    try {
-      if (!this._pipeline) {
-        const ctx = this._getCoglContext();
-        if (!ctx) return;
-        this._pipeline = Cogl.Pipeline.new(ctx);
-        this._pipeline.set_layer_wrap_mode(0, Cogl.PipelineWrapMode.CLAMP_TO_EDGE);
-        this._pipeline.set_layer_filters(
-          0, Cogl.PipelineFilter.LINEAR, Cogl.PipelineFilter.LINEAR
-        );
-      }
-
-      const [uMin, vMin, uMax, vMax] = this._textureUV(tex);
-
-      this._pipeline.set_layer_texture(0, tex);
-
-      const [w, h] = this.get_size();
-      if (!(w > 0) || !(h > 0)) return;
-
-      const fb = paintContext.get_framebuffer() as unknown as Cogl.Framebuffer;
-      fb.draw_textured_rectangle(this._pipeline, 0, 0, w, h, uMin, vMin, uMax, vMax);
-    } catch {
+    if (!this._pipeline) {
+      this._pipeline = Cogl.Pipeline.new(this._getCoglContext());
+      this._pipeline.set_layer_wrap_mode(0, Cogl.PipelineWrapMode.CLAMP_TO_EDGE);
+      this._pipeline.set_layer_filters(
+        0, Cogl.PipelineFilter.LINEAR, Cogl.PipelineFilter.LINEAR
+      );
     }
+
+    const [uMin, vMin, uMax, vMax] = this._textureUV(tex);
+
+    this._pipeline.set_layer_texture(0, tex);
+
+    const [w, h] = this.get_size();
+    if (!(w > 0) || !(h > 0)) return;
+
+    const fb = paintContext.get_framebuffer() as unknown as Cogl.Framebuffer;
+    fb.draw_textured_rectangle(this._pipeline, 0, 0, w, h, uMin, vMin, uMax, vMax);
   }
 });
 export type TextureBlitActor = InstanceType<typeof TextureBlitActor>;

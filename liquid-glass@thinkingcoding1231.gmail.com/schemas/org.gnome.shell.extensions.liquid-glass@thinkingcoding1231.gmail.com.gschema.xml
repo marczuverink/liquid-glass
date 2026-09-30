@@ -134,10 +134,8 @@
       <summary>Glass for additional top panel menus</summary>
       <description>Automatically apply glass to detected panel dropdowns. Calendar and Quick Settings have separate controls.</description>
     </key>
-    <!-- [anim-diag] Starts/stops a timed global._lgGlass.dump() loop, so a
-         capture of a misbehaving animation can be taken the moment it happens
-         without Looking Glass or unsafe_mode. Press once to start, again to
-         stop early; it stops on its own after DUMP_LOOP_TICKS. -->
+    <!-- A shortcut that records the glass state while a problem is on screen,
+         without Looking Glass. -->
     <key name="enable-dump-shortcut" type="b">
       <default>false</default>
       <summary>Enable the diagnostic dump shortcut</summary>
@@ -158,10 +156,8 @@
       <summary>Detected optional panel menus</summary>
       <description>Written by the shell at runtime so the preferences window can offer a toggle only for menus that actually exist.</description>
     </key>
-    <!-- Appearance for the detected top bar dropdowns. Its own namespace so
-         these can be tuned without moving the Calendar menu, exactly as
-         quick-settings-*, notification-*, osd-* and dock-* already are.
-         Defaults mirror the menu-* values these menus used to borrow. -->
+    <!-- Appearance of the detected top bar menus, separate from the calendar
+         menu. The defaults match the menu-* keys. -->
     <key name="enable-panel-menu-animation" type="b">
       <default>true</default>
       <summary>Enable panel menu animation</summary>
@@ -517,7 +513,6 @@
       <summary>Enable glass effect for application windows</summary>
       <description>Apply the liquid glass effect to whitelisted application windows.</description>
     </key>
-    <!-- Whether to apply the effect to all application windows or only whitelisted ones -->
     <key name="application-glass-all-windows" type="b">
       <default>false</default>
       <summary>Apply to all windows</summary>
@@ -528,7 +523,6 @@
       <summary>Whitelisted window classes</summary>
       <description>WM_CLASS names (from xprop) that receive the glass effect. Only listed windows are affected when "apply to all windows" is off.</description>
     </key>
-    <!-- Exclusion list consulted only while "apply to all windows" is on -->
     <key name="application-window-blacklist" type="as">
       <default>[]</default>
       <summary>Blacklisted window classes</summary>
@@ -550,7 +544,6 @@
       <default>30.0</default>
       <summary>Corner radius</summary>
     </key>
-    <!-- Opacity of the application window's own content layer (0.0-1.0), so the glass shows through it -->
     <key name="application-content-opacity" type="d">
       <default>0.85</default>
       <summary>Window content opacity</summary>
@@ -571,12 +564,9 @@
       <summary>Saturation</summary>
       <description>Adjusts the saturation of the glass effect behind application windows.</description>
     </key>
-    <!-- The menu the desktop itself puts up (right-click on the wallpaper).
-         On Wayland that is a real toplevel, not a shell widget, so it is
-         handled by applicationManager — but with its own namespace, because
-         it is not an application window and should not inherit their look.
-         A smaller corner radius and a less transparent body than an app
-         window, since a menu is small and has to stay readable. -->
+    <!-- The desktop's own right-click menu. It is configured separately from
+         application windows, with smaller corners and a more opaque body so
+         it stays readable. -->
     <key name="enable-desktop-menu-glass" type="b">
       <default>false</default>
       <summary>Enable glass effect for the desktop menu</summary>

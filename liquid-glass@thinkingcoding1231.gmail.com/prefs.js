@@ -3,6 +3,6 @@ import {buildPreferences} from './preferences/pages.js';
 
 export default class LiquidGlassPreferences extends ExtensionPreferences {
   fillPreferencesWindow(window) {
-    buildPreferences(window, this.getSettings('org.gnome.shell.extensions.liquid-glass@thinkingcoding1231.gmail.com'));
+    buildPreferences(window, this.getSettings());
   }
 }

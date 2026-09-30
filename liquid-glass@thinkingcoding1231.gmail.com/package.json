@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "watch": "tsc -w"
+    "watch": "tsc -w",
+    "pack": "rm -rf dist && tsc && gnome-extensions pack --force --extra-source=dist --extra-source=preferences --extra-source=shaders --out-dir=. ."
   },
   "devDependencies": {
     "@girs/gnome-shell": "^50.0.0",

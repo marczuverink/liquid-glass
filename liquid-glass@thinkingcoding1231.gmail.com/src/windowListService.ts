@@ -1,11 +1,6 @@
-// src/windowListService.ts
-//
-// prefs.js runs in its own process (gnome-extensions-prefs) and therefore has no
-// access to Meta/Shell, so it cannot enumerate the user's open windows on its
-// own. This service runs inside gnome-shell and publishes that list over D-Bus
-// on the object path below, under the bus name gnome-shell already owns
-// (org.gnome.Shell), plus a `WindowsChanged` signal so the preferences window
-// can keep its picker up to date in real time.
+// The preferences process cannot use Meta or Shell, so this service publishes
+// the list of open windows over D-Bus (on the shell's own bus name) for the
+// window picker, with a WindowsChanged signal to keep it current.
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import Gio from 'gi://Gio';
@@ -40,45 +35,35 @@ interface WindowEntry {
 }
 
 function readWindow(metaWindow: Meta.Window) {
-  try {
-    const wmClass = metaWindow.get_wm_class() ?? '';
-    const windowType = metaWindow.get_window_type();
-    const title = metaWindow.get_title() ?? '';
-    // Skip the shell's own desktop/dock/splash surfaces; they can never be
-    // targeted by the effect and would only clutter the picker.
-    if (!wmClass || windowType === Meta.WindowType.DESKTOP ||
-      windowType === Meta.WindowType.DOCK || windowType === Meta.WindowType.SPLASHSCREEN)
-      return null;
-    const normal = windowType === Meta.WindowType.NORMAL ||
-      windowType === Meta.WindowType.DIALOG || windowType === Meta.WindowType.MODAL_DIALOG;
-    return { wmClass, title, normal };
-  } catch {
+  const wmClass = metaWindow.get_wm_class() ?? '';
+  const windowType = metaWindow.get_window_type();
+  const title = metaWindow.get_title() ?? '';
+  // Desktop, dock and splash surfaces cannot get the effect.
+  if (!wmClass || windowType === Meta.WindowType.DESKTOP ||
+    windowType === Meta.WindowType.DOCK || windowType === Meta.WindowType.SPLASHSCREEN)
     return null;
-  }
+  const normal = windowType === Meta.WindowType.NORMAL ||
+    windowType === Meta.WindowType.DIALOG || windowType === Meta.WindowType.MODAL_DIALOG;
+  return { wmClass, title, normal };
 }
 
-function readApplication(entry: WindowEntry, metaWindow: Meta.Window, tracker: Shell.WindowTracker | null) {
-  if (!tracker)
+function readApplication(entry: WindowEntry, metaWindow: Meta.Window, tracker: Shell.WindowTracker) {
+  const app = tracker.get_window_app(metaWindow);
+  if (!app)
     return;
-  try {
-    const app = tracker.get_window_app(metaWindow);
-    if (!app)
-      return;
-    entry.appName = app.get_name() ?? '';
-    // Serialized Gio.Icon: the prefs process turns it back into an icon
-    // with Gio.Icon.new_for_string().
-    const icon = app.get_app_info()?.get_icon();
-    if (icon)
-      entry.iconName = icon.to_string() ?? '';
-  } catch { }
+  entry.appName = app.get_name() ?? '';
+  // Serialized; the preferences turn it back into an icon with
+  // Gio.Icon.new_for_string().
+  const icon = app.get_app_info()?.get_icon();
+  if (icon)
+    entry.iconName = icon.to_string() ?? '';
 }
 
 export class WindowListService {
   private _logger: Logger;
   private _dbusImpl: any = null;
   private _displaySignals: { obj: any, id: number }[] = [];
-  // Per-window signal handlers, so a window whose class/title arrives late (very
-  // common: X11 clients set WM_CLASS after mapping) still refreshes the picker.
+  // A window's class and title can arrive after it is created.
   private _windowSignals: Map<Meta.Window, number[]> = new Map();
   private _emitIdleId: number = 0;
 
@@ -87,6 +72,7 @@ export class WindowListService {
   }
 
   setup() {
+    // Exporting fails with a GError if the path is already taken.
     try {
       this._dbusImpl = Gio.DBusExportedObject.wrapJSObject(WINDOW_LIST_IFACE, this);
       this._dbusImpl.export(Gio.DBus.session, WINDOW_LIST_OBJECT_PATH);
@@ -97,9 +83,7 @@ export class WindowListService {
     }
 
     const connectDisplay = (signal: string, callback: (...args: any[]) => void) => {
-      try {
-        this._displaySignals.push({ obj: global.display, id: global.display.connect(signal as any, callback) });
-      } catch { }
+      this._displaySignals.push({ obj: global.display, id: global.display.connect(signal as any, callback) });
     };
 
     connectDisplay('window-created', (_display: any, metaWindow: Meta.Window) => {
@@ -120,51 +104,38 @@ export class WindowListService {
       this._emitIdleId = 0;
     }
 
-    for (const sig of this._displaySignals) {
-      try { sig.obj.disconnect(sig.id); } catch { }
-    }
+    for (const sig of this._displaySignals)
+      sig.obj.disconnect(sig.id);
     this._displaySignals = [];
 
     for (const [metaWindow, ids] of this._windowSignals) {
-      for (const id of ids) {
-        try { metaWindow.disconnect(id); } catch { }
-      }
+      for (const id of ids)
+        metaWindow.disconnect(id);
     }
     this._windowSignals.clear();
 
     if (this._dbusImpl) {
-      try { this._dbusImpl.unexport(); } catch { }
+      this._dbusImpl.unexport();
       this._dbusImpl = null;
     }
   }
 
-  // ── D-Bus method ──────────────────────────────────────────────────────────
+  // D-Bus method.
   ListWindows(): string {
-    try {
-      return JSON.stringify(this._collectWindows());
-    } catch (e) {
-      this._logger.log('[Liquid Glass] ListWindows failed: ' + e);
-      return '[]';
-    }
+    return JSON.stringify(this._collectWindows());
   }
 
-  // ── Internals ─────────────────────────────────────────────────────────────
   private _trackWindow(metaWindow: Meta.Window) {
-    if (!metaWindow || this._windowSignals.has(metaWindow))
+    if (this._windowSignals.has(metaWindow))
       return;
 
     const ids: number[] = [];
-    for (const signal of ['notify::wm-class', 'notify::title', 'notify::window-type']) {
-      try {
-        ids.push(metaWindow.connect(signal as any, () => this._queueChanged()));
-      } catch { }
-    }
-    try {
-      ids.push(metaWindow.connect('unmanaged', () => {
-        this._untrackWindow(metaWindow);
-        this._queueChanged();
-      }));
-    } catch { }
+    for (const signal of ['notify::wm-class', 'notify::title', 'notify::window-type'])
+      ids.push(metaWindow.connect(signal as any, () => this._queueChanged()));
+    ids.push(metaWindow.connect('unmanaged', () => {
+      this._untrackWindow(metaWindow);
+      this._queueChanged();
+    }));
 
     this._windowSignals.set(metaWindow, ids);
   }
@@ -173,36 +144,18 @@ export class WindowListService {
     const ids = this._windowSignals.get(metaWindow);
     if (!ids)
       return;
-    for (const id of ids) {
-      try { metaWindow.disconnect(id); } catch { }
-    }
+    for (const id of ids)
+      metaWindow.disconnect(id);
     this._windowSignals.delete(metaWindow);
   }
 
   private _listMetaWindows(): Meta.Window[] {
-    try {
-      return global.display.list_all_windows() ?? [];
-    } catch (e) {
-      this._logger.log('[Liquid Glass] list_all_windows() failed: ' + e);
-      return [];
-    }
+    return global.display.list_all_windows();
   }
 
-  // Collapse the open windows into one entry per WM_CLASS, since that is the
-  // granularity the white/blacklists match on.
+  // One entry per WM_CLASS, the granularity the window lists match on.
   private _collectWindows(): WindowEntry[] {
-    // Resolved lazily so that a run with no windows never touches the tracker.
-    let tracker: Shell.WindowTracker | null | undefined = undefined;
-    const getTracker = (): Shell.WindowTracker | null => {
-      if (tracker === undefined) {
-        try {
-          tracker = Shell.WindowTracker.get_default();
-        } catch {
-          tracker = null;
-        }
-      }
-      return tracker;
-    };
+    const tracker = Shell.WindowTracker.get_default();
 
     const byClass: Map<string, WindowEntry> = new Map();
 
@@ -223,7 +176,7 @@ export class WindowListService {
         entry.titles.push(title);
 
       if (!entry.appName)
-        readApplication(entry, metaWindow, getTracker());
+        readApplication(entry, metaWindow, tracker);
     }
 
     const entries = [...byClass.values()];
@@ -232,21 +185,15 @@ export class WindowListService {
     return entries;
   }
 
-  // Windows open and close in bursts (and 'restacked' fires constantly), so the
-  // signal is coalesced onto an idle rather than emitted per event.
+  // Windows open and close in bursts and 'restacked' fires often, so the
+  // signal is coalesced onto an idle.
   private _queueChanged() {
     if (this._emitIdleId)
       return;
 
     this._emitIdleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
       this._emitIdleId = 0;
-      if (this._dbusImpl) {
-        try {
-          this._dbusImpl.emit_signal('WindowsChanged', null);
-        } catch (e) {
-          this._logger.log('[Liquid Glass] Failed to emit WindowsChanged: ' + e);
-        }
-      }
+      this._dbusImpl?.emit_signal('WindowsChanged', null);
       return GLib.SOURCE_REMOVE;
     });
   }

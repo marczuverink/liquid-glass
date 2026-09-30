@@ -1,37 +1,18 @@
 import Cogl from 'gi://Cogl';
 import { isLiveGlassEffect } from '../diagnostics/glass.js';
 const ROI_PAD = 2;
-// ─── Nested-composite region of interest ─────────────────────────────────────
+// A window glass painted through a clone inside another glass's capture
+// composites over its whole window, although the enclosing glass only samples
+// its cull rect (`_lgCaptureScreenRect`, published by syncGlassCaptureClip()).
+// The nested composite is therefore shrunk to that rect.
 //
-// [PERF B2] When a glass re-renders its capture, every window glass reached
-// through a clone inside it runs its composite pass into that capture — over
-// its WHOLE window, e.g. 2132x1246 for a maximized window — even though the
-// enclosing glass only ever samples the part of its capture it can show (its
-// cull rect: glass + refraction reach + blur reach + slack, the very rect ①b
-// culls whole windows against, published by syncGlassCaptureClip() as
-// `_lgCaptureScreenRect`). Everything composited outside it is thrown away.
-//
-// A nested composite therefore shrinks its quad to the enclosing glass's rect.
-// FINDING the enclosing glass is the subtle part. A nested paint does NOT run
-// inside the enclosing effect's vfunc_paint(): ClutterOffscreenEffect adds an
-// actor node, and that node's draw handler paints the subtree during the
-// EXECUTION phase, after every vfunc_paint of the build phase has returned
-// (see _blurFrameSerial's note). The first implementation published the rect
-// on a stack around vfunc_paint() and so never found anything — measured:
-// nested composite fill unchanged. What IS true at execution time is that the
-// enclosing effect's offscreen is the current framebuffer. So the lookup goes
-//     paintContext.get_framebuffer() -> Cogl.Offscreen.get_texture()
-//       -> the LiquidEffect whose capture that texture is
-// via this table, which each glass keeps current from its own paint_target.
-// Any other offscreen in between (another extension's effect) simply is not in
-// the table, and the composite is left whole — the safe side.
-//
-// The rect is in SCREEN coordinates, the space every clone is placed in (each
-// clone sits at its source's own screen position; the container translation
-// maps that into the capture), so the nested glass maps it into its own space
-// with its REAL stage transform, which the clone reproduces exactly.
-//
-// This shrinks geometry; it is NOT a set_clip() (memo.md 地雷17).
+// The nested paint runs when the paint nodes execute, after the enclosing
+// effect's vfunc_paint() has returned, so the enclosing glass cannot be found
+// from a stack. What holds at that point is that its offscreen is the current
+// framebuffer, so this table maps capture textures to their effects. Any
+// other offscreen in between is not in the table, and the composite is left
+// whole. The rect is in screen coordinates and mapped into the nested glass
+// with its stage transform, which the clone reproduces.
 const _captureOwners = new Map();
 export function registerCaptureOwner(owner, texture, previous) {
     if (previous && previous !== texture && _captureOwners.get(previous) === owner)
@@ -46,18 +27,12 @@ export function unregisterCaptureOwner(owner, texture) {
 function enclosingOwner(self, paintContext) {
     if (_captureOwners.size === 0)
         return null;
-    try {
-        const fb = paintContext.get_framebuffer();
-        // Top-level paints draw into the stage view's (onscreen) framebuffer and
-        // stop here.
-        if (!(fb instanceof Cogl.Offscreen))
-            return null;
-        const owner = _captureOwners.get(fb.get_texture()) ?? null;
-        return owner && owner !== self && isLiveGlassEffect(owner) ? owner : null;
-    }
-    catch (_) {
+    const fb = paintContext.get_framebuffer();
+    // Top-level paints draw into the onscreen framebuffer.
+    if (!(fb instanceof Cogl.Offscreen))
         return null;
-    }
+    const owner = _captureOwners.get(fb.get_texture()) ?? null;
+    return owner && owner !== self && isLiveGlassEffect(owner) ? owner : null;
 }
 export function nestedCompositeRoi(self, actor, paintContext, resW, resH) {
     if (!actor)
@@ -68,13 +43,7 @@ export function nestedCompositeRoi(self, actor, paintContext, resW, resH) {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const sx of [roi[0], roi[0] + roi[2]]) {
         for (const sy of [roi[1], roi[1] + roi[3]]) {
-            let res;
-            try {
-                res = actor.transform_stage_point(sx, sy);
-            }
-            catch (_) {
-                return null;
-            }
+            const res = actor.transform_stage_point(sx, sy);
             if (!Array.isArray(res) || res[0] !== true || !Number.isFinite(res[1]) || !Number.isFinite(res[2]))
                 return null;
             minX = Math.min(minX, res[1]);

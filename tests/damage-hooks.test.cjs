@@ -15,10 +15,9 @@ function source(extra = {}) {
     disconnect(id) { assert.ok(this.callbacks.delete(id)); }, ...extra };
 }
 
-test('damage subscriptions are unique, retry failed connections and ignore non-glass actors', () => {
+test('damage subscriptions are unique and ignore non-glass or disposed actors', () => {
   const a = source(), plain = source({ glass: false }), disposed = source({ disposed: true });
-  const broken = source({ connect() { throw new Error('gone'); } });
-  const hooks = new Map(), sources = new Map([a, plain, disposed, broken].map(s => [s, {}]));
+  const hooks = new Map(), sources = new Map([a, plain, disposed].map(s => [s, {}]));
   let damage = 0;
   syncDamageHooks(hooks, sources, () => damage++);
   syncDamageHooks(hooks, sources, () => damage += 100);
@@ -26,9 +25,6 @@ test('damage subscriptions are unique, retry failed connections and ignore non-g
   assert.equal(a.callbacks.size, 1);
   [...a.callbacks.values()][0]();
   assert.equal(damage, 1);
-  broken.connect = source().connect;
-  syncDamageHooks(hooks, sources, () => damage++);
-  assert.equal(hooks.size, 2);
 });
 
 test('damage pruning drops sources that left the clone set and tolerates disposed sources', () => {
@@ -45,15 +41,6 @@ test('damage pruning drops sources that left the clone set and tolerates dispose
   b.disposed = true;
   syncDamageHooks(hooks, new Map(), () => {});
   assert.equal(hooks.size, 0);
-});
-
-test('a failed disconnect does not prevent other damage subscriptions being removed', () => {
-  const a = source({ disconnect() { throw new Error('disposed'); } }), b = source();
-  const hooks = new Map();
-  syncDamageHooks(hooks, new Map([[a, {}], [b, {}]]), () => {});
-  syncDamageHooks(hooks, new Map(), () => {});
-  assert.equal(hooks.size, 0);
-  assert.equal(b.callbacks.size, 0);
 });
 
 test('application damage callbacks follow the current background and stop when it is hidden', () => {

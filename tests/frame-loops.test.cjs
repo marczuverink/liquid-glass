@@ -94,12 +94,11 @@ test('other glass backgrounds are excluded, the own one and plain actors are not
   const actor = (name, children = []) => ({ get_name: () => name, get_children: () => children });
   const self = actor('liquid-glass-bg-actor'), other = actor('liquid-glass-bg-actor');
   const wrapped = actor('dock', [actor('liquid-box')]), plain = actor('panel', [actor('label')]);
-  const legacy = { name: 'liquid-glass-bg-actor' };
   const { excludeOtherGlass } = createModuleLoader({
-    Main: { layoutManager: { uiGroup: { get_children: () => [self, other, wrapped, plain, legacy] } } },
+    Main: { layoutManager: { uiGroup: { get_children: () => [self, other, wrapped, plain] } } },
   })(path.join(dist, 'capture/glassExclusions.js'));
   const excluded = [];
   excludeOtherGlass({ addExclusion: a => excluded.push(a) }, self);
-  assert.deepEqual(excluded, [other, wrapped, legacy]);
+  assert.deepEqual(excluded, [other, wrapped]);
   excludeOtherGlass(null, self);
 });

@@ -2,12 +2,10 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import GLib from 'gi://GLib';
 import { UIManager } from './uiManager.js';
-// GSettings namespace for every detected panel dropdown. Separate from the
-// Calendar's `menu-*` so these can be tuned without moving the date menu —
-// the same split quick-settings-*, notification-*, osd-* and dock-* already
-// have. UIManager builds its keys from this; see its _keyPrefix.
+// Settings prefix for every detected panel menu, separate from the calendar's
+// `menu-*` keys (see UIManager._keyPrefix).
 const PANEL_MENU_PREFIX = 'panel-menu';
-// Preserve the preferences from the original keyboard/Vitals implementation.
+// Menus that had their own switch before the generic detection existed.
 const LEGACY_KEYS = {
     keyboard: 'enable-keyboard-menu-glass',
     vitalsMenu: 'enable-vitals-menu-glass',
@@ -18,18 +16,15 @@ export class PanelMenuManager {
     _logger;
     _signals = [];
     _buttons = new Map();
-    // menu actor -> the glass on it, tagged with the indicator name it was
-    // found under so logs and teardown can name the menu that misbehaved.
+    // Menu actor -> its glass, with the indicator name for the logs.
     _menus = new Map();
     _idleId = 0;
-    _active = false;
     constructor(_path, _settings, _logger) {
         this._path = _path;
         this._settings = _settings;
         this._logger = _logger;
     }
     setup() {
-        this._active = true;
         const schedule = () => this._scheduleScan();
         const watch = (target, signal) => {
             this._signals.push({ target, id: target.connect(signal, schedule) });
@@ -46,7 +41,7 @@ export class PanelMenuManager {
         this._scheduleScan();
     }
     _scheduleScan() {
-        if (!this._active || this._idleId)
+        if (this._idleId)
             return;
         this._idleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
             this._idleId = 0;
@@ -66,7 +61,6 @@ export class PanelMenuManager {
     }
     _discover(panel) {
         const buttons = new Set();
-        // Indicator name per menu, so each glass can be told apart in the log.
         const wanted = new Map();
         const detected = [];
         const disabled = new Set(this._settings.get_strv('disabled-extra-menus'));
@@ -116,85 +110,42 @@ export class PanelMenuManager {
             if (wanted.has(menu))
                 continue;
             this._menus.delete(menu);
-            try {
-                entry.manager.cleanup();
-            }
-            catch (e) {
-                this._logger.log(`[Liquid Glass] Menu cleanup (${entry.name}): ${e}`);
-            }
+            entry.manager.cleanup();
         }
     }
+    // Most of these menus belong to other extensions and may not be built the
+    // way UIManager expects; such a menu is skipped instead of stopping the scan.
     _attachWanted(wanted) {
         for (const [menu, { button, name }] of wanted) {
             if (this._menus.has(menu))
                 continue;
-            let manager = null;
+            const manager = new UIManager(this._path, this._settings, this._logger, button, false, 'enable-extra-menu-glass', PANEL_MENU_PREFIX, `menu:${name}`, false);
             try {
-                manager = new UIManager(this._path, this._settings, this._logger, button, false, 'enable-extra-menu-glass', PANEL_MENU_PREFIX, `menu:${name}`, false);
                 manager.setup();
                 this._menus.set(menu, { name, manager });
             }
             catch (e) {
-                try {
-                    manager?.cleanup();
-                }
-                catch { }
+                manager.cleanup();
                 this._logger.log(`[Liquid Glass] Could not attach panel menu glass to "${name}": ${e}`);
             }
         }
     }
-    // [FIX] Teardown must not be all-or-nothing — the same guard UIManager,
-    // NotificationManager and extension.js already use. These steps used to run
-    // bare, so the first one that threw skipped every step after it, leaving
-    // this manager's signal handlers and its per-menu UIManagers (each with its
-    // own actors and per-frame later chain) alive across disable(). Disabling
-    // is exactly when a throw is most likely: the shell is destroying the same
-    // indicators we are.
-    _teardownStep(name, fn) {
-        try {
-            fn();
-        }
-        catch (e) {
-            try {
-                this._logger?.log(`[Liquid Glass] PanelMenuManager.${name} failed during cleanup: ${e}`);
-            }
-            catch {
-                console.error(`[Liquid Glass] PanelMenuManager.${name} failed during cleanup: ${e}`);
-            }
-        }
-    }
     cleanup() {
-        // Set before anything that can throw, so a scan queued by a signal that
-        // fires mid-teardown stops itself even if this method never finishes.
-        this._active = false;
-        this._teardownStep('idleScan', () => {
-            if (this._idleId)
-                GLib.Source.remove(this._idleId);
+        if (this._idleId) {
+            GLib.Source.remove(this._idleId);
             this._idleId = 0;
-        });
-        this._teardownStep('signals', () => {
-            for (const { target, id } of this._signals) {
-                try {
-                    target.disconnect(id);
-                }
-                catch { }
-            }
-            this._signals = [];
-        });
-        this._teardownStep('buttonSignals', () => {
-            for (const [button, ids] of this._buttons)
-                for (const id of ids) {
-                    try {
-                        button.disconnect(id);
-                    }
-                    catch { }
-                }
-            this._buttons.clear();
-        });
-        // One step per menu: a menu that throws must not strand the others.
-        for (const { name, manager } of [...this._menus.values()])
-            this._teardownStep(`menu(${name})`, () => manager.cleanup());
+        }
+        for (const { target, id } of this._signals)
+            target.disconnect(id);
+        this._signals = [];
+        for (const [button, ids] of this._buttons) {
+            for (const id of ids)
+                button.disconnect(id);
+        }
+        this._buttons.clear();
+        for (const { manager } of this._menus.values())
+            manager.cleanup();
         this._menus.clear();
-        this._teardownStep('detectedList', () => this._settings.set_strv('detected-extra-menus', []));
+        this._settings.set_strv('detected-extra-menus', []);
     }
 }
