@@ -64,15 +64,16 @@ export class GlassRenderer {
   /**
    * Binds the blurred backdrop for glass.frag, or `unblurredTex` when there is
    * no blur. `blurRect` is the part of the glass the blurred texture holds, in
-   * shader space, or null for all of it. Returns the UV range for the
-   * composite quad's layers and the rect the shader was told about.
+   * shader space, or null for all of it; `unblurredInRect` says the unblurred
+   * texture holds only that part too. Returns the UV range for the composite
+   * quad's layers and the rect the shader was told about.
    */
-  bindBackdrop(unblurredTex: Cogl.Texture, unblurredUV: number[], blurRect: number[] | null):
-    { layerUV: number[], activeRect: number[] | null } {
+  bindBackdrop(unblurredTex: Cogl.Texture, unblurredUV: number[], blurRect: number[] | null,
+    unblurredInRect = false): { layerUV: number[], activeRect: number[] | null } {
     const compPipeline = this.pipelines.composite!;
     const haveBlur = this.blur.passCount > 0 && this.blur.result !== null;
 
-    const activeRect = (haveBlur && blurRect) ? blurRect : null;
+    const activeRect = ((haveBlur || unblurredInRect) && blurRect) ? blurRect : null;
     this.uniforms.set('blur_rect_x', activeRect ? activeRect[0] : 0.0);
     this.uniforms.set('blur_rect_y', activeRect ? activeRect[1] : 0.0);
     this.uniforms.set('blur_rect_w', activeRect ? activeRect[2] : 0.0);
