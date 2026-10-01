@@ -17,17 +17,11 @@
 // - Clutter.PaintNode.add_multitexture_rectangle() is not usable from GJS (its
 //   coordinate array is introspected as a number and crashes the shell), so
 //   all composite layers share one UV range.
-import { MaterialSettings } from './rendering/material.js';
 import { CropPass } from './rendering/crop.js';
-import { BlurRenderer } from './rendering/blur.js';
-import { ShaderPipelines, configureSamplerLayer } from './rendering/pipelines.js';
-import { GlassGeometry } from './rendering/geometry.js';
-import { UniformState } from './rendering/uniforms.js';
+import { GlassRenderer, MAX_GLASS_REGIONS } from './rendering/glassRenderer.js';
 import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
-import Cogl from 'gi://Cogl';
 import GLib from 'gi://GLib';
-import { RenderPasses } from './rendering/passes.js';
 import { computeCaptureLayout } from './actors/geometry.js';
 import { registerGlassEffect, unregisterGlassEffect, isLiveGlassEffect, blurCacheDefault, nestedRoiDefault } from './diagnostics/glass.js';
 import { registerCaptureOwner, unregisterCaptureOwner, nestedCompositeRoi, clampToRoi } from './rendering/nestedRoi.js';
@@ -36,8 +30,7 @@ import { frameSerial, ensureFrameSerialHook, frameSerialIsLive } from './renderi
 export const LiquidEffect = GObject.registerClass({
     GTypeName: 'LiquidGlassEffect',
 }, class LiquidEffect extends Clutter.OffscreenEffect {
-    // Must match glass.frag's `#define MAX_GLASS_REGIONS 16`.
-    static MAX_GLASS_REGIONS = 16;
+    static MAX_GLASS_REGIONS = MAX_GLASS_REGIONS;
 
     _init(params) {
         const extensionPath = params.extensionPath;
@@ -79,14 +72,19 @@ export const LiquidEffect = GObject.registerClass({
         this._diagFirstPaintLogged = false;
         this._extensionPath = extensionPath;
         this._logger = logger;
-        this._passes = new RenderPasses(logger);
-        this._pipelines = new ShaderPipelines(logger);
+        this._renderer = new GlassRenderer({
+            settings,
+            logger,
+            repaint: () => this.queue_repaint(),
+            setDiagnostics: enabled => { this._diagEnabled = enabled; },
+        });
+        this._passes = this._renderer.passes;
+        this._pipelines = this._renderer.pipelines;
+        this._blur = this._renderer.blur;
+        this._uniforms = this._renderer.uniforms;
+        this._geometry = this._renderer.geometry;
+        this._material = this._renderer.material;
         this._crop = new CropPass(this._pipelines, this._passes);
-        this._blur = new BlurRenderer(this._pipelines, this._passes, () => this.queue_repaint());
-        this._uniforms = new UniformState();
-        this._geometry = new GlassGeometry(this._uniforms.values);
-        this._material = new MaterialSettings(settings, this._uniforms, this._blur, enabled => { this._diagEnabled = enabled; });
-        this._material.initialize();
         this._loadAllShadersAsync();
     }
 
@@ -209,14 +207,7 @@ export const LiquidEffect = GObject.registerClass({
     _preparePaint() {
         if (!this._shadersLoaded)
             return false;
-        if (!this._pipelines.composite) {
-            this._pipelines.initialize(this._getCoglContext());
-            this._uniforms.attach(this._pipelines.composite);
-        }
-        // A tap-count change from setBlurRadius() is compiled here, where a Cogl
-        // context is available.
-        if (this._blur.needsCompile)
-            this._blur.compilePending(this._getCoglContext());
+        this._renderer.prepare(this._getCoglContext());
         return true;
     }
 
@@ -320,45 +311,14 @@ export const LiquidEffect = GObject.registerClass({
     // texels from the texture's corner (Clutter folds the FBO offset into the
     // transform), so the quad is layout.dest; see computeCaptureLayout().
     _bindCompositeLayers(effectiveTex, inputUV, blurRect) {
-        const compPipeline = this._pipelines.composite;
-        const haveBlur = this._blur.passCount > 0 && this._blur.result !== null;
-        // Tell the shader whether layer 1 holds the blur rect or the whole actor
-        // (zero).
-        const activeRect = (haveBlur && blurRect) ? blurRect : null;
+        const { layerUV, activeRect } = this._renderer.bindBackdrop(effectiveTex, inputUV, blurRect);
         this._blurRect = activeRect;
-        this._uniforms.set('blur_rect_x', activeRect ? activeRect[0] : 0.0);
-        this._uniforms.set('blur_rect_y', activeRect ? activeRect[1] : 0.0);
-        this._uniforms.set('blur_rect_w', activeRect ? activeRect[2] : 0.0);
-        this._uniforms.set('blur_rect_h', activeRect ? activeRect[3] : 0.0);
-        // Both layers get the same texture, so one UV range fits both. glass.frag
-        // samples only layer 1 (the blur, or the raw capture without blur); if it
-        // ever read layer 0 separately, the layers would need their own ranges.
-        const layer0Tex = haveBlur ? this._blur.result : effectiveTex;
-        // The blur is magnified from half or quarter resolution; glass.frag needs
-        // its real size to reconstruct it smoothly.
-        this._uniforms.set('blur_tex_w', layer0Tex.get_width());
-        this._uniforms.set('blur_tex_h', layer0Tex.get_height());
-        compPipeline.set_layer_texture(0, layer0Tex);
-        configureSamplerLayer(compPipeline, 0);
-        const layer0UV = haveBlur ? [0, 0, 1, 1] : inputUV;
-        compPipeline.set_layer_texture(1, layer0Tex);
-        configureSamplerLayer(compPipeline, 1);
-        // Uniforms set before the pipeline existed are written now.
-        this._uniforms.flush();
-        return layer0UV;
+        return layerUV;
     }
 
     _compositePaint(_paintNode, paintContext, capture, layer0UV) {
         const { actor, resW, resH, effectiveW, effectiveH, layout } = capture;
-        // glass.frag multiplies its premultiplied output by the pipeline colour,
-        // so fading means scaling all four channels by the actor's paint opacity
-        // (which already includes its ancestors'). Scaling alpha alone would
-        // wash the glass out while a window fades.
         const paintOpacity = actor ? actor.get_paint_opacity() : 255;
-        const color = new Cogl.Color();
-        const paintOpacity_f = paintOpacity / 255;
-        color.init_from_4f(paintOpacity_f, paintOpacity_f, paintOpacity_f, paintOpacity_f);
-        this._pipelines.composite.set_color(color);
         // Draw only the part of the quad that can be non-transparent. The uv also
         // gives the shader its pixel position (uv * resolution), so the rect is
         // only used when shader space and capture space coincide exactly.
@@ -398,7 +358,7 @@ export const LiquidEffect = GObject.registerClass({
                 v0 + ((compRect[1] + compRect[3]) / resH) * (v1 - v0),
             ];
         }
-        this._passes.composite(_paintNode, this._pipelines.composite, drawRect, drawUV, drawUV);
+        this._renderer.addComposite(_paintNode, drawRect, drawUV, paintOpacity);
         return paintOpacity;
     }
 
@@ -460,21 +420,11 @@ export const LiquidEffect = GObject.registerClass({
 
     /** Shader-space size of this glass, i.e. the resolution_x/y uniforms. */
     getResolution() {
-        return [
-            this._uniforms.values.get('resolution_x') ?? 0,
-            this._uniforms.values.get('resolution_y') ?? 0,
-        ];
+        return this._renderer.getResolution();
     }
 
     // The crop's default; global._lgGlass.cropPass() switches it per instance.
     static USE_CROP_PASS = true;
-
-    // Repaints only when a uniform actually changed; see UniformState.takeDirty().
-    _queueRepaintIfDirty() {
-        if (!this._uniforms.takeDirty())
-            return;
-        this.queue_repaint();
-    }
 
     _getCoglContext() {
         return Clutter.get_default_backend().get_cogl_context();
@@ -486,13 +436,8 @@ export const LiquidEffect = GObject.registerClass({
         unregisterCaptureOwner(this, this._registeredCaptureTex);
         this._registeredCaptureTex = null;
         unregisterGlassEffect(this);
-        this._material.clear();
-        // Dropping the references frees the textures and pipelines; GJS owns them.
-        this._blur.clear();
+        this._renderer.cleanup();
         this._crop.clear();
-        this._passes.clear();
-        this._pipelines.clear();
-        this._uniforms.clear();
     }
 
     // The setters below back the global._lgGlass switches.
@@ -515,118 +460,67 @@ export const LiquidEffect = GObject.registerClass({
         this.queue_repaint();
     }
 
-    setBlurRectEnabled(enabled) {
-        this._geometry.blurEnabled = enabled;
-        // The pool is sized for the old rect.
-        this._blur.invalidate();
-        this.queue_repaint();
-    }
+    setBlurRectEnabled(enabled) { this._renderer.setBlurRectEnabled(enabled); }
 
-    setCompositeRectEnabled(enabled) {
-        this._geometry.compositeEnabled = enabled;
-        this.queue_repaint();
-    }
+    setCompositeRectEnabled(enabled) { this._renderer.setCompositeRectEnabled(enabled); }
 
-    setEdgeTapsEnabled(enabled) {
-        this._uniforms.set('edge_taps_enabled', enabled ? 1.0 : 0.0);
-        this._queueRepaintIfDirty();
-    }
+    setEdgeTapsEnabled(enabled) { this._renderer.setEdgeTapsEnabled(enabled); }
 
     // The early exits are meant to match the full path exactly; any visible
     // difference with them off is a threshold bug.
-    setEarlyExitEnabled(enabled) {
-        this._uniforms.set('early_exit_enabled', enabled ? 1.0 : 0.0);
-        this._queueRepaintIfDirty();
-    }
+    setEarlyExitEnabled(enabled) { this._renderer.setEarlyExitEnabled(enabled); }
 
-    setDebugView(mode) {
-        this._uniforms.set('debug_view', mode);
-        this._queueRepaintIfDirty();
-    }
+    setDebugView(mode) { this._renderer.setDebugView(mode); }
 
-    setIsDock(isDock) {
-        this._uniforms.set('isDock', isDock ? 1.0 : 0.0);
-    }
+    setIsDock(isDock) { this._renderer.setIsDock(isDock); }
 
     // The rim, specular and sheen highlights as a group; the drop shadow and
     // the inner AO are not affected. Off for application windows.
-    setSurfaceLightEnabled(enabled) {
-        this._uniforms.set('surface_light_enabled', enabled ? 1.0 : 0.0);
-        this._queueRepaintIfDirty();
-    }
+    setSurfaceLightEnabled(enabled) { this._renderer.setSurfaceLightEnabled(enabled); }
 
-    setPadding(pad) {
-        this._uniforms.set('padding', pad);
-    }
+    setPadding(pad) { this._renderer.setPadding(pad); }
 
     // How far the drop shadow may extend before the background actor's clip.
-    setShadowMaxRadius(radius) {
-        this._uniforms.set('shadow_max_radius', radius);
-    }
+    setShadowMaxRadius(radius) { this._renderer.setShadowMaxRadius(radius); }
 
-    setBlurMethod(method) { this._blur.setBlurMethod(method); }
+    setBlurMethod(method) { this._renderer.setBlurMethod(method); }
 
-    setBlurRadius(radius) { this._blur.setBlurRadius(radius); }
+    setBlurRadius(radius) { this._renderer.setBlurRadius(radius); }
 
-    // Recompiles the pipelines on the next paint, for shader development. The
-    // buffered uniforms are kept and re-applied to the new pipeline.
-    reloadShaders() {
-        this._pipelines.clear();
-        this._uniforms.attach(null);
-        this._blur.reload();
-        this.queue_repaint();
-    }
+    reloadShaders() { this._renderer.reloadShaders(); }
 
-    setTintColor(r, g, b) {
-        this._uniforms.set('tint_r', r);
-        this._uniforms.set('tint_g', g);
-        this._uniforms.set('tint_b', b);
-        this._queueRepaintIfDirty();
-    }
+    setTintColor(r, g, b) { this._renderer.setTintColor(r, g, b); }
 
-    setTintStrength(strength) {
-        this._uniforms.set('tint_strength', strength);
-        this._queueRepaintIfDirty();
-    }
+    setTintStrength(strength) { this._renderer.setTintStrength(strength); }
 
-    setCornerRadius(radius) {
-        this._uniforms.set('corner_radius', radius);
-        this._queueRepaintIfDirty();
-    }
+    setCornerRadius(radius) { this._renderer.setCornerRadius(radius); }
 
-    setAnimationScale(scale) {
-        if (this._material.setAnimationScale(scale))
-            this._queueRepaintIfDirty();
-    }
+    setAnimationScale(scale) { this._renderer.setAnimationScale(scale); }
 
     // The actor's size in shader space. The texture pool follows the capture
     // size on its own.
-    setResolution(width, height) {
-        this._uniforms.set('resolution_x', width);
-        this._uniforms.set('resolution_y', height);
-        this._queueRepaintIfDirty();
-    }
+    setResolution(width, height) { this._renderer.setResolution(width, height); }
 
     // The glass rect inside the monitor-sized capture (glass.frag's dock_*).
-    setGlassGeometry(x, y, w, h) {
-        this._uniforms.set('dock_x', x);
-        this._uniforms.set('dock_y', y);
-        this._uniforms.set('dock_w', w);
-        this._uniforms.set('dock_h', h);
-        this._geometry.rect[0] = x;
-        this._geometry.rect[1] = y;
-        this._geometry.rect[2] = w;
-        this._geometry.rect[3] = h;
-        this._queueRepaintIfDirty();
-    }
+    setGlassGeometry(x, y, w, h) { this._renderer.setGlassGeometry(x, y, w, h); }
 
     // Draws up to MAX_GLASS_REGIONS rounded rects (setGlassRegions()) instead of
     // the single glass rect; used by Quick Settings' toggle-button mode.
-    setMultiRegionMode(enabled) {
-        this._uniforms.set('multi_region_mode', enabled ? 1.0 : 0.0);
-        this._geometry.multiRegion = enabled;
-        this._queueRepaintIfDirty();
-    }
+    setMultiRegionMode(enabled) { this._renderer.setMultiRegionMode(enabled); }
+
+    /**
+     * The regions for multi-region mode, in the space of setGlassGeometry(),
+     * truncated to MAX_GLASS_REGIONS. Each carries the element's own base
+     * colour and how strongly to apply it (0 when it could not be sampled);
+     * the custom tint from setTintColor() is applied on top.
+     */
+    setGlassRegions(regions) { this._renderer.setGlassRegions(regions); }
+
+    setBrightness(brightness) { this._renderer.setBrightness(brightness); }
+
+    setContrast(contrast) { this._renderer.setContrast(contrast); }
+
+    setSaturation(saturation) { this._renderer.setSaturation(saturation); }
 
     /**
      * Registers a callback run at the start of every vfunc_paint_target().
@@ -672,59 +566,5 @@ export const LiquidEffect = GObject.registerClass({
         }
         // @ts-ignore
         super.queue_repaint();
-    }
-
-    /**
-     * The regions for multi-region mode, in the space of setGlassGeometry(),
-     * truncated to MAX_GLASS_REGIONS. Each carries the element's own base
-     * colour and how strongly to apply it (0 when it could not be sampled);
-     * the custom tint from setTintColor() is applied on top.
-     */
-    setGlassRegions(regions) {
-        const clamped = regions.slice(0, LiquidEffect.MAX_GLASS_REGIONS);
-        const rx = new Array(LiquidEffect.MAX_GLASS_REGIONS).fill(0.0);
-        const ry = new Array(LiquidEffect.MAX_GLASS_REGIONS).fill(0.0);
-        const rw = new Array(LiquidEffect.MAX_GLASS_REGIONS).fill(0.0);
-        const rh = new Array(LiquidEffect.MAX_GLASS_REGIONS).fill(0.0);
-        const rTintR = new Array(LiquidEffect.MAX_GLASS_REGIONS).fill(1.0);
-        const rTintG = new Array(LiquidEffect.MAX_GLASS_REGIONS).fill(1.0);
-        const rTintB = new Array(LiquidEffect.MAX_GLASS_REGIONS).fill(1.0);
-        const rBaseStrength = new Array(LiquidEffect.MAX_GLASS_REGIONS).fill(0.0);
-        clamped.forEach((region, i) => {
-            rx[i] = region.x;
-            ry[i] = region.y;
-            rw[i] = region.w;
-            rh[i] = region.h;
-            rTintR[i] = region.tintR;
-            rTintG[i] = region.tintG;
-            rTintB[i] = region.tintB;
-            rBaseStrength[i] = Math.max(0.0, Math.min(1.0, region.baseStrength ?? 0.0));
-        });
-        this._geometry.regions = clamped.map(r => [r.x, r.y, r.w, r.h]);
-        this._uniforms.set('region_count', clamped.length);
-        this._uniforms.setArray('region_x', rx);
-        this._uniforms.setArray('region_y', ry);
-        this._uniforms.setArray('region_w', rw);
-        this._uniforms.setArray('region_h', rh);
-        this._uniforms.setArray('region_tint_r', rTintR);
-        this._uniforms.setArray('region_tint_g', rTintG);
-        this._uniforms.setArray('region_tint_b', rTintB);
-        this._uniforms.setArray('region_base_strength', rBaseStrength);
-        this._queueRepaintIfDirty();
-    }
-
-    setBrightness(brightness) {
-        this._uniforms.set('brightness', brightness);
-        this._queueRepaintIfDirty();
-    }
-
-    setContrast(contrast) {
-        this._uniforms.set('contrast', contrast);
-        this._queueRepaintIfDirty();
-    }
-
-    setSaturation(saturation) {
-        this._uniforms.set('saturation', saturation);
-        this._queueRepaintIfDirty();
     }
 });
