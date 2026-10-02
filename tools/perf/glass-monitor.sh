@@ -2,7 +2,7 @@
 # 本番セッションで、ガラスの仕事量・GPU・CPU を 1 秒ごとに記録し、シナリオまたは画面の状況ごとに集計する。
 #
 # ベンチで測る（おすすめ）:
-#   1. このスクリプトを起動する:  tools/perf/glass-monitor.sh [保存先ファイル]
+#   1. このスクリプトを起動する:  tools/perf/glass-monitor.sh [保存先ファイル]（省略時は logs/ に作る）
 #   2. Looking Glass (Alt+F2 → lg) で  global._lgBench.run('all')
 #      （tools/perf/lg-bench@liquid-glass.test。B1〜B15 を順に再現し、記録の開始・停止も自動）
 #      新旧比較は run('all', {ab: true})、ガラスなしも含めるなら {modes: ['stage', 'capture', 'none']}
@@ -141,7 +141,13 @@ if [ "${1:-}" = "--summary" ]; then
   exit 0
 fi
 
-out=${1:-glass-monitor-$(date +%Y%m%d-%H%M%S).log}
+# 既定の保存先はリポジトリ直下の logs/（.gitignore 済み）
+if [ -z "${1:-}" ]; then
+  mkdir -p "$(dirname "$0")/../../logs"
+  out="$(cd "$(dirname "$0")/../../logs" && pwd)/glass-monitor-$(date +%Y%m%d-%H%M%S).log"
+else
+  out=$1
+fi
 : >"$out"
 echo "記録先: $out"
 echo "Looking Glass で global._lgBench.run('all') か global._lgGlass.monitor(0) を実行してください。終わったらここで Ctrl-C。"
