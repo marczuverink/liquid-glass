@@ -18,12 +18,14 @@ export const SAMPLE_MARGIN = 32;
 // an actor through its position or size goes through a relayout, and
 // redrawing an actor whose relayout is still pending redraws the whole stage.
 const SAMPLE_BASE = 256;
-// Server-side window shadows are painted outside the window actor's box.
+// Room for a server-side shadow around a window that moved this frame, whose
+// paint volume is not known yet (see windowReaches()).
 const WINDOW_SHADOW_MARGIN = 80;
 // A relay is hidden only once its source is this much further away than it
 // had to come to be shown, so a source on the edge of a growing or moving
-// area does not toggle every frame.
-const RELAY_KEEP_MARGIN = 64;
+// area does not toggle every frame. Kept small: a source inside the margin
+// still costs a copy whenever it redraws.
+const RELAY_KEEP_MARGIN = 16;
 
 /**
  * Its paint volume is its own box (the sample area), not the source's: a
@@ -34,6 +36,21 @@ const BackdropRelay = GObject.registerClass(class BackdropRelay extends Clutter.
     _init(params) {
         super._init(params);
         Shell.util_set_hidden_from_pick(this, true);
+        this._allocated = false;
+    }
+
+    vfunc_allocate(box) {
+        super.vfunc_allocate(box);
+        this._allocated = true;
+    }
+
+    // A clone is relaid out whenever its source is, every frame for a
+    // dragged window, and the request climbs to the glass, which then waits
+    // for an allocation in every frame. A relay's box never changes, so once
+    // it has one the requests stop here.
+    vfunc_queue_relayout() {
+        if (!this._allocated)
+            super.vfunc_queue_relayout();
     }
 
     vfunc_pick(_pickContext) {
@@ -191,24 +208,28 @@ function actorReaches(actor, area) {
     if (!actor.has_allocation())
         return true;
     const pv = actor.get_transformed_paint_volume(global.stage);
-    if (!pv)
-        return true;
+    return !pv || volumeReaches(pv, area);
+}
+
+function volumeReaches(pv, area) {
     const o = pv.get_origin();
     return o.x < area[2] && o.x + pv.get_width() > area[0] &&
         o.y < area[3] && o.y + pv.get_height() > area[1];
 }
 
-// The actor's box is last frame's until the relayout, so the window's buffer
-// rect (already moved) is checked as well.
+// A window's paint volume includes the shadow mutter draws around it. A
+// window moved this frame has last frame's volume until the relayout, so
+// its buffer rect, already moved, decides, with room for a shadow.
 function windowReaches(actor, area) {
-    const m = WINDOW_SHADOW_MARGIN;
-    const ext = actor.get_transformed_extents();
-    if (ext.origin.x - m < area[2] && ext.origin.x + ext.size.width + m > area[0] &&
-        ext.origin.y - m < area[3] && ext.origin.y + ext.size.height + m > area[1])
-        return true;
+    if (actor.has_allocation()) {
+        const pv = actor.get_transformed_paint_volume(global.stage);
+        if (pv)
+            return volumeReaches(pv, area);
+    }
     const r = actor.get_meta_window()?.get_buffer_rect();
     if (!r)
-        return false;
+        return true;
+    const m = WINDOW_SHADOW_MARGIN;
     return r.x - m < area[2] && r.x + r.width + m > area[0] &&
         r.y - m < area[3] && r.y + r.height + m > area[1];
 }

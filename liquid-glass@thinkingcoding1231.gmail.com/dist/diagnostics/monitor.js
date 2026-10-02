@@ -1,32 +1,10 @@
-// A once-a-second record of what the glass is doing next to what the GPU is
-// doing, for comparing the two in a real session: global._lgGlass.monitor().
-// One journal line per second:
-//
-//   [Liquid Glass][monitor] t=12 label=B2 gpu=23% (max 41) sclk=1200MHz power=19.3W cpu=12% frames=58 full=2
-//     scene=<stage; dock calendar~; 4 win: firefox busy@dock, nautilus moving; overview>
-//     | dock copies=58 reuses=0 paints=58 blurs=58 relays=3 | calendar copies=...
-//
-// gpu is amdgpu's gpu_busy_percent, sclk its shader clock and power its
-// power sensor, sampled every 100 ms (no other driver exposes a busy
-// percentage). Busy is relative to the current clock, which the driver
-// lowers under light load, so the clock and power are needed to compare
-// two runs. On an APU the power sensor covers the whole package, CPU
-// included. cpu is the shell process's CPU time in the second, all threads.
-// frames counts painted stage views; full counts those that redrew the
-// whole monitor. label is set from outside (a benchmark) and only appears on
-// seconds that ran under one label from start to end.
-//
-// The scene is worked out without the user's help, so seconds spent in the
-// same situation can be grouped (tools/perf/glass-monitor.sh does that):
-//   - stage or capture: how the UI glass gets its backdrop;
-//   - the glass on screen; ~ marks one that moved or resized;
-//   - the windows shown and the ones doing something: busy (damaged at least
-//     BUSY_DAMAGE times in the second, e.g. a video), moving (frame rect
-//     changed) or anim (actor transform or opacity changed), with @glass for
-//     each glass it overlaps;
-//   - overview, ws-switch, fullscreen, locked.
-// Being behind a glass is decided by rects, so a window whose damage stays
-// away from the glass still counts.
+// A once-a-second journal line comparing the glass's work with the GPU's and
+// the shell's in a real session: global._lgGlass.monitor(). It has amdgpu's
+// busy percentage, shader clock and power (busy alone depends on the clock the
+// driver picked; an APU's power includes the CPU), the shell's CPU time, the
+// frames painted and how many redrew a whole monitor, a scene worked out from
+// what is on screen, and each glass's copies and paints. A benchmark can label
+// the lines. tools/perf/glass-monitor.sh averages them per scene or label.
 import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
@@ -392,6 +370,10 @@ class GlassMonitor {
         return `${shown} win${listed.length ? `: ${listed.join(', ')}` : ''}`;
     }
 
+    // How the UI glass is built; the glass on screen (~ when it moved); the
+    // windows shown and the busy (damaged BUSY_DAMAGE times), moving or
+    // animating ones, with @ for each glass they overlap; then overview,
+    // ws-switch, fullscreen and locked.
     _scene() {
         const parts = [this._mode(), this._glassScene(), this._windowScene()];
         if (this._overview)
