@@ -351,11 +351,14 @@ export class DashManager {
       startStageLoop(this._frameSignalSlot, this._frameSlot, frameTick);
     };
 
+    // The glass is the dock's sibling, so it stays up when the dock is
+    // hidden as a whole (for instance over a fullscreen window).
     let mapSignalId = this.targetActor.connect('notify::mapped', () => {
       if (this.targetActor.mapped) {
         startFrameSync();
       } else {
         this._stopFrameSync();
+        this._hideGlass();
       }
     });
     this._signals.push(mapSignalId);
@@ -401,12 +404,7 @@ export class DashManager {
     const { baseW, baseH } = bounds;
 
     if (baseW <= 9 || baseH <= 9) {
-      this.bgActor.hide();
-      // Forces a full update when the dock comes back.
-      this._lastBgW = undefined;
-      this._lastBgH = undefined;
-      this._lastBgX = undefined;
-      this._lastBgY = undefined;
+      this._hideGlass();
       return;
     }
     this.bgActor.show();
@@ -607,6 +605,15 @@ export class DashManager {
 
   private get _frameSignalSlot() {
     return { get: () => this._frameSignalId, set: (id: number) => { this._frameSignalId = id; } };
+  }
+
+  // The next sync shows it again and updates everything.
+  private _hideGlass(): void {
+    this.bgActor?.hide();
+    this._lastBgW = undefined;
+    this._lastBgH = undefined;
+    this._lastBgX = undefined;
+    this._lastBgY = undefined;
   }
 
   private _stopFrameSync(): void {

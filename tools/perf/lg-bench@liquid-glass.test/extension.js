@@ -27,6 +27,7 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const LG_UUID = 'liquid-glass@thinkingcoding1231.gmail.com';
@@ -35,8 +36,10 @@ const VIDEO = GLib.build_filenamev([MEDIA_DIR, 'video.mp4']);
 const STILL = GLib.build_filenamev([MEDIA_DIR, 'still.png']);
 const VIDEO_ID = 'lg-bench-video';
 const STILL_IDS = ['lg-bench-still-a', 'lg-bench-still-b'];
-// Room left between a window kept away from the dock and the dock.
-const DOCK_GAP = 60;
+// How far above the dock a window kept away from it ends: clear of the rect
+// the dock glass samples (its blur reaches past the dock) and of the margin
+// in which windows are still watched for it.
+const AWAY_GAP = 300;
 
 const GLASS_KEYS = ['enable-dock-glass', 'enable-menu-glass', 'enable-quick-settings-glass',
     'enable-notification-glass', 'enable-osd-glass'];
@@ -60,7 +63,7 @@ const SCENARIOS = [
     {id: 'B10b', title: 'クイック設定・トグルモードの開閉（1 秒ごと）', qsMode: QS_TOGGLES, measure: b => b.cycleMenu(b.quickSettings)},
     {id: 'B11', title: 'オーバービューの開閉（1.5 秒ごと）', measure: b => b.cycleOverview()},
     {id: 'B12', title: 'ワークスペースの切り替え（1.5 秒ごと）', measure: b => b.cycleWorkspace()},
-    {id: 'B13', title: '通知バナー（5 秒ごと）', measure: b => b.notifications()},
+    {id: 'B13', title: '通知バナー（4 秒表示・1 秒消す、の繰り返し）', measure: b => b.notifications()},
     {id: 'B14', title: 'OSD（音量表示を 0.25 秒ごとに更新）', measure: b => b.osd()},
     {id: 'B15', title: 'フルスクリーン動画', video: 'fullscreen'},
 ];
@@ -114,6 +117,7 @@ class Bench {
         this._running = false;
         this._deadline = 0;
         this._pointer = null;
+        this._source = null;
     }
 
     get running() {
@@ -230,6 +234,7 @@ class Bench {
         if (Main.overview.visible)
             Main.overview.hide();
         Main.osdWindowManager.hideAll();
+        this._dropNotifications();
         for (const appId of [...this._procs.keys()])
             await this._quit(appId);
         for (const [settings, key, value] of state.saved)
@@ -312,6 +317,7 @@ class Bench {
             await this._sleep(800);
         }
         Main.osdWindowManager.hideAll();
+        this._dropNotifications();
         await this._toWorkspace(0);
         if (sc.qsMode !== undefined && this._lgSettings.get_int(QS_MODE_KEY) !== sc.qsMode) {
             this._lgSettings.set_int(QS_MODE_KEY, sc.qsMode);
@@ -499,7 +505,7 @@ class Bench {
             x = Math.round(dock.x + dock.w / 2 - vw / 2);
             y = Math.round(dock.y + dock.h) - vh;
         } else if (where === 'away') {
-            y = Math.max(wa.y + 8, Math.round(dock.y) - DOCK_GAP - vh);
+            y = Math.max(wa.y + 8, Math.round(dock.y) - AWAY_GAP - vh);
         } else {
             y = wa.y + 8;
         }
@@ -535,7 +541,7 @@ class Bench {
         const m = this._monitor();
         const dock = this._dock();
         const {sw, sh} = this._sizes();
-        const y = where === 'dock' ? Math.round(dock.y + dock.h) - sh : Math.round(dock.y) - DOCK_GAP - sh;
+        const y = where === 'dock' ? Math.round(dock.y + dock.h) - sh : Math.round(dock.y) - AWAY_GAP - sh;
         return {y, x0: m.x + Math.round(m.width * 0.04), x1: m.x + Math.round(m.width * 0.96) - sw};
     }
 
@@ -599,11 +605,31 @@ class Bench {
         } while (await this._tick(1500));
     }
 
+    // A banner stays up until the user does something, so each one is
+    // withdrawn after a while to see banners come and go. A source goes away
+    // with its last notification, so each banner gets its own.
     async notifications() {
         let i = 0;
-        do
-            Main.notify('Liquid Glass bench', `Notification ${++i}`);
-        while (await this._tick(5000));
+        for (;;) {
+            const source = new MessageTray.Source({title: 'Liquid Glass bench', iconName: 'dialog-information-symbolic'});
+            source.connect('destroy', () => {
+                if (this._source === source)
+                    this._source = null;
+            });
+            this._source = source;
+            Main.messageTray.add(source);
+            source.addNotification(new MessageTray.Notification({
+                source, title: 'Liquid Glass bench', body: `Notification ${++i}`, isTransient: true,
+            }));
+            const more = await this._tick(4000);
+            this._dropNotifications();
+            if (!more || !await this._tick(1000))
+                break;
+        }
+    }
+
+    _dropNotifications() {
+        this._source?.destroy();
     }
 
     async osd() {
