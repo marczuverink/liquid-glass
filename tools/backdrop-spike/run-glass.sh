@@ -9,6 +9,8 @@
 #   LG_MONITORS_XML   a monitors.xml to use (e.g. for a fractional scale)
 #   LG_EXTRA_EXTENSIONS  more UUIDs from ~/.local/share/gnome-shell/extensions to
 #                        enable (e.g. blur-my-shell@aunetx), space separated
+#   LG_BENCH=1        also enable tools/perf/lg-bench@liquid-glass.test
+#   LG_SHELL_TIMEOUT  seconds before the shell is killed (default: 180)
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -30,6 +32,10 @@ done
 cp -r "$dtd_src" "$ext/$dtd_uuid"
 cp -r "$here/$drv_uuid" "$ext/"
 extra=""
+if [ "${LG_BENCH:-}" = 1 ]; then
+  cp -r "$repo/tools/perf/lg-bench@liquid-glass.test" "$ext/"
+  extra=", 'lg-bench@liquid-glass.test'"
+fi
 for uuid in ${LG_EXTRA_EXTENSIONS:-}; do
   cp -r "$HOME/.local/share/gnome-shell/extensions/$uuid" "$ext/"
   extra="$extra, '$uuid'"
@@ -62,7 +68,7 @@ dbus-run-session -- bash -c "
   gsettings --schemadir '$dtd_schemas' set org.gnome.shell.extensions.dash-to-dock dock-fixed true
   gsettings --schemadir '$dtd_schemas' set org.gnome.shell.extensions.dash-to-dock intellihide false
   gsettings --schemadir '$dtd_schemas' set org.gnome.shell.extensions.dash-to-dock dock-position 'BOTTOM'
-  exec timeout 180 gnome-shell --headless --wayland --virtual-monitor '$mode' --wayland-display '$socket'
+  exec timeout ${LG_SHELL_TIMEOUT:-180} gnome-shell --headless --wayland --virtual-monitor '$mode' --wayland-display '$socket'
 " >"$out/shell.log" 2>&1 || true
 # The session's document portal mounts itself there.
 fusermount3 -u "$XDG_RUNTIME_DIR/doc" 2>/dev/null || true

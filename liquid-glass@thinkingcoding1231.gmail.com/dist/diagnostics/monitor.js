@@ -2,13 +2,19 @@
 // doing, for comparing the two in a real session: global._lgGlass.monitor().
 // One journal line per second:
 //
-//   [Liquid Glass][monitor] t=12 gpu=23% (max 41) frames=58 full=2
+//   [Liquid Glass][monitor] t=12 label=B2 gpu=23% (max 41) sclk=1200MHz power=19.3W cpu=12% frames=58 full=2
 //     scene=<stage; dock calendar~; 4 win: firefox busy@dock, nautilus moving; overview>
 //     | dock copies=58 reuses=0 paints=58 blurs=58 relays=3 | calendar copies=...
 //
-// gpu is amdgpu's gpu_busy_percent, sampled every 100 ms (no other driver
-// exposes one). frames counts painted stage views; full counts those that
-// redrew the whole monitor.
+// gpu is amdgpu's gpu_busy_percent, sclk its shader clock and power its
+// power sensor, sampled every 100 ms (no other driver exposes a busy
+// percentage). Busy is relative to the current clock, which the driver
+// lowers under light load, so the clock and power are needed to compare
+// two runs. On an APU the power sensor covers the whole package, CPU
+// included. cpu is the shell process's CPU time in the second, all threads.
+// frames counts painted stage views; full counts those that redrew the
+// whole monitor. label is set from outside (a benchmark) and only appears on
+// seconds that ran under one label from start to end.
 //
 // The scene is worked out without the user's help, so seconds spent in the
 // same situation can be grouped (tools/perf/glass-monitor.sh does that):
@@ -34,6 +40,8 @@ const SAMPLE_MS = 100;
 const REPORT_MS = 1000;
 const BUSY_DAMAGE = 10;
 const MAX_ACTIVE_WINDOWS = 4;
+// /proc reports CPU time in USER_HZ, which is 100 on every Linux architecture.
+const USER_HZ = 100;
 const APP_PROFILES = new Set(['application', 'desktop-menu']);
 // Paints nothing; notes whether a frame redrew its whole monitor. Registered
 // on first use, so the type exists only once someone monitors. Offscreen
@@ -114,10 +122,14 @@ class GlassMonitor {
     _workspaceId = 0;
     _frames = 0;
     _seconds = 0;
-    _gpuFiles = [];
-    _gpuSum = 0;
-    _gpuMax = 0;
-    _gpuSamples = 0;
+    _sensors = { busy: [], clock: [], power: [] };
+    _busy = new Gauge();
+    _clock = new Gauge();
+    _power = new Gauge();
+    _cpuTicks = null;
+    _cpuTime = 0;
+    _label = null;
+    _labelChanged = false;
     _probes = [];
     _windows = new Map();
     _glass = new Map();
@@ -127,7 +139,7 @@ class GlassMonitor {
     _workspaceSwitched = false;
     _last = new Map();
     // Per-second totals for the summary.
-    _totals = { seconds: 0, gpu: 0, frames: 0, full: 0 };
+    _totals = { seconds: 0, gpu: 0, power: 0, cpu: 0, frames: 0, full: 0 };
 
     constructor(_sources, _duration) {
         this._sources = _sources;
@@ -135,7 +147,9 @@ class GlassMonitor {
     }
 
     start() {
-        this._gpuFiles = findGpuBusyFiles();
+        this._sensors = findGpuSensors();
+        this._cpuTicks = readProcessTicks();
+        this._cpuTime = GLib.get_monotonic_time();
         for (const m of Main.layoutManager.monitors) {
             const probe = createProbe([m.x, m.y, m.width, m.height]);
             // Outside uiGroup, which the capturing glass clones.
@@ -161,7 +175,16 @@ class GlassMonitor {
             return GLib.SOURCE_CONTINUE;
         });
         diagnosticLog(`[Liquid Glass][monitor] started ${this._duration > 0 ? `for ${this._duration}s` : 'until monitorStop()'}; ` +
-            `gpu source: ${this._gpuFiles.length ? this._gpuFiles.join(', ') : 'none'}`);
+            `gpu sensors: ${[...this._sensors.busy, ...this._sensors.clock, ...this._sensors.power].join(', ') || 'none'}`);
+    }
+
+    // Lines from the next whole second on carry the label.
+    setLabel(label) {
+        const clean = label ? label.replace(/[^\w./-]/g, '') || null : null;
+        if (clean === this._label)
+            return;
+        this._label = clean;
+        this._labelChanged = true;
     }
 
     stop() {
@@ -191,24 +214,19 @@ class GlassMonitor {
         const t = this._totals;
         if (t.seconds > 0) {
             diagnosticLog(`[Liquid Glass][monitor] stopped after ${t.seconds}s: ` +
-                `${this._gpuFiles.length ? `gpu avg ${(t.gpu / t.seconds).toFixed(1)}%, ` : ''}` +
+                `${this._sensors.busy.length ? `gpu avg ${(t.gpu / t.seconds).toFixed(1)}%, ` : ''}` +
+                `${this._sensors.power.length ? `power avg ${(t.power / t.seconds).toFixed(1)}W, ` : ''}` +
+                `cpu avg ${(t.cpu / t.seconds).toFixed(1)}%, ` +
                 `${(t.frames / t.seconds).toFixed(1)} frames/s, ${(t.full / t.seconds).toFixed(1)} full redraws/s`);
         }
     }
 
     _sample() {
-        let busy = -1;
-        for (const file of this._gpuFiles) {
-            const value = readNumber(file);
-            if (value !== null && value > busy)
-                busy = value;
-        }
-        if (busy >= 0) {
-            this._gpuSum += busy;
-            this._gpuSamples++;
-            if (busy > this._gpuMax)
-                this._gpuMax = busy;
-        }
+        this._busy.add(readMax(this._sensors.busy));
+        const hz = readMax(this._sensors.clock);
+        this._clock.add(hz === null ? null : hz / 1e6);
+        const microwatts = readSum(this._sensors.power);
+        this._power.add(microwatts === null ? null : microwatts / 1e6);
         this._sampleWindows();
         this._sampleGlass();
         this._overview ||= Main.overview.visible;
@@ -390,13 +408,21 @@ class GlassMonitor {
     _report() {
         this._seconds++;
         const parts = [];
-        const gpu = this._gpuSamples ? this._gpuSum / this._gpuSamples : -1;
         const full = this._probes.reduce((n, p) => n + p.full, 0);
+        const cpu = this._cpuPercent();
+        const label = this._labelChanged ? null : this._label;
+        this._labelChanged = false;
         parts.push(`t=${this._seconds}` +
-            (gpu >= 0 ? ` gpu=${gpu.toFixed(0)}% (max ${this._gpuMax})` : '') +
+            (label ? ` label=${label}` : '') +
+            (this._busy.n ? ` gpu=${this._busy.mean.toFixed(0)}% (max ${this._busy.max})` : '') +
+            (this._clock.n ? ` sclk=${this._clock.mean.toFixed(0)}MHz` : '') +
+            (this._power.n ? ` power=${this._power.mean.toFixed(1)}W` : '') +
+            (cpu === null ? '' : ` cpu=${cpu.toFixed(0)}%`) +
             ` frames=${this._frames} full=${full} scene=<${this._scene()}>`);
         this._totals.seconds++;
-        this._totals.gpu += Math.max(gpu, 0);
+        this._totals.gpu += this._busy.mean;
+        this._totals.power += this._power.mean;
+        this._totals.cpu += cpu ?? 0;
         this._totals.frames += this._frames;
         this._totals.full += full;
         for (const glass of this._sources.glasses()) {
@@ -423,9 +449,9 @@ class GlassMonitor {
         this._frames = 0;
         for (const probe of this._probes)
             probe.full = 0;
-        this._gpuSum = 0;
-        this._gpuSamples = 0;
-        this._gpuMax = 0;
+        this._busy.reset();
+        this._clock.reset();
+        this._power.reset();
         for (const track of this._windows.values()) {
             track.moved = false;
             track.animated = false;
@@ -440,40 +466,131 @@ class GlassMonitor {
         this._locked = false;
         this._workspaceSwitched = false;
     }
+
+    // The shell's CPU time since the last call, as a percentage of one core.
+    _cpuPercent() {
+        const ticks = readProcessTicks();
+        const now = GLib.get_monotonic_time();
+        const last = this._cpuTicks;
+        const seconds = (now - this._cpuTime) / 1e6;
+        this._cpuTicks = ticks;
+        this._cpuTime = now;
+        if (ticks === null || last === null || !(seconds > 0))
+            return null;
+        return (ticks - last) / USER_HZ / seconds * 100;
+    }
 }
 
-// amdgpu's busy percentage, one file per card.
-function findGpuBusyFiles() {
-    const files = [];
+class Gauge {
+    sum = 0;
+    n = 0;
+    max = 0;
+
+    add(value) {
+        if (value === null)
+            return;
+        this.sum += value;
+        this.n++;
+        if (value > this.max)
+            this.max = value;
+    }
+
+    get mean() {
+        return this.n ? this.sum / this.n : 0;
+    }
+
+    reset() {
+        this.sum = 0;
+        this.n = 0;
+        this.max = 0;
+    }
+}
+
+function listDir(path) {
+    const names = [];
     let dir = null;
     try {
-        dir = GLib.Dir.open('/sys/class/drm', 0);
+        dir = GLib.Dir.open(path, 0);
     }
     catch {
-        return files;
+        return names;
     }
-    for (let name = dir.read_name(); name !== null; name = dir.read_name()) {
-        if (!/^card\d+$/.test(name))
-            continue;
-        const file = `/sys/class/drm/${name}/device/gpu_busy_percent`;
-        if (GLib.file_test(file, GLib.FileTest.EXISTS))
-            files.push(file);
-    }
+    for (let name = dir.read_name(); name !== null; name = dir.read_name())
+        names.push(name);
     dir.close();
-    return files;
+    return names;
 }
 
-function readNumber(file) {
+// amdgpu's busy percentage, and its hwmon shader clock and power, per card.
+function findGpuSensors() {
+    const sensors = { busy: [], clock: [], power: [] };
+    const exists = (file) => GLib.file_test(file, GLib.FileTest.EXISTS);
+    for (const card of listDir('/sys/class/drm')) {
+        if (!/^card\d+$/.test(card))
+            continue;
+        const device = `/sys/class/drm/${card}/device`;
+        if (!exists(`${device}/gpu_busy_percent`))
+            continue;
+        sensors.busy.push(`${device}/gpu_busy_percent`);
+        for (const hwmon of listDir(`${device}/hwmon`)) {
+            const base = `${device}/hwmon/${hwmon}`;
+            if (exists(`${base}/freq1_input`))
+                sensors.clock.push(`${base}/freq1_input`);
+            const power = [`${base}/power1_input`, `${base}/power1_average`].find(exists);
+            if (power)
+                sensors.power.push(power);
+        }
+    }
+    return sensors;
+}
+
+function readMax(files) {
+    let result = null;
+    for (const file of files) {
+        const value = readNumber(file);
+        if (value !== null && (result === null || value > result))
+            result = value;
+    }
+    return result;
+}
+
+function readSum(files) {
+    let result = null;
+    for (const file of files) {
+        const value = readNumber(file);
+        if (value !== null)
+            result = (result ?? 0) + value;
+    }
+    return result;
+}
+
+function readText(file) {
     try {
         const [ok, bytes] = GLib.file_get_contents(file);
-        if (!ok)
-            return null;
-        const value = parseInt(new TextDecoder().decode(bytes), 10);
-        return Number.isFinite(value) ? value : null;
+        return ok ? new TextDecoder().decode(bytes) : null;
     }
     catch {
         return null;
     }
+}
+
+// utime + stime of the whole process; the command name before them is in
+// parentheses and may contain spaces.
+function readProcessTicks() {
+    const stat = readText('/proc/self/stat');
+    if (!stat)
+        return null;
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    const ticks = parseInt(fields[11], 10) + parseInt(fields[12], 10);
+    return Number.isFinite(ticks) ? ticks : null;
+}
+
+function readNumber(file) {
+    const text = readText(file);
+    if (text === null)
+        return null;
+    const value = parseInt(text, 10);
+    return Number.isFinite(value) ? value : null;
 }
 
 let _monitor = null;
@@ -488,6 +605,11 @@ export function startGlassMonitor(sources, seconds) {
 export function stopGlassMonitor() {
     _monitor?.stop();
     _monitor = null;
+}
+
+/** Labels the running record's lines (a benchmark's scenario); null clears it. */
+export function setGlassMonitorLabel(label) {
+    _monitor?.setLabel(label);
 }
 
 export function isGlassMonitorRunning() {

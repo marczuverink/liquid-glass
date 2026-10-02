@@ -11,7 +11,7 @@ import { setBackgroundMirrorEnabled, isBackgroundMirrorEnabled } from '../captur
 import { setCullOptOutEnabled, isCullOptOutEnabled } from '../capture/windowCulling.js';
 import { setWindowActorRescueMode, getWindowActorRescueMode, type WindowActorRescueMode } from '../actors/allocation.js';
 import { diagnosticLog } from './logging.js';
-import { startGlassMonitor, stopGlassMonitor, isGlassMonitorRunning } from './monitor.js';
+import { startGlassMonitor, stopGlassMonitor, isGlassMonitorRunning, setGlassMonitorLabel } from './monitor.js';
 
 // Every live LiquidEffect registers here so its last frame can be inspected
 // from Looking Glass through global._lgGlass (installed by enable(), removed by
@@ -498,6 +498,7 @@ function createDebugApi(): object {
       return report('monitor stopped');
     },
     monitorRunning: () => isGlassMonitorRunning(),
+    monitorLabel: (label: string | null) => setGlassMonitorLabel(label),
 
     blurRect: (enabled: boolean) =>
       report(`blur sub-rect ${onOff(enabled)} on ${onEveryGlass(fx => fx.setBlurRectEnabled(enabled))} instance(s)`),

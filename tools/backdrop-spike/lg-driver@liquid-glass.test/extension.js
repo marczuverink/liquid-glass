@@ -10,6 +10,9 @@
 //   monitor    global._lgGlass.monitor() while windows move and a menu opens;
 //              LG_DRV_CAPTURE=1 runs it with the clone-capturing glass
 //   lifecycle  disables and enables Liquid Glass with every glass shown once
+//   bench      global._lgBench.run() (run-glass.sh with LG_BENCH=1); LG_DRV_BENCH
+//              picks scenarios (comma separated, default all), LG_DRV_BENCH_SECONDS
+//              the seconds per scenario (default 3), LG_DRV_BENCH_AB=1 runs both modes
 //
 // Screenshots are off-stage paints, where a stage-reading glass draws with
 // its last on-screen copy. The camera shows what was really on screen: while
@@ -229,6 +232,8 @@ export default class LgDriver extends Extension {
       await this._monitorScenario();
     else if (SCENARIO === 'lifecycle')
       await this._lifecycleScenario();
+    else if (SCENARIO === 'bench')
+      await this._benchScenario();
     log(`dump\n${lg().dump()}`);
   }
 
@@ -606,6 +611,17 @@ export default class LgDriver extends Extension {
     dateMenu.close(true);
     await sleep(2000);
     lg().monitorStop();
+  }
+
+  async _benchScenario() {
+    const which = GLib.getenv('LG_DRV_BENCH') ?? 'all';
+    const seconds = Number(GLib.getenv('LG_DRV_BENCH_SECONDS') ?? 3);
+    log(global._lgBench.run(which === 'all' ? 'all' : which.split(','),
+      {seconds, settle: 2, ab: GLib.getenv('LG_DRV_BENCH_AB') === '1'}));
+    await sleep(1000);
+    while (global._lgBench.running)
+      await sleep(500);
+    log(`after bench: leftovers=${JSON.stringify(this._leftovers())} windows=${global.get_window_actors().length}`);
   }
 
   // Our own actors left anywhere on the stage.
