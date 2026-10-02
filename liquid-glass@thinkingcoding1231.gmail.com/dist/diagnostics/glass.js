@@ -11,6 +11,7 @@ import { setBackgroundMirrorEnabled, isBackgroundMirrorEnabled } from '../captur
 import { setCullOptOutEnabled, isCullOptOutEnabled } from '../capture/windowCulling.js';
 import { setWindowActorRescueMode, getWindowActorRescueMode } from '../actors/allocation.js';
 import { diagnosticLog } from './logging.js';
+import { startGlassMonitor, stopGlassMonitor, isGlassMonitorRunning } from './monitor.js';
 // Every live LiquidEffect registers here so its last frame can be inspected
 // from Looking Glass through global._lgGlass (installed by enable(), removed by
 // disable()). For example, `blurResult: NULL` in dump() means the glass shows
@@ -482,6 +483,20 @@ function createDebugApi() {
             return report(`backdrop glass ${onOff(on)} (toggle the extension off/on to rebuild existing glass)`);
         },
         backdropEnabled: () => backdropDefault,
+        // The live stage-reading glass actors themselves, for scripted checks.
+        glassObjects: () => [..._liveBackdrops],
+        // One journal line per second with every shown glass's work, the windows
+        // on screen and the GPU's busy percentage (see diagnostics/monitor.ts).
+        // 0 runs until monitorStop().
+        monitor: (seconds = 30) => {
+            startGlassMonitor({ glasses: () => _liveBackdrops, effects: () => _liveEffects }, seconds);
+            return report(`monitor running${seconds > 0 ? ` for ${seconds}s` : ''}; see journalctl -o cat | grep '\[monitor\]'`);
+        },
+        monitorStop: () => {
+            stopGlassMonitor();
+            return report('monitor stopped');
+        },
+        monitorRunning: () => isGlassMonitorRunning(),
         blurRect: (enabled) => report(`blur sub-rect ${onOff(enabled)} on ${onEveryGlass(fx => fx.setBlurRectEnabled(enabled))} instance(s)`),
         compositeRect: (enabled) => report(`composite sub-rect ${onOff(enabled)} on ${onEveryGlass(fx => fx.setCompositeRectEnabled(enabled))} instance(s)`),
         cropPass: (enabled) => report(`crop pass ${onOff(enabled)} on ${onEveryEffect(fx => fx.setCropPassEnabled(enabled))} instance(s)`),
@@ -507,6 +522,7 @@ export function installGlassDiagnostics() {
 
 /** Called from disable(). */
 export function removeGlassDiagnostics() {
+    stopGlassMonitor();
     stopGlassRingSampler();
     delete global._lgGlass;
 }

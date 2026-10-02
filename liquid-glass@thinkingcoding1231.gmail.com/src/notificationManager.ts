@@ -3,14 +3,19 @@ import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import GLib from 'gi://GLib';
 import { LiquidEffect } from './liquidEffect.js';
+import { BackdropGlass } from './rendering/backdropGlass.js';
+import type { GlassSurface } from './rendering/glassSurface.js';
+import { backdropDefault } from './diagnostics/glass.js';
+import { createCaptureActors } from './actors/captureActors.js';
+import { isActorValid } from './actors/lifecycle.js';
+import { addFrameTicker, removeFrameTicker } from './animation/frameTicker.js';
 import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
 import Gio from 'gi://Gio';
-import { UnpickableActor } from './actors/unpickable.js';
 import { UILayerSampler } from './capture/uiLayerSampler.js';
 import { WindowCloneManager } from './capture/windowClones.js';
 import { ensureGlassAllocated } from './actors/allocation.js';
 import { getTransformedRect, resolveMonitorGeometry } from './actors/geometry.js';
-import { startLaterLoop, stopLaterLoop } from './animation/frameLoops.js';
+import { startSyncLoop, stopStageLoop } from './animation/frameLoops.js';
 import { excludeOtherGlass } from './capture/glassExclusions.js';
 import { setClipIfChanged } from './actors/writes.js';
 import { syncGlassCaptureClip } from './capture/clip.js';
@@ -34,12 +39,14 @@ export class NotificationManager {
 
   private currentBanner: St.Widget | null = null;
 
-  // bgActor (monitor-sized) holds liquidBox, which carries the LiquidEffect
-  // and holds the clone container.
+  // With a LiquidEffect, bgActor (monitor-sized) holds liquidBox, which
+  // carries the effect and holds the clone container. A BackdropGlass is
+  // bgActor and effect at once.
   private bgActor: Clutter.Actor | null = null;
   private liquidBox: Clutter.Actor | null = null;
   private _cloneContainer: Clutter.Actor | null = null;
-  private effect: LiquidEffect | null = null;
+  private effect: GlassSurface | null = null;
+  private _backdrop: BackdropGlass | null = null;
 
   private _windowCloneManager: WindowCloneManager | null = null;
   private _uiSampler: UILayerSampler | null = null;
@@ -50,6 +57,11 @@ export class NotificationManager {
   private get _frameSlot() {
     return { get: () => this._frameSyncId, set: (id: number) => { this._frameSyncId = id; } };
   }
+  private _frameSignalId = 0;
+  private get _frameSignalSlot() {
+    return { get: () => this._frameSignalId, set: (id: number) => { this._frameSignalId = id; } };
+  }
+  private _tintTickId = 0;
   private _isEffectActive: boolean;
 
   private _bannerIdleId = 0;
@@ -266,28 +278,17 @@ export class NotificationManager {
       this.tray._bannerBin.translation_y = this._originalBannerOffset + this._notificationYOffset;
     }
 
-    this.bgActor = new UnpickableActor();
-    this.bgActor.set_name('liquid-glass-bg-actor');
+    if (backdropDefault) {
+      this._backdrop = new BackdropGlass({
+        extensionPath: this.extensionPath, settings: this._settings, logger: this._logger, owner: 'notification',
+      } as any);
+      this.bgActor = this._backdrop;
+      this.bgActor.set_size(1.0, 1.0);
+    } else {
+      ({ bgActor: this.bgActor, liquidBox: this.liquidBox, cloneContainer: this._cloneContainer } = createCaptureActors());
+    }
     this.bgActor.hide();
-    this.bgActor.set_size(1.0, 1.0);
     this.bgActor.set_pivot_point(0.0, 0.0);
-
-    this.liquidBox = new UnpickableActor();
-    this.liquidBox.set_name('liquid-box');
-    this.liquidBox.set_clip_to_allocation(true);
-    this.bgActor.add_child(this.liquidBox);
-
-    // A transparent 1x1 child that works around Blur My Shell turning the
-    // glass black.
-    let dummyBreaker = new UnpickableActor();
-    dummyBreaker.set_name('optimization-breaker');
-    dummyBreaker.set_size(1.0, 1.0);
-    dummyBreaker.set_opacity(0);
-    this.liquidBox.add_child(dummyBreaker);
-
-    this._cloneContainer = new UnpickableActor();
-    this._cloneContainer.set_name('clone-container');
-    this.liquidBox.add_child(this._cloneContainer);
 
     // The banner's ancestor that is a direct child of uiGroup.
     // @ts-expect-error: _bannerBin is an internal property
@@ -299,7 +300,8 @@ export class NotificationManager {
       bannerRoot = p;
     }
 
-    // Below the banner, so the glass does not clone itself or the banner.
+    // Below the banner, so the glass does not clone itself or the banner,
+    // and a BackdropGlass reads the stage before the banner is drawn.
     if (bannerRoot.get_parent() === Main.layoutManager.uiGroup) {
       Main.layoutManager.uiGroup.insert_child_below(this.bgActor, bannerRoot);
     } else {
@@ -315,36 +317,41 @@ export class NotificationManager {
     let contrast = this._settings.get_double('notification-contrast');
     this._baseTint = tintStrength;
 
-    this.effect = new LiquidEffect({ extensionPath: this.extensionPath, settings: this._settings, owner: 'notification' } as any);
-    this.effect.setPadding(SHADER_PADDING);
-    this.effect.setTintColor(...hexToColorArray(tintColorStr));
-    this.effect.setTintStrength(this._baseTint);
-    this.effect.setCornerRadius(cornerRadius);
-    this.effect.setIsDock(false);
-    this.effect.setBrightness(brightness);
-    this.effect.setSaturation(saturation);
-    this.effect.setContrast(contrast);
-    this.effect.setBlurRadius(blurRadius);
-    this.liquidBox.add_effect(this.effect);
+    const effect: GlassSurface = this._backdrop ?? new LiquidEffect({
+      extensionPath: this.extensionPath, settings: this._settings, owner: 'notification',
+    } as any);
+    this.effect = effect;
+    effect.setPadding(SHADER_PADDING);
+    effect.setTintColor(...hexToColorArray(tintColorStr));
+    effect.setTintStrength(this._baseTint);
+    effect.setCornerRadius(cornerRadius);
+    effect.setIsDock(false);
+    effect.setBrightness(brightness);
+    effect.setSaturation(saturation);
+    effect.setContrast(contrast);
+    effect.setBlurRadius(blurRadius);
+    if (effect instanceof LiquidEffect) this.liquidBox!.add_effect(effect);
 
     // The banner slides in by relayout, so the frame tick sees last frame's
     // position; the paint-time hook corrects it (LiquidEffect.setLiveGeometryHook()).
-    this.effect.setLiveGeometryHook(() => this._syncGlassGeometryLive());
+    effect.setLiveGeometryHook(() => this._syncGlassGeometryLive());
 
-    this._windowCloneManager = new WindowCloneManager(this.liquidBox, this._cloneContainer, 'lg-notification');
-    this._uiSampler = new UILayerSampler(
-      this.bgActor,
-      this.liquidBox,
-      [bannerRoot, global.windowGroup, global.window_group],
-      this._cloneContainer,
-      'notification'
-    );
+    if (!this._backdrop) {
+      this._windowCloneManager = new WindowCloneManager(this.liquidBox!, this._cloneContainer!, 'lg-notification');
+      this._uiSampler = new UILayerSampler(
+        this.bgActor,
+        this.liquidBox!,
+        [bannerRoot, global.windowGroup, global.window_group],
+        this._cloneContainer!,
+        'notification'
+      );
+    }
 
     // The first geometry sync shows the glass.
     this._buildClones();
 
-    stopLaterLoop(this._frameSlot);
-    startLaterLoop(this._frameSlot, {
+    stopStageLoop(this._frameSignalSlot, this._frameSlot);
+    startSyncLoop(this._frameSignalSlot, this._frameSlot, {
       alive: () => !!this.bgActor && !!this.currentBanner,
       honourFreeze: true,
       errorTag: 'NotificationManager',
@@ -352,18 +359,40 @@ export class NotificationManager {
         // Checked before this frame's sync dirties anything.
         ensureGlassAllocated(this.bgActor);
         this._syncGeometry();
-
-        // Slightly stronger tint while hovered.
-        let isHovered = this.currentBanner!.hover;
-        let targetTint = isHovered ? (this._baseTint + 0.1) : this._baseTint;
-        if (Math.abs(this._currentTint - targetTint) > 0.001) {
-          this._currentTint += (targetTint - this._currentTint) * 0.1;
-          this.effect?.setTintStrength(this._currentTint);
-        }
+        this._syncHoverTint();
       },
     });
     this._isFirstAdaptiveRun = true;
     this._startAdaptiveColorSampling();
+  }
+
+  private _hoverTint(): number {
+    return this.currentBanner?.hover ? this._baseTint + 0.1 : this._baseTint;
+  }
+
+  // Slightly stronger tint while hovered, eased over a few frames. The sync
+  // loop only runs on frames something else asked for, so the easing keeps
+  // its own ticker until it settles.
+  private _syncHoverTint(): void {
+    if (this._tintTickId || Math.abs(this._currentTint - this._hoverTint()) <= 0.001) return;
+    this._tintTickId = addFrameTicker(() => {
+      if (!this.currentBanner || !this.effect) {
+        this._tintTickId = 0;
+        return false;
+      }
+      const target = this._hoverTint();
+      this._currentTint += (target - this._currentTint) * 0.1;
+      this.effect.setTintStrength(this._currentTint);
+      if (Math.abs(this._currentTint - target) > 0.001) return true;
+      this._tintTickId = 0;
+      return false;
+    });
+  }
+
+  private _stopHoverTint(): void {
+    if (!this._tintTickId) return;
+    removeFrameTicker(this._tintTickId);
+    this._tintTickId = 0;
   }
 
   // Every frame. The actors cover the whole monitor, as Blur My Shell's
@@ -371,9 +400,14 @@ export class NotificationManager {
   _syncGeometry() {
     if (!this.bgActor || !this.currentBanner) return;
 
+    // Keep the offset on the same parent GNOME animates, never on the glass
+    // alone. Written only on change: Clutter queues a redraw even for the
+    // same value, and this runs in before-update, so every write would ask
+    // for another frame.
     // @ts-expect-error: shell-owned container
-    // Keep the offset on the same parent GNOME animates, never on the glass alone.
-    this.tray._bannerBin.translation_y = this._originalBannerOffset + this._notificationYOffset;
+    const bannerBin: Clutter.Actor = this.tray._bannerBin;
+    const offset = Math.fround(this._originalBannerOffset + this._notificationYOffset);
+    if (bannerBin.translation_y !== offset) bannerBin.translation_y = offset;
 
     // GNOME animates opacity and scale on _bannerBin, not on the banner.
     // Both the origin and size must include that ancestor transform.
@@ -436,6 +470,11 @@ export class NotificationManager {
       this._lastBgW = bgW; this._lastBgH = bgH;
       this._lastBgX = bgX_abs; this._lastBgY = bgY_abs;
       this._lastScreenW = screenW; this._lastScreenH = screenH;
+    }
+
+    if (this._backdrop) {
+      this._backdrop.syncSources();
+      return;
     }
 
     this._windowCloneManager?.setOffset(-monitorX, -monitorY);
@@ -502,18 +541,19 @@ export class NotificationManager {
       this.currentBanner = null;
     }
 
-    stopLaterLoop(this._frameSlot);
+    stopStageLoop(this._frameSignalSlot, this._frameSlot);
+    this._stopHoverTint();
 
     // The effect is cleaned up before its actor is destroyed.
     if (this.effect) {
       this.effect.cleanup();
       this.effect = null;
     }
+    this._backdrop = null;
 
-    if (this.bgActor) {
-      this.bgActor.destroy();
-      this.bgActor = null;
-    }
+    // At shell shutdown the stage may have destroyed it already.
+    if (isActorValid(this.bgActor)) this.bgActor!.destroy();
+    this.bgActor = null;
     this.liquidBox = null;
     this._cloneContainer = null;
 
@@ -550,7 +590,8 @@ export class NotificationManager {
 
   cleanup() {
     this._liveMonitorOrigin = null;
-    stopLaterLoop(this._frameSlot);
+    stopStageLoop(this._frameSignalSlot, this._frameSlot);
+    this._stopHoverTint();
 
     for (let sigId of this._settingsSignals)
       this._settings.disconnect(sigId);

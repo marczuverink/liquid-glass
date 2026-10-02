@@ -8,14 +8,18 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import Gio from 'gi://Gio';
 import { LiquidEffect } from './liquidEffect.js';
+import { BackdropGlass } from './rendering/backdropGlass.js';
+import type { GlassSurface } from './rendering/glassSurface.js';
+import { backdropDefault } from './diagnostics/glass.js';
+import { createCaptureActors } from './actors/captureActors.js';
 import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
-import { UnpickableActor, UnpickableWidget } from './actors/unpickable.js';
+import { UnpickableWidget } from './actors/unpickable.js';
 import { UILayerSampler } from './capture/uiLayerSampler.js';
 import { WindowCloneManager } from './capture/windowClones.js';
 import { ensureGlassAllocated } from './actors/allocation.js';
 import { resolveMonitorGeometry, getAllocatedSize } from './actors/geometry.js';
 import { isActorValid } from './actors/lifecycle.js';
-import { startLaterLoop, stopLaterLoop } from './animation/frameLoops.js';
+import { startSyncLoop, stopStageLoop } from './animation/frameLoops.js';
 import { excludeOtherGlass } from './capture/glassExclusions.js';
 import { placeScreenGlass, resolveGlassOrigin, applyGlassScale, GLASS_SHADOW_MAX_RADIUS } from './actors/glassBounds.js';
 import { syncGlassCaptureClip } from './capture/clip.js';
@@ -52,7 +56,9 @@ export class UIManager {
   private menu: any;
   private animActor: St.Widget;
   private bgActor: Clutter.Actor | null;
-  private effect: LiquidEffect | null;
+  private effect: GlassSurface | null;
+  // Set when the glass reads the stage; it is then bgActor and effect too.
+  private _backdrop: BackdropGlass | null = null;
 
   private _cloneContainer: Clutter.Actor | null = null;
   private _windowCloneManager: WindowCloneManager | null = null;
@@ -65,6 +71,11 @@ export class UIManager {
   private get _frameSlot() {
     return { get: () => this._frameSyncId, set: (id: number) => { this._frameSyncId = id; } };
   }
+  private _frameSignalId = 0;
+  private get _frameSignalSlot() {
+    return { get: () => this._frameSignalId, set: (id: number) => { this._frameSignalId = id; } };
+  }
+
   private _glassExpand: number;
   private _menuXoffset: number;
   private _menuYoffset: number;
@@ -683,26 +694,15 @@ export class UIManager {
     };
 
     // Sized to the monitor by _syncGeometry().
-    this.bgActor = new UnpickableActor();
-    this.bgActor.set_name('liquid-glass-bg-actor');
-    this.bgActor.set_size(1.0, 1.0);
-
-    this.liquidBox = new UnpickableActor();
-    this.liquidBox.set_name("liquid-box");
-    this.liquidBox.set_clip_to_allocation(true);
-    this.bgActor.add_child(this.liquidBox);
-
-    // A transparent 1x1 child that works around Blur My Shell turning the
-    // glass black.
-    let dummyBreaker = new UnpickableActor();
-    dummyBreaker.set_name("optimization-breaker");
-    dummyBreaker.set_size(1.0, 1.0);
-    dummyBreaker.set_opacity(0);
-    this.liquidBox.add_child(dummyBreaker);
-
-    this._cloneContainer = new UnpickableActor();
-    this._cloneContainer.set_name("clone-container");
-    this.liquidBox.add_child(this._cloneContainer);
+    if (backdropDefault) {
+      this._backdrop = new BackdropGlass({
+        extensionPath: this.extensionPath, settings: this._settings, logger: this._logger, owner: this._label,
+      } as any);
+      this.bgActor = this._backdrop;
+      this.bgActor.set_size(1.0, 1.0);
+    } else {
+      ({ bgActor: this.bgActor, liquidBox: this.liquidBox, cloneContainer: this._cloneContainer } = createCaptureActors());
+    }
 
     // The menu scales from its top centre; the glass follows it by geometry.
     this.animActor.set_pivot_point(0.5, 0.0);
@@ -715,7 +715,9 @@ export class UIManager {
       menuRoot = p;
     }
 
-    // Below the menu, so the glass does not clone itself or the menu.
+    // Below the menu, so the glass does not clone itself or the menu, and a
+    // BackdropGlass reads the stage before the menu is drawn. Not inside the
+    // menu: its BoxPointer is always drawn through an offscreen.
     this._menuRoot = menuRoot;
     if (menuRoot.get_parent() === Main.layoutManager.uiGroup) {
       Main.layoutManager.uiGroup.insert_child_below(this.bgActor, menuRoot);
@@ -723,15 +725,17 @@ export class UIManager {
       Main.layoutManager.uiGroup.add_child(this.bgActor);
     }
 
-    this._windowCloneManager = new WindowCloneManager(this.liquidBox, this._cloneContainer, `lg-${this._label}`);
+    if (!this._backdrop) {
+      this._windowCloneManager = new WindowCloneManager(this.liquidBox!, this._cloneContainer!, `lg-${this._label}`);
 
-    this._uiSampler = new UILayerSampler(
-      this.bgActor,
-      this.liquidBox,
-      [menuRoot, global.windowGroup, global.window_group],
-      this._cloneContainer,
-      this._label
-    );
+      this._uiSampler = new UILayerSampler(
+        this.bgActor,
+        this.liquidBox!,
+        [menuRoot, global.windowGroup, global.window_group],
+        this._cloneContainer!,
+        this._label
+      );
+    }
 
     let blurRadius = this._settings.get_int(this._key('blur-radius'));
     let tintColorStr = this._settings.get_string(this._key('tint-color'));
@@ -741,25 +745,30 @@ export class UIManager {
     let saturation = this._settings.get_double(this._key('saturation'));
     this._cornerRadius = this._settings.get_double(this._key('corner-radius'));
 
-    this.effect = new LiquidEffect({ extensionPath: this.extensionPath, settings: this._settings, owner: this._label } as any);
-    this.effect.setPadding(SHADER_PADDING);
-    this.effect.setTintColor(...hexToColorArray(tintColorStr));
-    this.effect.setTintStrength(tintStrength);
-    this.effect.setCornerRadius(this._cornerRadius);
-    this.effect.setIsDock(false);
-    this.effect.setBrightness(brightness);
-    this.effect.setContrast(contrast);
-    this.effect.setSaturation(saturation);
-    this.effect.setBlurRadius(blurRadius);
-    this.liquidBox.add_effect(this.effect);
+    const effect: GlassSurface = this._backdrop ?? new LiquidEffect({
+      extensionPath: this.extensionPath, settings: this._settings, owner: this._label,
+    } as any);
+    this.effect = effect;
+    effect.setPadding(SHADER_PADDING);
+    effect.setTintColor(...hexToColorArray(tintColorStr));
+    effect.setTintStrength(tintStrength);
+    effect.setCornerRadius(this._cornerRadius);
+    effect.setIsDock(false);
+    effect.setBrightness(brightness);
+    effect.setContrast(contrast);
+    effect.setSaturation(saturation);
+    effect.setBlurRadius(blurRadius);
+    if (effect instanceof LiquidEffect) this.liquidBox!.add_effect(effect);
 
     this.bgActor.hide();
 
-    // Runs every frame while the menu is shown, with fresh clones.
+    // Follows the stage's frames while the menu is shown; an open menu that
+    // does not change costs no frames.
+    const stopFrameSync = () => stopStageLoop(this._frameSignalSlot, this._frameSlot);
     const startFrameSync = () => {
-      if (this._frameSyncId !== 0) return;
+      if (this._frameSignalId !== 0) return;
       this._buildClones();
-      startLaterLoop(this._frameSlot, {
+      startSyncLoop(this._frameSignalSlot, this._frameSlot, {
         alive: () => !!this.bgActor && this.targetActor.mapped,
         honourFreeze: true,
         errorTag: 'UIManager',
@@ -770,7 +779,6 @@ export class UIManager {
         },
       });
     };
-    const stopFrameSync = () => stopLaterLoop(this._frameSlot);
 
     // The cached size is dropped on every open; the content may have changed.
     this._signals.push({
@@ -920,6 +928,10 @@ export class UIManager {
   }
 
   private _syncCaptureLayers(monitorX: number, monitorY: number, screenW: number, screenH: number) {
+    if (this._backdrop) {
+      this._backdrop.syncSources();
+      return;
+    }
     this._windowCloneManager?.setOffset(-monitorX, -monitorY);
     this._uiSampler?.refresh();
 
@@ -1255,7 +1267,7 @@ export class UIManager {
       this._tickId = 0;
     }
 
-    stopLaterLoop(this._frameSlot);
+    stopStageLoop(this._frameSignalSlot, this._frameSlot);
     this._disconnectAccentColor();
   }
 
@@ -1310,11 +1322,11 @@ export class UIManager {
       this.effect.cleanup();
       this.effect = null;
     }
+    this._backdrop = null;
 
-    if (this.bgActor) {
-      this.bgActor.destroy();
-      this.bgActor = null;
-    }
+    // At shell shutdown the stage may have destroyed it already.
+    if (isActorValid(this.bgActor)) this.bgActor!.destroy();
+    this.bgActor = null;
     this.liquidBox = null;
     this._cloneContainer = null;
     this._menuRoot = null;
@@ -1330,7 +1342,7 @@ export class UIManager {
 
   cleanup() {
     this._cancelHeightMeasurement();
-    stopLaterLoop(this._frameSlot);
+    stopStageLoop(this._frameSignalSlot, this._frameSlot);
 
     for (let sigId of this._settingsSignals)
       this._settings.disconnect(sigId);

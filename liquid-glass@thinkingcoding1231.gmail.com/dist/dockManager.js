@@ -3,7 +3,7 @@ import GLib from 'gi://GLib';
 import { LiquidEffect } from './liquidEffect.js';
 import { BackdropGlass } from './rendering/backdropGlass.js';
 import { backdropDefault } from './diagnostics/glass.js';
-import { UnpickableActor } from './actors/unpickable.js';
+import { createCaptureActors } from './actors/captureActors.js';
 import { UILayerSampler } from './capture/uiLayerSampler.js';
 import { WindowCloneManager } from './capture/windowClones.js';
 import { reportFrameLoopError } from './diagnostics/logging.js';
@@ -211,7 +211,7 @@ export class DashManager {
             this.bgActor = this._backdrop;
         }
         else {
-            this._buildCaptureActors();
+            ({ bgActor: this.bgActor, liquidBox: this.liquidBox, cloneContainer: this._cloneContainer } = createCaptureActors());
         }
         this.bgActor.set_size(1.0, 1.0);
         this._applyMargin();
@@ -311,25 +311,6 @@ export class DashManager {
         if (this.targetActor.mapped) {
             startFrameSync();
         }
-    }
-
-    _buildCaptureActors() {
-        this.bgActor = new UnpickableActor();
-        this.bgActor.set_name('liquid-glass-bg-actor');
-        this.liquidBox = new UnpickableActor();
-        this.liquidBox.set_name("liquid-box");
-        this.liquidBox.set_clip_to_allocation(true);
-        this.bgActor.add_child(this.liquidBox);
-        // A transparent 1x1 child that works around Blur My Shell turning the
-        // glass black.
-        let dummyBreaker = new UnpickableActor();
-        dummyBreaker.set_name("optimization-breaker");
-        dummyBreaker.set_size(1.0, 1.0);
-        dummyBreaker.set_opacity(0);
-        this.liquidBox.add_child(dummyBreaker);
-        this._cloneContainer = new UnpickableActor();
-        this._cloneContainer.set_name("clone-container");
-        this.liquidBox.add_child(this._cloneContainer);
     }
 
     // Runs at paint time (see LiquidEffect.setLiveGeometryHook()), when the

@@ -17,6 +17,11 @@ cp -r "$here/$uuid" "$out/data/gnome-shell/extensions/"
 export XDG_CONFIG_HOME="$out/config"
 export XDG_DATA_HOME="$out/data"
 export XDG_CACHE_HOME="$out/cache"
+# The shell keeps its Wayland socket and a "disable extensions" marker (left
+# behind if it crashes while starting) in the runtime dir; the real session's
+# must not see either.
+# Short, since a Wayland socket path is limited to 108 bytes.
+export XDG_RUNTIME_DIR=$(mktemp -d /tmp/lgrt.XXXXXX)
 export LG_SPIKE_OUT="$out/shots"
 export LG_SPIKE_SCENARIO="${LG_SPIKE_SCENARIO:-full}"
 export XDG_CURRENT_DESKTOP=GNOME
@@ -31,5 +36,8 @@ dbus-run-session -- bash -c "
   gsettings set org.gnome.shell welcome-dialog-last-shown-version '9999'
   exec timeout 120 gnome-shell --headless --wayland --virtual-monitor '$mode' --wayland-display '$socket'
 " >"$out/shell.log" 2>&1 || true
+# The session's document portal mounts itself there.
+fusermount3 -u "$XDG_RUNTIME_DIR/doc" 2>/dev/null || true
+rm -rf "$XDG_RUNTIME_DIR" 2>/dev/null || true
 
 echo "$out"
