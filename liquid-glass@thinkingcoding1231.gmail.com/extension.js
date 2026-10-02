@@ -69,11 +69,16 @@ export default class LiquidGlassExtension extends Extension {
     });
 
     // Dash to Dock may create its dock after we are enabled, and recreates it
-    // when monitors change, so look for it after a delay and rescan on changes.
+    // when monitors change, when it is enabled again and for some of its
+    // settings, so look for it after a delay and rescan whenever one appears.
     this._dashDocks = [];
     this._dashRescanId = 0;
     this._monitorsChangedId = Main.layoutManager.connect('monitors-changed',
       () => this._scheduleDashRescan());
+    this._uiChildAddedId = Main.layoutManager.uiGroup.connect('child-added', (_group, child) => {
+      if (child.get_name() === 'dashtodockContainer')
+        this._scheduleDashRescan();
+    });
     this._dashSearchId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, DASH_SEARCH_DELAY_MS, () => {
       this._dashSearchId = 0;
       this._findDashToDock();
@@ -107,6 +112,7 @@ export default class LiquidGlassExtension extends Extension {
     }
 
     Main.layoutManager.disconnect(this._monitorsChangedId);
+    Main.layoutManager.uiGroup.disconnect(this._uiChildAddedId);
     if (this._dashSearchId) {
       GLib.Source.remove(this._dashSearchId);
       this._dashSearchId = 0;
