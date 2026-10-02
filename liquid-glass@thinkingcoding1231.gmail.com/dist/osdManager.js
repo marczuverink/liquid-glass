@@ -3,8 +3,11 @@ import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import GLib from 'gi://GLib';
 import { LiquidEffect } from './liquidEffect.js';
+import { BackdropGlass } from './rendering/backdropGlass.js';
+import { backdropDefault } from './diagnostics/glass.js';
+import { createCaptureActors } from './actors/captureActors.js';
+import { isActorValid } from './actors/lifecycle.js';
 import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
-import { UnpickableActor } from './actors/unpickable.js';
 import { UILayerSampler } from './capture/uiLayerSampler.js';
 import { WindowCloneManager } from './capture/windowClones.js';
 import { reportFrameLoopError } from './diagnostics/logging.js';
@@ -242,24 +245,22 @@ export class OsdManager {
         }
         targetBox.add_style_class_name('liquid-glass-transparent');
         targetBox.translation_y = -this._osdYOffset;
-        let bgActor = new UnpickableActor();
-        bgActor.set_name('liquid-glass-bg-actor');
-        bgActor.set_size(1.0, 1.0);
+        const backdrop = backdropDefault
+            ? new BackdropGlass({
+                extensionPath: this.extensionPath, settings: this._settings, logger: this._logger, owner: 'osd',
+            })
+            : null;
+        let bgActor;
+        let liquidBox = null;
+        let cloneContainer = null;
+        if (backdrop) {
+            bgActor = backdrop;
+            bgActor.set_size(1.0, 1.0);
+        }
+        else {
+            ({ bgActor, liquidBox, cloneContainer } = createCaptureActors());
+        }
         bgActor.set_pivot_point(0.0, 0.0);
-        let liquidBox = new UnpickableActor();
-        liquidBox.set_name('liquid-box');
-        liquidBox.set_clip_to_allocation(true);
-        bgActor.add_child(liquidBox);
-        // A transparent 1x1 child that works around Blur My Shell turning the
-        // glass black.
-        let dummyBreaker = new UnpickableActor();
-        dummyBreaker.set_name('optimization-breaker');
-        dummyBreaker.set_size(1.0, 1.0);
-        dummyBreaker.set_opacity(0);
-        liquidBox.add_child(dummyBreaker);
-        let cloneContainer = new UnpickableActor();
-        cloneContainer.set_name('clone-container');
-        liquidBox.add_child(cloneContainer);
         // The OSD's ancestor that is a direct child of uiGroup.
         let osdRoot = osdWindow;
         while (osdRoot.get_parent() && osdRoot.get_parent() !== Main.layoutManager.uiGroup) {
@@ -268,7 +269,8 @@ export class OsdManager {
                 break;
             osdRoot = p;
         }
-        // Below the OSD, so the glass does not clone itself or the OSD.
+        // Below the OSD, so the glass does not clone itself or the OSD, and a
+        // BackdropGlass reads the stage before the OSD is drawn.
         if (osdRoot.get_parent() === Main.layoutManager.uiGroup) {
             Main.layoutManager.uiGroup.insert_child_below(bgActor, osdRoot);
         }
@@ -281,7 +283,9 @@ export class OsdManager {
         let brightness = this._settings.get_double('osd-brightness');
         let saturation = this._settings.get_double('osd-saturation');
         let contrast = this._settings.get_double('osd-contrast');
-        let effect = new LiquidEffect({ extensionPath: this.extensionPath, settings: this._settings, owner: 'osd' });
+        const effect = backdrop ?? new LiquidEffect({
+            extensionPath: this.extensionPath, settings: this._settings, owner: 'osd',
+        });
         effect.setPadding(SHADER_PADDING);
         effect.setTintColor(...hexToColorArray(tintColorStr));
         effect.setTintStrength(this._baseTint);
@@ -291,13 +295,18 @@ export class OsdManager {
         effect.setSaturation(saturation);
         effect.setContrast(contrast);
         effect.setBlurRadius(blurRadius);
-        liquidBox.add_effect(effect);
+        if (effect instanceof LiquidEffect)
+            liquidBox.add_effect(effect);
         bgActor.hide();
-        let windowCloneManager = new WindowCloneManager(liquidBox, cloneContainer, 'lg-osd');
-        let uiSampler = new UILayerSampler(bgActor, liquidBox, [osdRoot, global.windowGroup, global.window_group], cloneContainer, 'osd');
-        windowCloneManager.rebuildClones();
-        uiSampler.rebindSelf();
-        uiSampler.refresh();
+        let windowCloneManager = null;
+        let uiSampler = null;
+        if (!backdrop) {
+            windowCloneManager = new WindowCloneManager(liquidBox, cloneContainer, 'lg-osd');
+            uiSampler = new UILayerSampler(bgActor, liquidBox, [osdRoot, global.windowGroup, global.window_group], cloneContainer, 'osd');
+            windowCloneManager.rebuildClones();
+            uiSampler.rebindSelf();
+            uiSampler.refresh();
+        }
         let state = {
             osdWindow,
             targetBox,
@@ -305,6 +314,7 @@ export class OsdManager {
             liquidBox,
             _cloneContainer: cloneContainer,
             effect,
+            backdrop,
             _windowCloneManager: windowCloneManager,
             _uiSampler: uiSampler,
             _lastBgW: undefined,
@@ -328,10 +338,11 @@ export class OsdManager {
                 state.effect.cleanup();
                 state.effect = null;
             }
-            if (state.bgActor) {
+            state.backdrop = null;
+            // At shell shutdown the stage may have destroyed it already.
+            if (isActorValid(state.bgActor))
                 state.bgActor.destroy();
-                state.bgActor = null;
-            }
+            state.bgActor = null;
             state._uiSampler?.destroy();
             state._windowCloneManager?.destroy();
         });
@@ -413,6 +424,10 @@ export class OsdManager {
             state._lastScreenW = screenW;
             state._lastScreenH = screenH;
         }
+        if (state.backdrop) {
+            state.backdrop.syncSources();
+            return;
+        }
         state._windowCloneManager?.setOffset(-monitorX, -monitorY);
         state._uiSampler?.refresh();
         // After setGlassGeometry() and before the samplers sync (see capture/clip.ts).
@@ -467,10 +482,11 @@ export class OsdManager {
             state.effect.cleanup();
             state.effect = null;
         }
-        if (state.bgActor) {
+        state.backdrop = null;
+        // At shell shutdown the stage may have destroyed it already.
+        if (isActorValid(state.bgActor))
             state.bgActor.destroy();
-            state.bgActor = null;
-        }
+        state.bgActor = null;
         state.liquidBox = null;
         state._cloneContainer = null;
         state._uiSampler?.destroy();

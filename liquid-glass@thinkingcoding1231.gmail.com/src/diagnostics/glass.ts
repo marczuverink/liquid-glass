@@ -11,6 +11,7 @@ import { setBackgroundMirrorEnabled, isBackgroundMirrorEnabled } from '../captur
 import { setCullOptOutEnabled, isCullOptOutEnabled } from '../capture/windowCulling.js';
 import { setWindowActorRescueMode, getWindowActorRescueMode, type WindowActorRescueMode } from '../actors/allocation.js';
 import { diagnosticLog } from './logging.js';
+import { startGlassMonitor, stopGlassMonitor, isGlassMonitorRunning, setGlassMonitorLabel } from './monitor.js';
 
 // Every live LiquidEffect registers here so its last frame can be inspected
 // from Looking Glass through global._lgGlass (installed by enable(), removed by
@@ -22,6 +23,14 @@ const _liveEffects: Set<any> = new Set();
 // them for A/B testing.
 export let blurCacheDefault = true;
 export let nestedRoiDefault = true;
+
+// Every live BackdropGlass, for the same dump and switches.
+const _liveBackdrops: Set<any> = new Set();
+
+// Whether glass created from now on reads its backdrop from the stage
+// (BackdropGlass) or captures clones (LiquidEffect); global._lgGlass.backdrop()
+// switches it for A/B comparison.
+export let backdropDefault = true;
 
 // A rolling in-memory record of the application glasses, written to the
 // journal only when flushed. It exists for rare animation stalls: a capture
@@ -153,7 +162,8 @@ function _dumpRow(fx: any, now: number): string {
 export function dumpGlassState(): string {
   const now = GLib.get_monotonic_time();
   const rows = [..._liveEffects].map(fx => _dumpRow(fx, now));
-  const out = rows.length ? rows.join('\n') : '(no live LiquidEffect)';
+  for (const glass of _liveBackdrops) rows.push(JSON.stringify(glass.describe()));
+  const out = rows.length ? rows.join('\n') : '(no live glass)';
   diagnosticLog(`[Liquid Glass][dump]\n${out}`);
   return out;
 }
@@ -259,10 +269,16 @@ function onOff(enabled: boolean): string {
   return enabled ? 'ENABLED' : 'DISABLED';
 }
 
-// Applies a setter to every live glass and returns how many it reached.
+// Applies a setter to every live LiquidEffect and returns how many it reached.
 function onEveryEffect(apply: (fx: any) => void): number {
   for (const fx of _liveEffects) apply(fx);
   return _liveEffects.size;
+}
+
+// The same for the setters BackdropGlass shares with LiquidEffect.
+function onEveryGlass(apply: (glass: any) => void): number {
+  for (const glass of _liveBackdrops) apply(glass);
+  return onEveryEffect(apply) + _liveBackdrops.size;
 }
 
 function ownerName(actor: any): string {
@@ -295,13 +311,13 @@ function describeUnpainted(actor: any, depth: number, lines: string[]): void {
 
 function createDebugApi(): object {
   return {
-    count: () => _liveEffects.size,
+    count: () => _liveEffects.size + _liveBackdrops.size,
     dump: () => dumpGlassState(),
 
     // 0 = normal, 1 = red where the shader computes the drop shadow and green
     // where it computes the glass shape, 2 = raw values.
     debugView: (mode: number) =>
-      report(`debug_view = ${mode} on ${onEveryEffect(fx => fx.setDebugView(mode))} instance(s)`),
+      report(`debug_view = ${mode} on ${onEveryGlass(fx => fx.setDebugView(mode))} instance(s)`),
 
     // How a Blur My Shell panel is supplied to the glass; see BMS_MODE.
     bmsMode: (mode: number) => setBmsMode(mode),
@@ -450,19 +466,44 @@ function createDebugApi(): object {
     // uniforms, for per-frame tracking probes.
     geom: (owner?: string) => {
       const out: { owner: string, x: number, y: number, w: number, h: number }[] = [];
-      for (const fx of _liveEffects) {
-        if (owner && fx._owner !== owner) continue;
-        const u = fx._uniforms.values;
-        out.push({ owner: fx._owner, x: u.get('dock_x') ?? 0, y: u.get('dock_y') ?? 0,
+      const add = (glassOwner: string, u: ReadonlyMap<string, number>) => {
+        if (owner && glassOwner !== owner) return;
+        out.push({ owner: glassOwner, x: u.get('dock_x') ?? 0, y: u.get('dock_y') ?? 0,
           w: u.get('dock_w') ?? 0, h: u.get('dock_h') ?? 0 });
-      }
+      };
+      for (const fx of _liveEffects) add(fx._owner, fx._uniforms.values);
+      for (const glass of _liveBackdrops) add(glass._owner, glass.uniformValues);
       return out;
     },
 
+    // Only affects glass created afterwards; toggle the extension off and on
+    // to rebuild the existing ones.
+    backdrop: (on: boolean) => {
+      backdropDefault = !!on;
+      return report(`backdrop glass ${onOff(on)} (toggle the extension off/on to rebuild existing glass)`);
+    },
+    backdropEnabled: () => backdropDefault,
+    // The live stage-reading glass actors themselves, for scripted checks.
+    glassObjects: () => [..._liveBackdrops],
+
+    // One journal line per second with what is on screen, every shown glass's
+    // work and the GPU's busy percentage (see diagnostics/monitor.ts).
+    // 0 runs until monitorStop().
+    monitor: (seconds: number = 30) => {
+      startGlassMonitor({ glasses: () => _liveBackdrops, effects: () => _liveEffects }, seconds);
+      return report(`monitor running${seconds > 0 ? ` for ${seconds}s` : ''}; see journalctl -o cat | grep '\[monitor\]'`);
+    },
+    monitorStop: () => {
+      stopGlassMonitor();
+      return report('monitor stopped');
+    },
+    monitorRunning: () => isGlassMonitorRunning(),
+    monitorLabel: (label: string | null) => setGlassMonitorLabel(label),
+
     blurRect: (enabled: boolean) =>
-      report(`blur sub-rect ${onOff(enabled)} on ${onEveryEffect(fx => fx.setBlurRectEnabled(enabled))} instance(s)`),
+      report(`blur sub-rect ${onOff(enabled)} on ${onEveryGlass(fx => fx.setBlurRectEnabled(enabled))} instance(s)`),
     compositeRect: (enabled: boolean) =>
-      report(`composite sub-rect ${onOff(enabled)} on ${onEveryEffect(fx => fx.setCompositeRectEnabled(enabled))} instance(s)`),
+      report(`composite sub-rect ${onOff(enabled)} on ${onEveryGlass(fx => fx.setCompositeRectEnabled(enabled))} instance(s)`),
     cropPass: (enabled: boolean) =>
       report(`crop pass ${onOff(enabled)} on ${onEveryEffect(fx => fx.setCropPassEnabled(enabled))} instance(s)`),
     nestedRoi: (enabled: boolean) => {
@@ -475,9 +516,9 @@ function createDebugApi(): object {
     },
     // false = the plain four-tap pattern along the edge.
     edgeTaps: (enabled: boolean) =>
-      report(`edge footprint taps ${onOff(enabled)} on ${onEveryEffect(fx => fx.setEdgeTapsEnabled(enabled))} instance(s)`),
+      report(`edge footprint taps ${onOff(enabled)} on ${onEveryGlass(fx => fx.setEdgeTapsEnabled(enabled))} instance(s)`),
     earlyExit: (enabled: boolean) =>
-      report(`early exits ${onOff(enabled)} on ${onEveryEffect(fx => fx.setEarlyExitEnabled(enabled))} instance(s)`),
+      report(`early exits ${onOff(enabled)} on ${onEveryGlass(fx => fx.setEarlyExitEnabled(enabled))} instance(s)`),
   };
 }
 
@@ -489,8 +530,17 @@ export function installGlassDiagnostics(): void {
 
 /** Called from disable(). */
 export function removeGlassDiagnostics(): void {
+  stopGlassMonitor();
   stopGlassRingSampler();
   delete (global as any)._lgGlass;
+}
+
+export function registerBackdropGlass(glass: any): void {
+  _liveBackdrops.add(glass);
+}
+
+export function unregisterBackdropGlass(glass: any): void {
+  _liveBackdrops.delete(glass);
 }
 
 export function isLiveGlassEffect(effect: any): boolean {

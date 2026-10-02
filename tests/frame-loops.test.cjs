@@ -10,8 +10,9 @@ function fixture() {
   const laters = { add(_type, fn) { const id = next++; pending.set(id, fn); return id; }, remove(id) { pending.delete(id); } };
   const stage = { connect(name, fn) { const id = next++; handlers.set(id, { name, fn }); return id; },
     disconnect(id) { assert.ok(handlers.delete(id), 'disconnects a live handler'); } };
+  const clock = { now: 0 };
   const load = createModuleLoader({
-    GLib: { SOURCE_REMOVE: false }, Meta: { LaterType: { BEFORE_REDRAW: 0 } },
+    GLib: { SOURCE_REMOVE: false, get_monotonic_time: () => clock.now }, Meta: { LaterType: { BEFORE_REDRAW: 0 } },
     global: { compositor: { get_laters: () => laters }, stage },
     reportFrameLoopError: (tag, e) => errors.push([tag, String(e)]),
   });
@@ -19,7 +20,8 @@ function fixture() {
   const sync = load(path.join(dist, 'animation/frameSync.js'));
   const run = () => { const cbs = [...pending.values()]; pending.clear(); cbs.forEach(fn => fn()); };
   const slot = () => { let id = 0; return { get: () => id, set: v => { id = v; } }; };
-  return { loops, sync, pending, handlers, errors, run, slot };
+  const frame = () => { clock.now += 16000; for (const h of [...handlers.values()]) h.fn(); };
+  return { loops, sync, pending, handlers, errors, run, slot, frame, clock };
 }
 
 test('a later loop keeps exactly one later, survives a throwing step and stops when no longer alive', () => {
@@ -101,4 +103,22 @@ test('other glass backgrounds are excluded, the own one and plain actors are not
   excludeOtherGlass({ addExclusion: a => excluded.push(a) }, self);
   assert.deepEqual(excluded, [other, wrapped]);
   excludeOtherGlass(null, self);
+});
+
+test('a sync loop survives a throwing step and stops itself once no longer alive', () => {
+  const f = fixture();
+  const signal = f.slot(), first = f.slot();
+  let alive = true, steps = 0;
+  f.loops.startSyncLoop(signal, first, { alive: () => alive, errorTag: 'sync',
+    step: () => { steps++; if (steps === 1) throw new Error('boom'); } });
+  f.clock.now += 16000;
+  f.run();
+  f.frame();
+  assert.equal(steps, 2);
+  assert.deepEqual(f.errors, [['sync', 'Error: boom']]);
+  alive = false;
+  f.frame();
+  assert.equal(steps, 2);
+  assert.equal(f.handlers.size, 0);
+  assert.equal(signal.get(), 0);
 });

@@ -53,12 +53,18 @@ function fixture(background = dark, luma = 0.7) {
   class Label extends Widget {}
   class Unused {}
   const laters = {add(_type, fn) { const id = nextId++; pending.set(id, fn); return id; }, remove(id) { pending.delete(id); }};
+  const handlers = new Map();
+  const clock = {now: 0};
+  const stage = {width: 1920, height: 1200,
+    connect(name, fn) { const id = nextId++; handlers.set(id, {name, fn}); return id; },
+    disconnect(id) { handlers.delete(id); },
+    emit(name) { for (const h of [...handlers.values()]) if (h.name === name) h.fn(); }};
   const load = createModuleLoader({
     St: {Widget, Button, Label, Icon: Unused}, Clutter: {Text: Unused},
     Shell: {Screenshot: class {}}, getTransformedRect: actor => actor.rect,
-    global: {stage: {width: 1920, height: 1200}, compositor: {get_laters: () => laters}},
+    global: {stage, compositor: {get_laters: () => laters}},
     Meta: {LaterType: {BEFORE_REDRAW: 0}},
-    GLib: {get_monotonic_time: () => 0, SOURCE_REMOVE: false, source_remove() {}},
+    GLib: {get_monotonic_time: () => clock.now, SOURCE_REMOVE: false, source_remove() {}},
     adaptiveColorTweener: {cancel() {}, add(_actor, entry) { entry.apply(entry.targetRgb.r, entry.targetRgb.g, entry.targetRgb.b, entry.targetAlpha); }},
     resolveCrossFade: () => false,
   });
@@ -84,7 +90,8 @@ function fixture(background = dark, luma = 0.7) {
       const callbacks = [...pending.values()]; pending.clear(); callbacks.forEach(fn => fn());
     }
   };
-  return {manager, sampler, root, button, label, sample, flush, pending, load, reads: () => reads, Button, Label};
+  return {manager, sampler, root, button, label, sample, flush, pending, load, reads: () => reads, Button, Label,
+    stage, handlers, clock};
 }
 
 for (const alpha of [255, 204]) test(`dark Quick Settings tile (alpha=${alpha}) keeps light text on bright glass`, async () => {
@@ -193,35 +200,44 @@ test('turning adaptive contrast off also rejects an already queued hover update'
 });
 
 for (const honourFreeze of [true, false]) test(`quick-settings frame sync keeps one loop (freeze honoured: ${honourFreeze}) and stops cleanly`, () => {
-  const { manager, pending, load } = fixture();
+  const { manager, pending, load, stage, handlers, clock } = fixture();
   const { setFrameSyncFrozen } = load(path.join(dist, 'animation/frameSync.js'));
   let syncs = 0, builds = 0;
-  Object.assign(manager, { _frameSyncId: 0, _torndown: false, targetActor: { mapped: true },
+  Object.assign(manager, { _frameSyncId: 0, _frameSignalId: 0, _torndown: false, targetActor: { mapped: true },
     bgActor: { get_parent: () => null, mapped: false, visible: false }, _buildClones() { builds++; } });
-  const run = () => { const callbacks = [...pending.values()]; pending.clear(); callbacks.forEach(fn => fn()); };
+  const runFirst = () => { const callbacks = [...pending.values()]; pending.clear(); callbacks.forEach(fn => fn()); };
+  const frame = () => { clock.now += 16000; stage.emit('before-update'); };
   manager._startFrameSync(() => syncs++, 'test', honourFreeze);
   manager._startFrameSync(() => syncs++, 'test', honourFreeze);
   assert.equal(builds, 1);
-  assert.equal(pending.size, 1);
-  run(); run();
+  assert.equal(handlers.size, 1, 'one before-update handler');
+  assert.equal(pending.size, 1, 'one later for the frame the loop starts in');
+  clock.now += 16000;
+  runFirst();
+  frame();
   assert.equal(syncs, 2);
+  assert.equal(pending.size, 0, 'the loop follows frames instead of requesting them');
+  clock.now += 1000;
+  stage.emit('before-update');
+  assert.equal(syncs, 2, 'a second stage view in the same frame does not sync again');
   setFrameSyncFrozen(true);
   try {
-    run();
+    frame();
     assert.equal(syncs, honourFreeze ? 2 : 3);
-    assert.equal(pending.size, 1, 'the loop keeps exactly one later');
+    assert.equal(handlers.size, 1);
   } finally {
     setFrameSyncFrozen(false);
   }
   manager.targetActor.mapped = false;
-  run();
-  assert.equal(pending.size, 0, 'an unmapped menu ends the loop');
+  frame();
+  assert.equal(handlers.size, 0, 'an unmapped menu ends the loop');
   manager.targetActor.mapped = true;
-  manager._frameSyncId = 0;
   manager._startFrameSync(() => syncs++, 'test', honourFreeze);
   manager._stopFrameSync();
   assert.equal(pending.size, 0);
+  assert.equal(handlers.size, 0);
   assert.equal(manager._frameSyncId, 0);
+  assert.equal(manager._frameSignalId, 0);
 });
 
 test('equal numbers in the other coordinate space still move the quick-settings glass', () => {

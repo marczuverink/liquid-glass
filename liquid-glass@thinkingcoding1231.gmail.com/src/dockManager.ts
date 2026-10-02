@@ -3,8 +3,11 @@ import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import GLib from 'gi://GLib';
 import { LiquidEffect } from './liquidEffect.js';
+import { BackdropGlass } from './rendering/backdropGlass.js';
+import type { GlassSurface } from './rendering/glassSurface.js';
+import { backdropDefault } from './diagnostics/glass.js';
 import Gio from 'gi://Gio';
-import { UnpickableActor } from './actors/unpickable.js';
+import { createCaptureActors } from './actors/captureActors.js';
 import { UILayerSampler } from './capture/uiLayerSampler.js';
 import { WindowCloneManager } from './capture/windowClones.js';
 import { reportFrameLoopError } from './diagnostics/logging.js';
@@ -31,11 +34,13 @@ export class DashManager {
   private _settings: Gio.Settings;
 
   private bgActor: Clutter.Actor | null = null;
-  private effect: LiquidEffect | null = null;
+  private effect: GlassSurface | null = null;
 
-  // bgActor (monitor-sized) holds liquidBox, which carries the LiquidEffect
-  // and holds the clone container.
+  // With a LiquidEffect, bgActor (monitor-sized) holds liquidBox, which
+  // carries the effect and holds the clone container. A BackdropGlass is
+  // bgActor and effect at once and needs neither.
   private liquidBox: Clutter.Actor | null = null;
+  private _backdrop: BackdropGlass | null = null;
 
   private _lastScreenW: number | undefined;
   private _lastScreenH: number | undefined;
@@ -241,27 +246,15 @@ export class DashManager {
       this._dockParent.add_style_class_name('liquid-glass-transparent');
     }
 
-    this.bgActor = new UnpickableActor();
-    this.bgActor.set_name('liquid-glass-bg-actor');
-
-    this.bgActor.set_size(1.0, 1.0);
-
-    this.liquidBox = new UnpickableActor();
-    this.liquidBox.set_name("liquid-box");
-    this.liquidBox.set_clip_to_allocation(true);
-    this.bgActor.add_child(this.liquidBox);
-
-    // A transparent 1x1 child that works around Blur My Shell turning the
-    // glass black.
-    let dummyBreaker = new UnpickableActor();
-    dummyBreaker.set_name("optimization-breaker");
-    dummyBreaker.set_size(1.0, 1.0);
-    dummyBreaker.set_opacity(0);
-    this.liquidBox.add_child(dummyBreaker);
-
-    this._cloneContainer = new UnpickableActor();
-    this._cloneContainer.set_name("clone-container");
-    this.liquidBox.add_child(this._cloneContainer);
+    if (backdropDefault) {
+      this._backdrop = new BackdropGlass({
+        extensionPath: this.extensionPath, settings: this._settings, logger: this._logger, owner: 'dock',
+      } as any);
+      this.bgActor = this._backdrop;
+    } else {
+      ({ bgActor: this.bgActor, liquidBox: this.liquidBox, cloneContainer: this._cloneContainer } = createCaptureActors());
+    }
+    this.bgActor!.set_size(1.0, 1.0);
 
     this._applyMargin();
     this._marginValue = this._settings.get_int('dock-margin-bottom');
@@ -274,11 +267,12 @@ export class DashManager {
       dockRoot = p;
     }
 
-    // Below the dock, so the glass does not clone itself or the dock.
+    // Below the dock, so the glass does not clone itself or the dock, and
+    // a BackdropGlass reads the stage before the dock is drawn.
     if (dockRoot && dockRoot.get_parent() === Main.layoutManager.uiGroup) {
-      Main.layoutManager.uiGroup.insert_child_below(this.bgActor, dockRoot);
+      Main.layoutManager.uiGroup.insert_child_below(this.bgActor!, dockRoot);
     } else {
-      Main.layoutManager.uiGroup.add_child(this.bgActor);
+      Main.layoutManager.uiGroup.add_child(this.bgActor!);
     }
 
     let blurRadius = this._settings.get_int('dock-blur-radius');
@@ -289,34 +283,39 @@ export class DashManager {
     let contrast = this._settings.get_double('dock-contrast');
     let saturation = this._settings.get_double('dock-saturation');
 
-    this.effect = new LiquidEffect({ extensionPath: this.extensionPath, settings: this._settings, logger: this._logger, owner: 'dock' } as any);
-    this.effect.setPadding(SHADER_PADDING);
-    this.effect.setTintColor(...hexToColorArray(tintColorStr));
-    this.effect.setTintStrength(tintStrength);
-    this.effect.setCornerRadius(cornerRadius);
-    this.effect.setBrightness(brightness);
-    this.effect.setContrast(contrast);
-    this.effect.setSaturation(saturation);
-    this.effect.setBlurRadius(blurRadius);
+    const effect: GlassSurface = this._backdrop ?? new LiquidEffect({
+      extensionPath: this.extensionPath, settings: this._settings, logger: this._logger, owner: 'dock',
+    } as any);
+    this.effect = effect;
+    effect.setPadding(SHADER_PADDING);
+    effect.setTintColor(...hexToColorArray(tintColorStr));
+    effect.setTintStrength(tintStrength);
+    effect.setCornerRadius(cornerRadius);
+    effect.setBrightness(brightness);
+    effect.setContrast(contrast);
+    effect.setSaturation(saturation);
+    effect.setBlurRadius(blurRadius);
 
-    this.effect.setIsDock(true);
-    this.liquidBox.add_effect(this.effect);
+    effect.setIsDock(true);
 
     // Dash to Dock slides by relayout, so the frame tick sees last frame's
     // position; the paint-time hook corrects it.
-    this.effect.setLiveGeometryHook(() => this._syncGlassGeometryLive());
+    effect.setLiveGeometryHook(() => this._syncGlassGeometryLive());
 
-    this._windowCloneManager = new WindowCloneManager(this.liquidBox, this._cloneContainer, 'lg-dock');
-    // The dock is excluded both directly and through targetActor's uiGroup
-    // ancestor, which stays correct after Dash to Dock rebuilds its container.
-    this._uiSampler = new UILayerSampler(
-      this.bgActor, this.liquidBox,
-      [dockRoot, global.windowGroup, global.window_group],
-      this._cloneContainer,
-      'dock',
-      [this.targetActor]);
+    if (effect instanceof LiquidEffect) {
+      this.liquidBox!.add_effect(effect);
+      this._windowCloneManager = new WindowCloneManager(this.liquidBox!, this._cloneContainer!, 'lg-dock');
+      // The dock is excluded both directly and through targetActor's uiGroup
+      // ancestor, which stays correct after Dash to Dock rebuilds its container.
+      this._uiSampler = new UILayerSampler(
+        this.bgActor!, this.liquidBox!,
+        [dockRoot, global.windowGroup, global.window_group],
+        this._cloneContainer!,
+        'dock',
+        [this.targetActor]);
+    }
 
-    this.bgActor.show();
+    this.bgActor!.show();
 
     let buildClones = () => {
       if (!this.bgActor) return;
@@ -352,11 +351,14 @@ export class DashManager {
       startStageLoop(this._frameSignalSlot, this._frameSlot, frameTick);
     };
 
+    // The glass is the dock's sibling, so it stays up when the dock is
+    // hidden as a whole (for instance over a fullscreen window).
     let mapSignalId = this.targetActor.connect('notify::mapped', () => {
       if (this.targetActor.mapped) {
         startFrameSync();
       } else {
         this._stopFrameSync();
+        this._hideGlass();
       }
     });
     this._signals.push(mapSignalId);
@@ -402,12 +404,7 @@ export class DashManager {
     const { baseW, baseH } = bounds;
 
     if (baseW <= 9 || baseH <= 9) {
-      this.bgActor.hide();
-      // Forces a full update when the dock comes back.
-      this._lastBgW = undefined;
-      this._lastBgH = undefined;
-      this._lastBgX = undefined;
-      this._lastBgY = undefined;
+      this._hideGlass();
       return;
     }
     this.bgActor.show();
@@ -580,6 +577,12 @@ export class DashManager {
 
     this._windowCloneManager?.setOffset(-monitor.x, -monitor.y);
 
+    // After the geometry setters, so the relays cover this frame's rect.
+    if (this._backdrop) {
+      this._backdrop.syncSources();
+      return;
+    }
+
     // After setGlassGeometry() and before the samplers sync (see capture/clip.ts).
     syncGlassCaptureClip({
       cloneContainer: this._cloneContainer,
@@ -602,6 +605,15 @@ export class DashManager {
 
   private get _frameSignalSlot() {
     return { get: () => this._frameSignalId, set: (id: number) => { this._frameSignalId = id; } };
+  }
+
+  // The next sync shows it again and updates everything.
+  private _hideGlass(): void {
+    this.bgActor?.hide();
+    this._lastBgW = undefined;
+    this._lastBgH = undefined;
+    this._lastBgX = undefined;
+    this._lastBgY = undefined;
   }
 
   private _stopFrameSync(): void {
@@ -633,6 +645,7 @@ export class DashManager {
     this._dockParent = null;
     this.effect?.cleanup();
     this.effect = null;
+    this._backdrop = null;
     this._uiSampler?.destroy();
     this._uiSampler = null;
     this._windowCloneManager?.destroy();

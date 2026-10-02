@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { loadModule } = require('./helpers/load-module.cjs');
 
-function fixture(monitor) {
+function fixture(monitor, { backdrop = false } = {}) {
   const pending = new Map();
   const clock = { now: 0, step: 20000 };
   const errors = [];
@@ -61,6 +61,17 @@ function fixture(monitor) {
     addExclusion() {} rebuildClones() {} rebindSelf() {} refresh() {} sync() {}
     setOffset() {} destroy() { this.destroyed = true; }
   }
+  const calls = [];
+  // The stage-reading glass is one actor that also takes the effect's setters.
+  class Backdrop extends Actor {
+    constructor(params) { super(); this.params = params; this.set_name('liquid-glass-bg-actor'); }
+    setGlassGeometry(...args) { calls.push(['geometry', ...args]); }
+    syncSources() { calls.push(['sources']); }
+    cleanup() { this.cleaned = true; }
+  }
+  for (const name of Object.getOwnPropertyNames(Effect.prototype)) {
+    if (!Object.hasOwn(Backdrop.prototype, name)) Backdrop.prototype[name] = Effect.prototype[name];
+  }
   const bindings = {
     Main: { layoutManager: { uiGroup: group, primaryIndex: 0,
       primaryMonitor: monitor, monitors: [monitor], findIndexForActor: () => 0 } },
@@ -68,7 +79,7 @@ function fixture(monitor) {
     SAME_FRAME_WINDOW_US: 4000,
     Meta: { LaterType: { BEFORE_REDRAW: 0 } },
     global: { stage, compositor: { get_laters: () => laters } },
-    UnpickableActor: Actor, LiquidEffect: Effect,
+    UnpickableActor: Actor, LiquidEffect: Effect, BackdropGlass: Backdrop, backdropDefault: backdrop,
     WindowCloneManager: Sampler, UILayerSampler: Sampler,
     ensureGlassAllocated() {}, isFrameSyncFrozen: () => false,
     isActorValid: actor => !!actor && !actor.destroyed,
@@ -81,7 +92,7 @@ function fixture(monitor) {
     get_string: () => '#ffffff', get_boolean: () => false });
   const manager = new Manager('/ext', target, settings, { log() {}, error() {} });
   manager._findReferenceActor = () => null;
-  return { manager, target, pending, stage, settings, errors, clock };
+  return { manager, target, pending, stage, settings, errors, clock, calls, group };
 }
 
 for (const monitor of [
@@ -225,4 +236,47 @@ test('two monitors updating one frame drive a single dock geometry sync', () => 
   stage.emit('before-update');
   assert.equal(syncs, 2);
   manager.cleanup();
+});
+
+test('the stage-reading dock glass is one actor below the dock, with no capture tree', () => {
+  const monitor = { x: 1920, y: 0, width: 1920, height: 1200 };
+  const { manager, group } = fixture(monitor, { backdrop: true });
+  manager._applyEffect();
+  assert.equal(manager.bgActor, manager.effect);
+  assert.equal(manager.bgActor.params.owner, 'dock');
+  assert.equal(manager.bgActor.get_parent(), group);
+  assert.equal(manager.liquidBox, null);
+  assert.equal(manager._cloneContainer, null);
+  assert.equal(manager._uiSampler, null);
+  assert.equal(manager._windowCloneManager, null);
+  manager.cleanup();
+});
+
+test('the stage-reading dock glass syncs its sources after this frame\'s geometry', () => {
+  const monitor = { x: 1920, y: 0, width: 1920, height: 1200 };
+  const { manager, calls } = fixture(monitor, { backdrop: true });
+  manager._applyEffect();
+  manager._syncGeometry();
+  assert.deepEqual(manager.bgActor.get_size(), [monitor.width, monitor.height]);
+  assert.deepEqual(manager.bgActor.get_transformed_position(), [monitor.x, monitor.y]);
+  const kinds = calls.map(c => c[0]);
+  assert.ok(kinds.includes('geometry'));
+  assert.equal(kinds.lastIndexOf('sources'), kinds.length - 1);
+  assert.ok(kinds.lastIndexOf('geometry') < kinds.lastIndexOf('sources'));
+  manager.cleanup();
+});
+
+test('removing the stage-reading dock glass cleans it up and destroys it', () => {
+  const { manager, pending, stage, target } = fixture({ x: 0, y: 0, width: 1920, height: 1080 }, { backdrop: true });
+  manager._applyEffect();
+  const glass = manager.bgActor;
+  manager._removeEffect();
+  assert.equal(glass.cleaned, true);
+  assert.equal(glass.destroyed, true);
+  assert.equal(manager.bgActor, null);
+  assert.equal(manager.effect, null);
+  assert.equal(manager._backdrop, null);
+  assert.equal(pending.size, 0);
+  assert.equal(stage.handlers.size, 0);
+  assert.equal(target.handlers.size, 0);
 });

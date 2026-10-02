@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Runs the built Liquid Glass extension with Dash to Dock and the test driver
+# (lg-driver@liquid-glass.test) in a headless GNOME Shell on a private session
+# bus, with its own config, data and cache directories, like run-nested.sh.
+# Build first (npm run build). Prints the output directory (shell.log, shots/).
+#
+#   LG_DRV_SCENARIO   the driver's scenario (default: dock)
+#   LG_SPIKE_MONITOR  virtual monitor mode (default: 1920x1080)
+#   LG_MONITORS_XML   a monitors.xml to use (e.g. for a fractional scale)
+#   LG_EXTRA_EXTENSIONS  more UUIDs from ~/.local/share/gnome-shell/extensions to
+#                        enable (e.g. blur-my-shell@aunetx), space separated
+#   LG_BENCH=1        also enable tools/perf/lg-bench@liquid-glass.test
+#   LG_SHELL_TIMEOUT  seconds before the shell is killed (default: 180)
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+repo=$(cd "$here/../.." && pwd)
+lg_uuid=liquid-glass@thinkingcoding1231.gmail.com
+dtd_uuid=dash-to-dock@micxgx.gmail.com
+drv_uuid=lg-driver@liquid-glass.test
+dtd_src=${LG_DTD_DIR:-$HOME/.local/share/gnome-shell/extensions/$dtd_uuid}
+out=${1:-$(mktemp -d -t lg-glass-XXXXXX)}
+mode=${LG_SPIKE_MONITOR:-1920x1080}
+
+ext="$out/data/gnome-shell/extensions"
+mkdir -p "$out"/{config,cache,shots} "$ext"
+rm -rf "${ext:?}"/*
+mkdir -p "$ext/$lg_uuid"
+for f in metadata.json extension.js stylesheet.css dist shaders schemas; do
+  cp -r "$repo/$lg_uuid/$f" "$ext/$lg_uuid/"
+done
+cp -r "$dtd_src" "$ext/$dtd_uuid"
+cp -r "$here/$drv_uuid" "$ext/"
+extra=""
+if [ "${LG_BENCH:-}" = 1 ]; then
+  cp -r "$repo/tools/perf/lg-bench@liquid-glass.test" "$ext/"
+  extra=", 'lg-bench@liquid-glass.test'"
+fi
+for uuid in ${LG_EXTRA_EXTENSIONS:-}; do
+  cp -r "$HOME/.local/share/gnome-shell/extensions/$uuid" "$ext/"
+  extra="$extra, '$uuid'"
+done
+if [ -n "${LG_MONITORS_XML:-}" ]; then
+  cp "$LG_MONITORS_XML" "$out/config/monitors.xml"
+fi
+
+export XDG_CONFIG_HOME="$out/config"
+export XDG_DATA_HOME="$out/data"
+export XDG_CACHE_HOME="$out/cache"
+# The shell keeps its Wayland socket and a "disable extensions" marker (left
+# behind if it crashes while starting) in the runtime dir; the real session's
+# must not see either.
+# Short, since a Wayland socket path is limited to 108 bytes.
+export XDG_RUNTIME_DIR=$(mktemp -d /tmp/lgrt.XXXXXX)
+export LG_SPIKE_OUT="$out/shots"
+export LG_DRV_SCENARIO="${LG_DRV_SCENARIO:-dock}"
+export XDG_CURRENT_DESKTOP=GNOME
+export XDG_SESSION_DESKTOP=gnome
+unset WAYLAND_DISPLAY DISPLAY
+
+socket="lg-glass-$$"
+dtd_schemas="$ext/$dtd_uuid/schemas"
+
+dbus-run-session -- bash -c "
+  gsettings set org.gnome.shell enabled-extensions \"['$drv_uuid', '$dtd_uuid', '$lg_uuid'$extra]\"
+  gsettings set org.gnome.shell disable-user-extensions false
+  gsettings set org.gnome.shell welcome-dialog-last-shown-version '9999'
+  gsettings --schemadir '$dtd_schemas' set org.gnome.shell.extensions.dash-to-dock dock-fixed true
+  gsettings --schemadir '$dtd_schemas' set org.gnome.shell.extensions.dash-to-dock intellihide false
+  gsettings --schemadir '$dtd_schemas' set org.gnome.shell.extensions.dash-to-dock dock-position 'BOTTOM'
+  exec timeout ${LG_SHELL_TIMEOUT:-180} gnome-shell --headless --wayland --virtual-monitor '$mode' --wayland-display '$socket'
+" >"$out/shell.log" 2>&1 || true
+# The session's document portal mounts itself there.
+fusermount3 -u "$XDG_RUNTIME_DIR/doc" 2>/dev/null || true
+rm -rf "$XDG_RUNTIME_DIR" 2>/dev/null || true
+
+# The session's caches and indexes (localsearch, evolution) take hundreds of
+# megabytes; only the log and the screenshots are results.
+sleep 1
+rm -rf "$out/data" "$out/cache" 2>/dev/null || true
+
+echo "$out"
