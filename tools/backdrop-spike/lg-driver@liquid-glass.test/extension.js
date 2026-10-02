@@ -7,7 +7,8 @@
 //   ui         the calendar menu, Quick Settings, a notification and the OSD
 //   toggles    Quick Settings in toggle mode, and an A/B with the clone capture
 //   fullstage  how many frames redraw the whole stage while the calendar opens
-//   monitor    global._lgGlass.monitor() while windows move and a menu opens
+//   monitor    global._lgGlass.monitor() while windows move and a menu opens;
+//              LG_DRV_CAPTURE=1 runs it with the clone-capturing glass
 //   lifecycle  disables and enables Liquid Glass with every glass shown once
 //
 // Screenshots are off-stage paints, where a stage-reading glass draws with
@@ -580,6 +581,10 @@ export default class LgDriver extends Extension {
   }
 
   async _monitorScenario() {
+    if (GLib.getenv('LG_DRV_CAPTURE') === '1') {
+      await this._rebuild('enable-dock-glass', false);
+      await this._rebuild('enable-menu-glass', false);
+    }
     lg().monitor(0);
     await sleep(2200);
     const region = this._region('dock');
@@ -631,6 +636,9 @@ export default class LgDriver extends Extension {
     }
     Main.notify('Liquid Glass driver', 'lifecycle');
     await sleep(800);
+    // Disabling has to stop a running monitor and take its probes along.
+    lg().monitor(0);
+    await sleep(1200);
     log(`before disable: glasses=${lg().glassObjects().length} actors=${this._leftovers().length}`);
     Main.extensionManager.disableExtension(LG_UUID);
     await sleep(1000);

@@ -486,8 +486,8 @@ function createDebugApi(): object {
     // The live stage-reading glass actors themselves, for scripted checks.
     glassObjects: () => [..._liveBackdrops],
 
-    // One journal line per second with every shown glass's work, the windows
-    // on screen and the GPU's busy percentage (see diagnostics/monitor.ts).
+    // One journal line per second with what is on screen, every shown glass's
+    // work and the GPU's busy percentage (see diagnostics/monitor.ts).
     // 0 runs until monitorStop().
     monitor: (seconds: number = 30) => {
       startGlassMonitor({ glasses: () => _liveBackdrops, effects: () => _liveEffects }, seconds);
