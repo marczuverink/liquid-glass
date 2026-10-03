@@ -8,6 +8,7 @@ export class MaterialSettings {
   constructor(
     private _settings: Gio.Settings | undefined, private _uniforms: UniformState,
     private _blur: BlurRenderer, private _setDiagnostics: (enabled: boolean) => void,
+    private _repaintIfDirty: () => void,
   ) {}
 
   initialize(): void {
@@ -115,8 +116,11 @@ export class MaterialSettings {
 
     mappings.forEach(map => {
       this._uniforms.set(map.uniform, settings.get_double(map.key));
+      // Without a repaint only the parts of the glass that something else
+      // damaged would pick up the new value.
       const id = settings.connect(`changed::${map.key}`, () => {
         this._uniforms.set(map.uniform, settings.get_double(map.key));
+        this._repaintIfDirty();
       });
       this._settingsIds.push(id);
     });

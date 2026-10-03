@@ -46,7 +46,8 @@ export class GlassRenderer {
     this.blur = new BlurRenderer(this.pipelines, this.passes, () => this._repaint());
     this.uniforms = new UniformState();
     this.geometry = new GlassGeometry(this.uniforms.values);
-    this.material = new MaterialSettings(params.settings, this.uniforms, this.blur, params.setDiagnostics);
+    this.material = new MaterialSettings(params.settings, this.uniforms, this.blur, params.setDiagnostics,
+      () => this._repaintIfDirty());
     this.material.initialize();
   }
 
