@@ -22,8 +22,9 @@ export interface ViewCopy {
   serial: number;
 }
 
+// Through the stage's context, since GNOME 51 has no Clutter.get_default_backend().
 export function coglContext(): Cogl.Context {
-  return Clutter.get_default_backend().get_cogl_context() as Cogl.Context;
+  return global.stage.context.get_backend().get_cogl_context() as Cogl.Context;
 }
 
 // An offscreen texture to render or blit into. A blit needs both sides fixed

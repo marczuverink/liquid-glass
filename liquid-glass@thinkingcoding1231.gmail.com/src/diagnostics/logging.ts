@@ -1,7 +1,7 @@
 /**
- * Logger for the capture and actor modules, which have no settings of their
- * own. extension.js hands in the shared Logger so that their output follows
- * `output-logs` like everything else.
+ * Logger for the modules that have no settings of their own. extension.js
+ * hands in the shared Logger so that their output follows `output-logs` like
+ * everything else.
  */
 type UtilsLogger = { log: (...args: any[]) => void, readonly enabled?: boolean };
 export let _utilsLogger: UtilsLogger | null = null;
@@ -9,11 +9,6 @@ export function setUtilsLogger(logger: UtilsLogger | null): void {
   _utilsLogger = logger;
 }
 
-// Check this before building a message (or querying Clutter) only to log it;
-// the logger itself only discards the finished string.
-export function utilsLogEnabled(): boolean {
-  return !!_utilsLogger && _utilsLogger.enabled !== false;
-}
 export function utilsLog(msg: string): void {
   _utilsLogger?.log(msg);
 }

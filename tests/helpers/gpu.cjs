@@ -32,7 +32,6 @@ function gpuFixture() {
   const context = {};
   const Clutter = {
     OffscreenEffect, Effect: OffscreenEffect, EffectPaintFlags: { ACTOR_DIRTY: 1 },
-    get_default_backend: () => ({ get_cogl_context: () => context }),
     ActorBox: class { constructor(rect) { Object.assign(this, rect); } },
     LayerNode: { new_to_framebuffer(fbo, pipeline) {
       const node = { fbo, pipeline, children: [], add_child(child) { this.children.push(child); } };
@@ -55,6 +54,7 @@ function gpuFixture() {
     Color: class { init_from_4f(...values) { this.values = values; } },
   };
   const globalThis = { global: { _lgGlass: {}, stage: {
+    context: { get_backend: () => ({ get_cogl_context: () => context }) },
     connect(_name, cb) { const id = nextSignal++; stageHandlers.set(id, cb); return id; },
     disconnect(id) { assert.ok(stageHandlers.delete(id)); },
   } } };

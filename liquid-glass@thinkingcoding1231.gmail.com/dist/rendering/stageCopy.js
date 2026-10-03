@@ -7,8 +7,9 @@ import Clutter from 'gi://Clutter';
 import Cogl from 'gi://Cogl';
 import Mtk from 'gi://Mtk';
 
+// Through the stage's context, since GNOME 51 has no Clutter.get_default_backend().
 export function coglContext() {
-    return Clutter.get_default_backend().get_cogl_context();
+    return global.stage.context.get_backend().get_cogl_context();
 }
 
 // An offscreen texture to render or blit into. A blit needs both sides fixed

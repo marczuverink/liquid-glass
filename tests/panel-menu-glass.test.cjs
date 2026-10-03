@@ -118,7 +118,7 @@ test('opening a menu lifts its glass off the bottom of uiGroup, above the dock',
   uiGroup.add_child(dock);
   uiGroup.add_child(menuActor);
 
-  manager.bgActor = bgActor;
+  manager.glass = bgActor;
   manager._menuRoot = menuActor;
   assert.ok(uiGroup.children.indexOf(bgActor) < uiGroup.children.indexOf(dock));
 
@@ -136,7 +136,7 @@ test('a menu created before the dock still ends up with its glass under it', () 
   const bgActor = actorStub('menu-glass');
   uiGroup.add_child(menuActor);
   uiGroup.insert_child_below(bgActor, menuActor);
-  manager.bgActor = bgActor;
+  manager.glass = bgActor;
   manager._menuRoot = menuActor;
 
   // Dash to Dock arrives afterwards and lands on top of both.

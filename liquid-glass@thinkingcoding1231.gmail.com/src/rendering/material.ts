@@ -20,7 +20,7 @@ export class MaterialSettings {
     this._uniforms.set('contrast', 1.0);
     this._uniforms.set('saturation', 1.0);
     this._uniforms.set('padding', 20.0);
-    // How far the drop shadow can extend before the background actor's clip,
+    // How far the drop shadow can extend before the glass actor's clip,
     // unlike the small optical 'padding'. The managers set the real value.
     this._uniforms.set('shadow_max_radius', 180.0);
     this._uniforms.set('isDock', 0.0);
@@ -28,7 +28,8 @@ export class MaterialSettings {
     // and keep only the drop shadow and the inner AO.
     this._uniforms.set('surface_light_enabled', 1.0);
 
-    // Where the glass sits inside the monitor-sized capture.
+    // Where the glass sits inside the actor, which for the UI glass covers
+    // the monitor.
     this._uniforms.set('dock_x', 0.0);
     this._uniforms.set('dock_y', 0.0);
     this._uniforms.set('dock_w', 0.0);

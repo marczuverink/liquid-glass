@@ -6,11 +6,11 @@ import { splitShader } from './shaderSource.js';
 export class ShaderPipelines {
   constructor(private _logger?: Logger) { }
 
-  async load(extensionPath: string | undefined): Promise<void> {
+  async load(extensionPath: string | undefined, cancellable: Gio.Cancellable | null = null): Promise<void> {
     if (!extensionPath) throw new Error('Missing extension path for shader loading');
-    this._downsampleSource = await this._readFileAsync(extensionPath + '/shaders/downsample.frag');
-    this._upsampleSource = await this._readFileAsync(extensionPath + '/shaders/upsample.frag');
-    this._glassSource = await this._readFileAsync(extensionPath + '/shaders/glass.frag');
+    this._downsampleSource = await this._readFileAsync(extensionPath + '/shaders/downsample.frag', cancellable);
+    this._upsampleSource = await this._readFileAsync(extensionPath + '/shaders/upsample.frag', cancellable);
+    this._glassSource = await this._readFileAsync(extensionPath + '/shaders/glass.frag', cancellable);
   }
 
   clear(): void {
@@ -27,8 +27,8 @@ export class ShaderPipelines {
   public upsample: Cogl.Pipeline | null = null;
   public composite: Cogl.Pipeline | null = null;
 
-  // A plain one-fetch copy with a UV remap, for the crop and the Gaussian's
-  // half-res pre-pass. No snippet: Cogl's default combine modulates the
+  // A plain one-fetch copy with a UV remap, for the Gaussian's half-res
+  // pre-pass. No snippet: Cogl's default combine modulates the
   // texture by the pipeline colour, which is opaque white.
   public passthrough: Cogl.Pipeline | null = null;
 
@@ -42,10 +42,10 @@ export class ShaderPipelines {
   private _glassSource: string | null = null;
 
   // load_contents_finish() throws a GError when the file cannot be read.
-  private _readFileAsync(path: string): Promise<string> {
+  private _readFileAsync(path: string, cancellable: Gio.Cancellable | null): Promise<string> {
     return new Promise((resolve, reject) => {
       const file = Gio.File.new_for_path(path);
-      file.load_contents_async(null, (_, res) => {
+      file.load_contents_async(cancellable, (_, res) => {
         try {
           const [ok, bytes] = file.load_contents_finish(res);
           if (!ok) {

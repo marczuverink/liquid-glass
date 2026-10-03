@@ -9,12 +9,12 @@ export class ShaderPipelines {
         this._logger = _logger;
     }
 
-    async load(extensionPath) {
+    async load(extensionPath, cancellable = null) {
         if (!extensionPath)
             throw new Error('Missing extension path for shader loading');
-        this._downsampleSource = await this._readFileAsync(extensionPath + '/shaders/downsample.frag');
-        this._upsampleSource = await this._readFileAsync(extensionPath + '/shaders/upsample.frag');
-        this._glassSource = await this._readFileAsync(extensionPath + '/shaders/glass.frag');
+        this._downsampleSource = await this._readFileAsync(extensionPath + '/shaders/downsample.frag', cancellable);
+        this._upsampleSource = await this._readFileAsync(extensionPath + '/shaders/upsample.frag', cancellable);
+        this._glassSource = await this._readFileAsync(extensionPath + '/shaders/glass.frag', cancellable);
     }
 
     clear() {
@@ -29,8 +29,8 @@ export class ShaderPipelines {
     downsample = null;
     upsample = null;
     composite = null;
-    // A plain one-fetch copy with a UV remap, for the crop and the Gaussian's
-    // half-res pre-pass. No snippet: Cogl's default combine modulates the
+    // A plain one-fetch copy with a UV remap, for the Gaussian's half-res
+    // pre-pass. No snippet: Cogl's default combine modulates the
     // texture by the pipeline colour, which is opaque white.
     passthrough = null;
     // A 4x4 box filter, the first pass when glass-blur-downscale is 4.
@@ -40,10 +40,10 @@ export class ShaderPipelines {
     _glassSource = null;
 
     // load_contents_finish() throws a GError when the file cannot be read.
-    _readFileAsync(path) {
+    _readFileAsync(path, cancellable) {
         return new Promise((resolve, reject) => {
             const file = Gio.File.new_for_path(path);
-            file.load_contents_async(null, (_, res) => {
+            file.load_contents_async(cancellable, (_, res) => {
                 try {
                     const [ok, bytes] = file.load_contents_finish(res);
                     if (!ok) {

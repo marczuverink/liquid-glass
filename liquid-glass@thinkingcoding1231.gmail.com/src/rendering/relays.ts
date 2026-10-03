@@ -168,7 +168,8 @@ export class RelaySet {
   // area (`near`) or the wider area a shown relay is kept for (`keep`): the
   // earlier siblings of the owner and of each of its ancestors, and the
   // children of the window group. Never an ancestor itself, whose paint
-  // volume would contain the relays.
+  // volume would contain the relays. A window's glass meets the windows
+  // below it as earlier siblings of its own window.
   private _collectSources(near: number[], keep: number[]): Map<Clutter.Actor, SourceReach> {
     const wanted = new Map<Clutter.Actor, SourceReach>();
     let child: Clutter.Actor = this._owner;
@@ -177,7 +178,7 @@ export class RelaySet {
       for (let s = parent.get_first_child(); s && s !== child; s = s.get_next_sibling()) {
         if (!s.mapped || s.opacity === 0 || this._exclude(s)) continue;
         if (s === global.window_group) this._collectWindowGroup(s, near, keep, wanted);
-        else wanted.set(s, { near: actorReaches(s, near), keep: actorReaches(s, keep) });
+        else wanted.set(s, sourceReach(s, near, keep));
       }
       child = parent;
       parent = parent.get_parent();
@@ -189,10 +190,15 @@ export class RelaySet {
     wanted: Map<Clutter.Actor, SourceReach>): void {
     for (let a = group.get_first_child(); a; a = a.get_next_sibling()) {
       if (!a.mapped || a.opacity === 0) continue;
-      const reaches = (r: number[]) => a instanceof Meta.WindowActor ? windowReaches(a, r) : actorReaches(a, r);
-      wanted.set(a, { near: reaches(near), keep: reaches(keep) });
+      wanted.set(a, sourceReach(a, near, keep));
     }
   }
+}
+
+function sourceReach(actor: Clutter.Actor, near: number[], keep: number[]): SourceReach {
+  if (actor instanceof Meta.WindowActor)
+    return { near: windowReaches(actor, near), keep: windowReaches(actor, keep) };
+  return { near: actorReaches(actor, near), keep: actorReaches(actor, keep) };
 }
 
 // The stage rect [x0, y0, x1, y1] of a rect in `actor`'s coordinates.

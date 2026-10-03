@@ -50,6 +50,7 @@ function shell({ quickSettings = null, remembered = 0 } = {}) {
     AdaptiveContrastConfig: {},
     isActorValid: actor => !!actor,
     getAllocatedSize: actor => [0, actor.allocated],
+    MENU_NO_ANIMATION: 0,
   };
   const { UIManager: C } = loadModule(path.join(__dirname,
     '../liquid-glass@thinkingcoding1231.gmail.com/dist/uiManager.js'), bindings);

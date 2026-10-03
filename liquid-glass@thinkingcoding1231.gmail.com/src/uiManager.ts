@@ -7,24 +7,17 @@ import St from 'gi://St';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import Gio from 'gi://Gio';
-import { LiquidEffect } from './liquidEffect.js';
 import { BackdropGlass } from './rendering/backdropGlass.js';
-import type { GlassSurface } from './rendering/glassSurface.js';
-import { backdropDefault } from './diagnostics/glass.js';
-import { createCaptureActors } from './actors/captureActors.js';
 import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
 import { UnpickableWidget } from './actors/unpickable.js';
-import { UILayerSampler } from './capture/uiLayerSampler.js';
-import { WindowCloneManager } from './capture/windowClones.js';
 import { ensureGlassAllocated } from './actors/allocation.js';
 import { resolveMonitorGeometry, getAllocatedSize } from './actors/geometry.js';
 import { isActorValid } from './actors/lifecycle.js';
 import { startSyncLoop, stopStageLoop } from './animation/frameLoops.js';
-import { excludeOtherGlass } from './capture/glassExclusions.js';
 import { placeScreenGlass, resolveGlassOrigin, applyGlassScale, GLASS_SHADOW_MAX_RADIUS } from './actors/glassBounds.js';
-import { syncGlassCaptureClip } from './capture/clip.js';
 import { resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb, rgbToHex } from './animation/colors.js';
 
+import { MENU_NO_ANIMATION } from './shellVersion.js';
 import { Logger } from './logger.js';
 
 // Room around the glass rect for the shader's edge effects.
@@ -55,13 +48,8 @@ export class UIManager {
   private targetActor: St.Widget;
   private menu: any;
   private animActor: St.Widget;
-  private bgActor: Clutter.Actor | null;
-  private effect: GlassSurface | null;
-  // Set when the glass reads the stage; it is then bgActor and effect too.
-  private _backdrop: BackdropGlass | null = null;
-
-  private _cloneContainer: Clutter.Actor | null = null;
-  private _windowCloneManager: WindowCloneManager | null = null;
+  // Monitor-sized; see _applyGlassBounds().
+  private glass: BackdropGlass | null;
 
   private _signals: { target: any, id: number }[];
   private _animSignalId: number = 0;
@@ -100,7 +88,6 @@ export class UIManager {
   private _settingsSignals: number[];
   private _isEffectActive: boolean;
   private _adaptiveConfig!: typeof AdaptiveContrastConfig;
-  private liquidBox: Clutter.Actor | null = null;
   private _stableBaseW: number | undefined;
   private _stableBaseH: number | undefined;
   private _lastValidAnimAbsX: number | undefined;
@@ -132,7 +119,6 @@ export class UIManager {
   private _cornerRadius: number = 0;
 
   private _animationInterval: number = 16;
-  private _uiSampler: UILayerSampler | null = null;
 
   private _lastScreenW: number | undefined;
   private _lastScreenH: number | undefined;
@@ -158,8 +144,7 @@ export class UIManager {
     this.menu = panelButton.menu;
     this.animActor = panelButton.menu.box as St.Widget;
 
-    this.bgActor = null;
-    this.effect = null;
+    this.glass = null;
 
     this._signals = [];
     this._frameSyncId = 0;
@@ -410,11 +395,11 @@ export class UIManager {
     const restore = () => {
       if (restored) return;
       restored = true;
-      menu.close(0);
+      menu.close(MENU_NO_ANIMATION);
       actor.opacity = opacity;
     };
 
-    menu.open(0);
+    menu.open(MENU_NO_ANIMATION);
     actor.opacity = 0;
 
     this._restoreQuickSettings = restore;
@@ -519,16 +504,16 @@ export class UIManager {
   private _restackGlass(): void {
     const uiGroup = Main.layoutManager.uiGroup;
     const root = this._menuRoot;
-    if (!this.bgActor || !root) return;
+    if (!this.glass || !root) return;
     if (!isActorValid(root) || root.get_parent() !== uiGroup) return;
-    if (this.bgActor.get_parent() !== uiGroup) return;
+    if (this.glass.get_parent() !== uiGroup) return;
 
     const children = uiGroup.get_children();
     const rootIndex = children.indexOf(root);
     if (rootIndex < 0) return;
-    if (children.indexOf(this.bgActor) === rootIndex - 1) return;
+    if (children.indexOf(this.glass) === rootIndex - 1) return;
 
-    uiGroup.set_child_below_sibling(this.bgActor, root);
+    uiGroup.set_child_below_sibling(this.glass, root);
   }
 
   // A key in this instance's settings namespace; see _keyPrefix.
@@ -577,51 +562,51 @@ export class UIManager {
     });
 
     connectSetting(this._key('tint-color'), () => {
-      if (this.effect) {
+      if (this.glass) {
         let colorArray = hexToColorArray(this._settings.get_string(this._key('tint-color')));
-        this.effect.setTintColor(...colorArray);
+        this.glass.setTintColor(...colorArray);
       }
     });
 
     connectSetting(this._key('tint-strength'), () => {
-      if (this.effect) {
-        this.effect.setTintStrength(this._settings.get_double(this._key('tint-strength')));
+      if (this.glass) {
+        this.glass.setTintStrength(this._settings.get_double(this._key('tint-strength')));
       }
     });
 
     connectSetting(this._key('blur-radius'), () => {
-      if (this.effect) {
-        this.effect.setBlurRadius(this._settings.get_int(this._key('blur-radius')));
+      if (this.glass) {
+        this.glass.setBlurRadius(this._settings.get_int(this._key('blur-radius')));
       }
     });
 
     connectSetting(this._key('brightness'), () => {
-      if (this.effect) {
-        this.effect.setBrightness(this._settings.get_double(this._key('brightness')));
+      if (this.glass) {
+        this.glass.setBrightness(this._settings.get_double(this._key('brightness')));
       }
     });
 
     connectSetting(this._key('contrast'), () => {
-      if (this.effect) {
-        this.effect.setContrast(this._settings.get_double(this._key('contrast')));
+      if (this.glass) {
+        this.glass.setContrast(this._settings.get_double(this._key('contrast')));
       }
     });
 
     connectSetting(this._key('saturation'), () => {
-      if (this.effect) {
-        this.effect.setSaturation(this._settings.get_double(this._key('saturation')));
+      if (this.glass) {
+        this.glass.setSaturation(this._settings.get_double(this._key('saturation')));
       }
     });
 
     connectSetting(this._key('corner-radius'), () => {
-      if (this.effect) {
+      if (this.glass) {
         this._cornerRadius = this._settings.get_double(this._key('corner-radius'));
-        this.effect.setCornerRadius(this._cornerRadius);
+        this.glass.setCornerRadius(this._cornerRadius);
       }
     });
 
     connectSetting(this._key('glass-expand'), () => {
-      if (this.effect) {
+      if (this.glass) {
         this._glassExpand = this._settings.get_int(this._key('glass-expand'));
       }
     });
@@ -694,19 +679,15 @@ export class UIManager {
     };
 
     // Sized to the monitor by _syncGeometry().
-    if (backdropDefault) {
-      this._backdrop = new BackdropGlass({
-        extensionPath: this.extensionPath, settings: this._settings, logger: this._logger, owner: this._label,
-      } as any);
-      this.bgActor = this._backdrop;
-      this.bgActor.set_size(1.0, 1.0);
-    } else {
-      ({ bgActor: this.bgActor, liquidBox: this.liquidBox, cloneContainer: this._cloneContainer } = createCaptureActors());
-    }
+    const glass = new BackdropGlass({
+      extensionPath: this.extensionPath, settings: this._settings, logger: this._logger, owner: this._label,
+    } as any);
+    this.glass = glass;
+    glass.set_size(1.0, 1.0);
 
     // The menu scales from its top centre; the glass follows it by geometry.
     this.animActor.set_pivot_point(0.5, 0.0);
-    this.bgActor.set_pivot_point(0.0, 0.0);
+    glass.set_pivot_point(0.0, 0.0);
 
     let menuRoot: Clutter.Actor = this.menu.actor;
     while (menuRoot.get_parent() && menuRoot.get_parent() !== Main.layoutManager.uiGroup) {
@@ -715,26 +696,14 @@ export class UIManager {
       menuRoot = p;
     }
 
-    // Below the menu, so the glass does not clone itself or the menu, and a
-    // BackdropGlass reads the stage before the menu is drawn. Not inside the
-    // menu: its BoxPointer is always drawn through an offscreen.
+    // Below the menu, so the glass reads the stage before the menu is drawn.
+    // Not inside the menu: its BoxPointer is always drawn through an
+    // offscreen.
     this._menuRoot = menuRoot;
     if (menuRoot.get_parent() === Main.layoutManager.uiGroup) {
-      Main.layoutManager.uiGroup.insert_child_below(this.bgActor, menuRoot);
+      Main.layoutManager.uiGroup.insert_child_below(glass, menuRoot);
     } else {
-      Main.layoutManager.uiGroup.add_child(this.bgActor);
-    }
-
-    if (!this._backdrop) {
-      this._windowCloneManager = new WindowCloneManager(this.liquidBox!, this._cloneContainer!, `lg-${this._label}`);
-
-      this._uiSampler = new UILayerSampler(
-        this.bgActor,
-        this.liquidBox!,
-        [menuRoot, global.windowGroup, global.window_group],
-        this._cloneContainer!,
-        this._label
-      );
+      Main.layoutManager.uiGroup.add_child(glass);
     }
 
     let blurRadius = this._settings.get_int(this._key('blur-radius'));
@@ -745,36 +714,31 @@ export class UIManager {
     let saturation = this._settings.get_double(this._key('saturation'));
     this._cornerRadius = this._settings.get_double(this._key('corner-radius'));
 
-    const effect: GlassSurface = this._backdrop ?? new LiquidEffect({
-      extensionPath: this.extensionPath, settings: this._settings, owner: this._label,
-    } as any);
-    this.effect = effect;
-    effect.setPadding(SHADER_PADDING);
-    effect.setTintColor(...hexToColorArray(tintColorStr));
-    effect.setTintStrength(tintStrength);
-    effect.setCornerRadius(this._cornerRadius);
-    effect.setIsDock(false);
-    effect.setBrightness(brightness);
-    effect.setContrast(contrast);
-    effect.setSaturation(saturation);
-    effect.setBlurRadius(blurRadius);
-    if (effect instanceof LiquidEffect) this.liquidBox!.add_effect(effect);
+    glass.setPadding(SHADER_PADDING);
+    glass.setTintColor(...hexToColorArray(tintColorStr));
+    glass.setTintStrength(tintStrength);
+    glass.setCornerRadius(this._cornerRadius);
+    glass.setIsDock(false);
+    glass.setBrightness(brightness);
+    glass.setContrast(contrast);
+    glass.setSaturation(saturation);
+    glass.setBlurRadius(blurRadius);
 
-    this.bgActor.hide();
+    glass.hide();
 
     // Follows the stage's frames while the menu is shown; an open menu that
     // does not change costs no frames.
     const stopFrameSync = () => stopStageLoop(this._frameSignalSlot, this._frameSlot);
     const startFrameSync = () => {
       if (this._frameSignalId !== 0) return;
-      this._buildClones();
+      this._restackGlass();
       startSyncLoop(this._frameSignalSlot, this._frameSlot, {
-        alive: () => !!this.bgActor && this.targetActor.mapped,
+        alive: () => !!this.glass && this.targetActor.mapped,
         honourFreeze: true,
         errorTag: 'UIManager',
         step: () => {
           // Checked before this frame's sync dirties anything.
-          ensureGlassAllocated(this.bgActor);
+          ensureGlassAllocated(this.glass);
           this._syncGeometry();
         },
       });
@@ -803,9 +767,9 @@ export class UIManager {
         if (!this.menu.actor.mapped) {
           stopFrameSync();
 
-          if (this.bgActor) {
-            this.bgActor.hide();
-            this.bgActor.opacity = 0;
+          if (this.glass) {
+            this.glass.hide();
+            this.glass.opacity = 0;
           }
           if (this.animActor) {
             this.animActor.opacity = 0;
@@ -818,16 +782,6 @@ export class UIManager {
     if (this.targetActor.mapped) {
       startFrameSync();
     }
-  }
-
-  _buildClones() {
-    if (!this.bgActor) return;
-    excludeOtherGlass(this._uiSampler, this.bgActor);
-    // Before the clones, so this frame's capture already sees the final order.
-    this._restackGlass();
-    this._windowCloneManager?.rebuildClones();
-    this._uiSampler?.rebindSelf();
-    this._uiSampler?.refresh();
   }
 
   _syncGeometry() {
@@ -847,24 +801,25 @@ export class UIManager {
     let screenH = Math.max(1, monitor?.height ?? 1);
 
     if (!Number.isNaN(bgX) && !Number.isNaN(bgY) && w >= 1.0 && h >= 1.0)
-      this._applyGlassBounds(this.bgActor!, bgX, bgY, bgW, bgH, monitorX, monitorY, screenW, screenH);
+      this._applyGlassBounds(this.glass!, bgX, bgY, bgW, bgH, monitorX, monitorY, screenW, screenH);
 
     this._applyGlassScale(scaleX, scaleY);
-    this._syncCaptureLayers(monitorX, monitorY, screenW, screenH);
+    // After the geometry setters, so the relays cover this frame's rect.
+    this.glass!.syncSources();
   }
 
   private _syncBgVisibility(): boolean {
-    if (!this.bgActor || !this.targetActor || !this.targetActor.mapped) {
-      if (this.bgActor && this.bgActor.visible) {
-        this.bgActor.hide();
+    if (!this.glass || !this.targetActor || !this.targetActor.mapped) {
+      if (this.glass && this.glass.visible) {
+        this.glass.hide();
       }
       return false;
     }
-    if (!this.bgActor.visible) {
-      this.bgActor.show();
+    if (!this.glass.visible) {
+      this.glass.show();
     }
     if (!this._enableAnimation) {
-      this.bgActor.opacity = this.targetActor.opacity;
+      this.glass.opacity = this.targetActor.opacity;
     }
     return true;
   }
@@ -902,7 +857,7 @@ export class UIManager {
     });
   }
 
-  private _applyGlassBounds(bgActor: Clutter.Actor, bgX: number, bgY: number, bgW: number, bgH: number,
+  private _applyGlassBounds(glass: BackdropGlass, bgX: number, bgY: number, bgW: number, bgH: number,
     monitorX: number, monitorY: number, screenW: number, screenH: number) {
     if (this._lastBgW === bgW && this._lastBgH === bgH &&
       this._lastBgX === bgX && this._lastBgY === bgY &&
@@ -911,12 +866,12 @@ export class UIManager {
     // Monitor-local, as the shader uses them.
     let localBgX = bgX - monitorX;
     let localBgY = bgY - monitorY;
-    placeScreenGlass(bgActor, this.liquidBox, monitorX, monitorY, screenW, screenH,
-      { x: localBgX, y: localBgY, w: bgW, h: bgH }, false);
+    placeScreenGlass(glass, monitorX, monitorY, screenW, screenH,
+      { x: localBgX, y: localBgY, w: bgW, h: bgH });
 
-    this.effect?.setShadowMaxRadius(GLASS_SHADOW_MAX_RADIUS);
-    this.effect?.setResolution(screenW, screenH);
-    this.effect?.setGlassGeometry(localBgX, localBgY, bgW, bgH);
+    glass.setShadowMaxRadius(GLASS_SHADOW_MAX_RADIUS);
+    glass.setResolution(screenW, screenH);
+    glass.setGlassGeometry(localBgX, localBgY, bgW, bgH);
 
     this._lastBgW = bgW; this._lastBgH = bgH;
     this._lastBgX = bgX; this._lastBgY = bgY;
@@ -924,36 +879,14 @@ export class UIManager {
   }
 
   private _applyGlassScale(scaleX: number, scaleY: number) {
-    applyGlassScale(this.effect, this._cornerRadius, scaleX, scaleY);
-  }
-
-  private _syncCaptureLayers(monitorX: number, monitorY: number, screenW: number, screenH: number) {
-    if (this._backdrop) {
-      this._backdrop.syncSources();
-      return;
-    }
-    this._windowCloneManager?.setOffset(-monitorX, -monitorY);
-    this._uiSampler?.refresh();
-
-    // After setGlassGeometry() and before the samplers sync (see capture/clip.ts).
-    syncGlassCaptureClip({
-      cloneContainer: this._cloneContainer,
-      effect: this.effect,
-      originX: monitorX,
-      originY: monitorY,
-      uiSampler: this._uiSampler,
-      windowCloneManager: this._windowCloneManager,
-    });
-
-    this._uiSampler?.sync(monitorX, monitorY, screenW, screenH);
-    this._windowCloneManager?.sync();
+    applyGlassScale(this.glass, this._cornerRadius, scaleX, scaleY);
   }
 
   _updateResolution() {
-    if (!this.bgActor || !this.effect) return;
-    let [width, height] = this.bgActor.get_size();
+    if (!this.glass) return;
+    let [width, height] = this.glass.get_size();
     if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
-      this.effect.setResolution(width, height);
+      this.glass.setResolution(width, height);
     }
   }
 
@@ -1154,7 +1087,7 @@ export class UIManager {
 
     this._contrastSampler
       .chooseColorsForActors(targets, this._adaptiveConfig, this.menu?.actor,
-        () => this.effect?.paintCount ?? NaN)
+        () => this.glass?.paintCount ?? NaN)
       .then(colorMap => {
         if (!this._isEffectActive || this._actorDestroyed) return;
         this._applyAdaptiveColorMap(colorMap, skipAnimations);
@@ -1210,12 +1143,12 @@ export class UIManager {
       this._tickId = 0;
     }
     if (!this._enableAnimation) {
-      showMenuAtRest(this.bgActor, this.animActor);
+      showMenuAtRest(this.glass, this.animActor);
       return;
     }
 
     if (this.animActor) this.animActor.remove_all_transitions();
-    if (this.bgActor) this.bgActor.remove_all_transitions();
+    if (this.glass) this.glass.remove_all_transitions();
 
     if (this._swiftAnimation) {
       this._swiftSpringScale.updateParams(this._swiftResponse, this._swiftDampingFraction);
@@ -1229,7 +1162,7 @@ export class UIManager {
       let lastTime = GLib.get_monotonic_time();
 
       this._tickId = addFrameTicker(() => {
-        if (!this.bgActor || !this.targetActor) {
+        if (!this.glass || !this.targetActor) {
           this._tickId = 0;
           return GLib.SOURCE_REMOVE;
         }
@@ -1240,7 +1173,7 @@ export class UIManager {
 
         const frame = stepMenuSpring(this._swiftAnimation ? this._swiftSpringScale : this._springScale, elapsedMs);
         if (frame.stopped) this._tickId = 0;
-        applyMenuFrame(frame, this.animActor, this.bgActor, this.menu.actor, () => this._syncGeometry());
+        applyMenuFrame(frame, this.animActor, this.glass, this.menu.actor, () => this._syncGeometry());
         return frame.stopped ? GLib.SOURCE_REMOVE : GLib.SOURCE_CONTINUE;
       }, normalizeAnimationIntervalMs(this._animationInterval));
     }
@@ -1311,30 +1244,20 @@ export class UIManager {
       this.menu.actor.opacity = 255;
 
       if (this.menu.isOpen) {
-        this.menu.close(false);
+        this.menu.close(MENU_NO_ANIMATION);
       }
     }
   }
 
   private _releaseGlass() {
-    // The effect is cleaned up before its actor is destroyed.
-    if (this.effect) {
-      this.effect.cleanup();
-      this.effect = null;
+    const glass = this.glass;
+    this.glass = null;
+    if (glass) {
+      glass.cleanup();
+      // At shell shutdown the stage may have destroyed it already.
+      if (isActorValid(glass)) glass.destroy();
     }
-    this._backdrop = null;
-
-    // At shell shutdown the stage may have destroyed it already.
-    if (isActorValid(this.bgActor)) this.bgActor!.destroy();
-    this.bgActor = null;
-    this.liquidBox = null;
-    this._cloneContainer = null;
     this._menuRoot = null;
-
-    this._uiSampler?.destroy();
-    this._uiSampler = null;
-    this._windowCloneManager?.destroy();
-    this._windowCloneManager = null;
 
     this._stableBaseW = undefined;
     this._stableBaseH = undefined;

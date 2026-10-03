@@ -38,9 +38,9 @@ export function stepMenuSpring(scale, elapsedMs) {
     return { closing, stopped, scale: 0.2 + s * 0.8, opacity: clampOpacity((s / 0.3) * 255) };
 }
 
-export function applyMenuFrame(frame, animActor, bgActor, menuActor, sync) {
+export function applyMenuFrame(frame, animActor, glass, menuActor, sync) {
     animActor.set_scale(frame.scale, frame.scale);
-    bgActor.opacity = frame.opacity;
+    glass.opacity = frame.opacity;
     animActor.opacity = frame.opacity;
     sync();
     if (!frame.stopped)
@@ -49,22 +49,22 @@ export function applyMenuFrame(frame, animActor, bgActor, menuActor, sync) {
         if (!menuActor)
             return;
         menuActor.hide();
-        bgActor.opacity = 0;
+        glass.opacity = 0;
         animActor.opacity = 0;
         return;
     }
     animActor.set_scale(1.0, 1.0);
     animActor.opacity = 255;
-    bgActor.opacity = 255;
+    glass.opacity = 255;
     sync();
 }
 
-export function showMenuAtRest(bgActor, animActor) {
-    if (!bgActor)
+export function showMenuAtRest(glass, animActor) {
+    if (!glass)
         return;
-    bgActor.remove_all_transitions();
-    bgActor.opacity = 255;
-    bgActor.set_scale(1.0, 1.0);
+    glass.remove_all_transitions();
+    glass.opacity = 255;
+    glass.set_scale(1.0, 1.0);
     if (!animActor)
         return;
     animActor.set_scale(1.0, 1.0);

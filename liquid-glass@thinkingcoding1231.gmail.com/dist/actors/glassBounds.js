@@ -2,20 +2,16 @@ import { setClipIfChanged } from './writes.js';
 export const GLASS_CLIP_PADDING = 200;
 export const GLASS_SHADOW_MAX_RADIUS = GLASS_CLIP_PADDING - 20;
 
-export function placeScreenGlass(bgActor, liquidBox, x, y, screenW, screenH, clip, resetBoxClip) {
-    // bgActor and liquidBox cover the whole monitor; the clip limits drawing to
-    // the glass plus room for its shadow.
-    bgActor.remove_transition('size');
-    bgActor.remove_transition('position');
-    bgActor.set_position(x, y);
-    bgActor.set_size(screenW, screenH);
-    bgActor.remove_transition('size');
-    bgActor.remove_transition('position');
-    liquidBox?.set_position(0, 0);
-    liquidBox?.set_size(screenW, screenH);
-    if (resetBoxClip)
-        liquidBox?.remove_clip();
-    setClipIfChanged(bgActor, clip.x - GLASS_CLIP_PADDING, clip.y - GLASS_CLIP_PADDING, clip.w + GLASS_CLIP_PADDING * 2, clip.h + GLASS_CLIP_PADDING * 2);
+export function placeScreenGlass(glass, x, y, screenW, screenH, clip) {
+    // The glass covers the whole monitor; the clip limits drawing to the glass
+    // rect plus room for its shadow.
+    glass.remove_transition('size');
+    glass.remove_transition('position');
+    glass.set_position(x, y);
+    glass.set_size(screenW, screenH);
+    glass.remove_transition('size');
+    glass.remove_transition('position');
+    setClipIfChanged(glass, clip.x - GLASS_CLIP_PADDING, clip.y - GLASS_CLIP_PADDING, clip.w + GLASS_CLIP_PADDING * 2, clip.h + GLASS_CLIP_PADDING * 2);
 }
 
 // The content actor's stage position. It can be NaN on the first frame of an

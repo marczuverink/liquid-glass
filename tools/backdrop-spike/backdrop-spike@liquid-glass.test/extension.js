@@ -38,7 +38,7 @@ function log(msg) {
 }
 
 function coglContext() {
-  return Clutter.get_default_backend().get_cogl_context();
+  return global.stage.context.get_backend().get_cogl_context();
 }
 
 function viewFor(actor, fb) {

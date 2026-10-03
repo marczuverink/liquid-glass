@@ -4,12 +4,6 @@ export function setUtilsLogger(logger) {
     _utilsLogger = logger;
 }
 
-// Check this before building a message (or querying Clutter) only to log it;
-// the logger itself only discards the finished string.
-export function utilsLogEnabled() {
-    return !!_utilsLogger && _utilsLogger.enabled !== false;
-}
-
 export function utilsLog(msg) {
     _utilsLogger?.log(msg);
 }

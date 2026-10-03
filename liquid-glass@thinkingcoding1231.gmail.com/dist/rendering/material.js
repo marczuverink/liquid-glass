@@ -3,13 +3,15 @@ export class MaterialSettings {
     _uniforms;
     _blur;
     _setDiagnostics;
+    _repaintIfDirty;
     _settingsIds = [];
 
-    constructor(_settings, _uniforms, _blur, _setDiagnostics) {
+    constructor(_settings, _uniforms, _blur, _setDiagnostics, _repaintIfDirty) {
         this._settings = _settings;
         this._uniforms = _uniforms;
         this._blur = _blur;
         this._setDiagnostics = _setDiagnostics;
+        this._repaintIfDirty = _repaintIfDirty;
     }
 
     initialize() {
@@ -21,14 +23,15 @@ export class MaterialSettings {
         this._uniforms.set('contrast', 1.0);
         this._uniforms.set('saturation', 1.0);
         this._uniforms.set('padding', 20.0);
-        // How far the drop shadow can extend before the background actor's clip,
+        // How far the drop shadow can extend before the glass actor's clip,
         // unlike the small optical 'padding'. The managers set the real value.
         this._uniforms.set('shadow_max_radius', 180.0);
         this._uniforms.set('isDock', 0.0);
         // Rim, specular and sheen highlights. Application windows turn them off
         // and keep only the drop shadow and the inner AO.
         this._uniforms.set('surface_light_enabled', 1.0);
-        // Where the glass sits inside the monitor-sized capture.
+        // Where the glass sits inside the actor, which for the UI glass covers
+        // the monitor.
         this._uniforms.set('dock_x', 0.0);
         this._uniforms.set('dock_y', 0.0);
         this._uniforms.set('dock_w', 0.0);
@@ -113,8 +116,11 @@ export class MaterialSettings {
             return;
         mappings.forEach(map => {
             this._uniforms.set(map.uniform, settings.get_double(map.key));
+            // Without a repaint only the parts of the glass that something else
+            // damaged would pick up the new value.
             const id = settings.connect(`changed::${map.key}`, () => {
                 this._uniforms.set(map.uniform, settings.get_double(map.key));
+                this._repaintIfDirty();
             });
             this._settingsIds.push(id);
         });

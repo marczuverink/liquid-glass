@@ -14,10 +14,7 @@ export class GlassGeometry {
   public blurEnabled: boolean;
   public compositeEnabled: boolean;
 
-  // Blur only the part of the capture the glass can sample. The capture
-  // itself stays monitor-sized: a background-mode blur inside it (Blur My
-  // Shell's panel) reads its source by stage coordinates from the current
-  // framebuffer, so the offscreen's origin has to match the stage's.
+  // Copy and blur only the part of the backdrop the glass can sample.
   static USE_BLUR_RECT = true;
 
   // Must match EDGE_LENS_REACH in glass.frag (the refraction's maximum
@@ -37,14 +34,6 @@ export class GlassGeometry {
   // to this quantum; otherwise an opening menu would reallocate the pool
   // every frame.
   static BLUR_RECT_QUANTUM = 64;
-
-  // Slack for the capture clip (see captureClip()): too generous costs a few
-  // pixels, too tight shows as a hard edge.
-  static CAPTURE_CLIP_EXTRA_MARGIN = 24;
-
-  // No clip above this share of the actor; application windows land here and
-  // their clipBox already clips the clones.
-  static CAPTURE_CLIP_MIN_SAVING = 0.85;
 
   // Run glass.frag only where it can draw something: the glass body and the
   // drop shadow's reach. Everywhere else the source is fully transparent,
@@ -123,53 +112,6 @@ export class GlassGeometry {
     }
     if (!(x1 > x0) || !(y1 > y0)) return null;
     return [x0, y0, x1, y1];
-  }
-
-  /**
-   * The part of the capture this glass can need at all, in shader space. Not
-   * the blur rect: this one must exist even when the blur rect is switched
-   * off, and it adds the blur's own reach (3 sigma, sigma capped at 30) so the
-   * blur never pulls in cleared pixels. The margin is generous on purpose; the
-   * saving is the rest of the monitor.
-   */
-  captureClip(radius: number): number[] | null {
-    const resW = this._uniforms.get('resolution_x') ?? 0;
-    const resH = this._uniforms.get('resolution_y') ?? 0;
-    if (!(resW >= 1) || !(resH >= 1)) return null;
-
-    const body = this._glassBodyUnion();
-    if (!body) return null;
-    const [x0, y0, x1, y1] = body;
-
-    const dispPx = this._samplingReachPx(resW, resH);
-
-    const feather = Math.max(this._uniforms.get('edge_smoothing') ?? 0, 0.75);
-    const blurReach = 3 * Math.max(Math.min(radius, 30), 0);
-    const extra = GlassGeometry.BLUR_RECT_MIN_MARGIN + feather + 2.5 +
-      blurReach + GlassGeometry.CAPTURE_CLIP_EXTRA_MARGIN;
-
-    const mx = Math.ceil(dispPx + extra);
-    const my = Math.ceil(dispPx + extra);
-
-    const maxW = Math.round(resW);
-    const maxH = Math.round(resH);
-    let cx = Math.max(0, Math.floor(x0 - mx));
-    let cy = Math.max(0, Math.floor(y0 - my));
-    let cw = Math.min(maxW, Math.ceil(x1 + mx)) - cx;
-    let ch = Math.min(maxH, Math.ceil(y1 + my)) - cy;
-    if (!(cw >= 2) || !(ch >= 2)) return null;
-
-    // Quantised like the blur rect, so an animating menu does not rewrite the
-    // clip every frame.
-    const q = GlassGeometry.BLUR_RECT_QUANTUM;
-    cw = Math.min(maxW, Math.ceil(cw / q) * q);
-    ch = Math.min(maxH, Math.ceil(ch / q) * q);
-    cx = Math.max(0, Math.min(cx, maxW - cw));
-    cy = Math.max(0, Math.min(cy, maxH - ch));
-
-    if (cw * ch >= resW * resH * GlassGeometry.CAPTURE_CLIP_MIN_SAVING) return null;
-
-    return [cx, cy, cw, ch];
   }
 
   private _samplingReachPx(resW: number, resH: number): number {

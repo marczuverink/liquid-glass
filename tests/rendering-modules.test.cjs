@@ -34,50 +34,16 @@ test('Gaussian tap merging preserves normalization, offsets and shader direction
   }
 });
 
-function stageFixture() {
-  const handlers = new Map();
-  let nextId = 1;
-  const stage = {
-    connect(name, callback) { assert.equal(name, 'after-paint'); const id = nextId++; handlers.set(id, callback); return id; },
-    disconnect(id) { assert.ok(handlers.delete(id)); },
-  };
-  const globalThis = { global: { stage } };
-  const load = createModuleLoader({ globalThis, global: globalThis.global, BMS_MODE: {} });
-  return { handlers, stage, globalThis, load, clock: load(path.join(dist, 'rendering/frameClock.js')) };
-}
-
-test('frame serial uses exactly one stage observer and can reconnect after cleanup', () => {
-  const { clock, handlers } = stageFixture();
-  assert.equal(clock.frameSerialIsLive(), false);
-  assert.equal(clock.ensureFrameSerialHook(), true);
-  assert.equal(clock.ensureFrameSerialHook(), true);
-  assert.equal(handlers.size, 1);
-  const before = clock.frameSerial;
-  for (const callback of handlers.values()) callback();
-  assert.equal(clock.frameSerial, before + 1);
-  clock.releaseFrameSerialHook();
-  clock.releaseFrameSerialHook();
-  assert.equal(handlers.size, 0);
-  assert.equal(clock.frameSerialIsLive(), false);
-  assert.equal(clock.ensureFrameSerialHook(), true);
-  for (const callback of handlers.values()) callback();
-  assert.equal(clock.frameSerial, before + 2);
-  clock.releaseFrameSerialHook();
-});
-
-test('disposing one effect keeps the shared frame clock until the last effect leaves', () => {
-  const { load, clock, handlers, globalThis } = stageFixture();
-  const registry = load(path.join(dist, 'diagnostics/glass.js'));
+test('every registered glass is counted and the debug API goes with the last disable', () => {
+  const globalThis = { global: {} };
+  const registry = createModuleLoader({ globalThis, global: globalThis.global })(path.join(dist, 'diagnostics/glass.js'));
   registry.installGlassDiagnostics();
-  const effects = [{}, {}];
-  effects.forEach(effect => registry.registerGlassEffect(effect));
-  clock.ensureFrameSerialHook();
+  const glasses = [{}, {}];
+  glasses.forEach(glass => registry.registerGlass(glass));
   assert.equal(globalThis.global._lgGlass.count(), 2);
-  registry.unregisterGlassEffect(effects[0]);
-  assert.equal(handlers.size, 1);
+  registry.unregisterGlass(glasses[0]);
   assert.equal(globalThis.global._lgGlass.count(), 1);
-  registry.unregisterGlassEffect(effects[1]);
-  assert.equal(handlers.size, 0);
+  registry.unregisterGlass(glasses[1]);
   assert.equal(globalThis.global._lgGlass.count(), 0);
   registry.removeGlassDiagnostics();
   assert.equal(globalThis.global._lgGlass, undefined);
@@ -95,9 +61,8 @@ function passesFixture() {
     PipelineNode: { new(pipeline) { return { pipeline, add_texture_rectangle(...rect) { this.rect = rect; } }; } },
   };
   const module = loadModule(path.join(dist, 'rendering/passes.js'), { Clutter });
-  const errors = [];
-  const passes = new module.RenderPasses({ error: message => errors.push(message) });
-  return { ...module, passes, errors, nodes };
+  const passes = new module.RenderPasses();
+  return { ...module, passes, nodes };
 }
 
 test('deferred passes isolate pipeline copies and invalidate them when a shader changes', () => {
@@ -127,11 +92,11 @@ test('paint passes enqueue geometry with the supplied UVs rather than drawing im
   assert.deepEqual({ ...nodes[0].children[0].rect[0] }, { x1: 0, y1: 0, x2: 100, y2: 80 });
 });
 
-test('composite keeps a single UV range and warns only once when layers disagree', () => {
-  const { passes, errors } = passesFixture();
+test('the composite is queued as a node over the destination with one UV range', () => {
+  const { passes } = passesFixture();
   const parent = { children: [], add_child(node) { this.children.push(node); } };
-  for (let i = 0; i < 3; i++) passes.composite(parent, {}, [10, 20, 50, 70], [0.1, 0.2, 0.8, 0.9], [0, 0, 1, 1]);
-  assert.equal(errors.length, 1);
+  passes.composite(parent, {}, [10, 20, 50, 70], [0.1, 0.2, 0.8, 0.9]);
+  assert.deepEqual({ ...parent.children[0].rect[0] }, { x1: 10, y1: 20, x2: 50, y2: 70 });
   assert.deepEqual(parent.children[0].rect.slice(1), [0.1, 0.2, 0.8, 0.9]);
 });
 

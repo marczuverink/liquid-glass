@@ -17,15 +17,16 @@ function fixture(reference, monitor) {
   const bindings = {
     Main: { layoutManager: { findIndexForActor: () => -1, primaryIndex: 0, monitors: [monitor], primaryMonitor: monitor } },
     setClipIfChanged: (_actor, ...args) => writes.push(['clip', ...args]),
-    syncGlassCaptureClip: opts => writes.push(['capture', opts.originX, opts.originY]),
   };
   const Class = reference ? referenceDock(bindings) : loadModule(path.join(__dirname,
     '../liquid-glass@thinkingcoding1231.gmail.com/dist/dockManager.js'), bindings).DashManager;
   const manager = Object.create(Class.prototype);
   const target = actor('target'), background = actor('background'), ref = actor('reference');
-  const observer = name => new Proxy({}, { get: (_, key) => (...args) => writes.push([name, key, ...args]) });
-  Object.assign(manager, { targetActor: target, bgActor: actor('glass'), liquidBox: actor('box'),
-    effect: observer('effect'), _uiSampler: observer('ui'), _windowCloneManager: observer('windows'),
+  // The glass is an actor that also takes the shader setters, which are recorded.
+  const glassActor = actor('glass', { visible: undefined });
+  const glass = new Proxy(glassActor, { get: (t, key) => key in t ? t[key]
+    : (...args) => writes.push(['glass', key, ...args]) });
+  Object.assign(manager, { targetActor: target, glass,
     _marginValue: 0, _glassExpand: 0, _logger: { log: text => writes.push(['log', text]) },
     _findReferenceActor: () => manager.reference ? ref : null });
   return { manager, target, background, ref, sync() {
@@ -33,7 +34,7 @@ function fixture(reference, monitor) {
     manager._syncGeometry();
     return { writes: structuredClone(writes), state: Object.fromEntries(Object.entries(manager).filter(([k]) =>
       k.startsWith('_last') || k.startsWith('_stable'))),
-      visible: manager.bgActor.visible, opacity: manager.bgActor.opacity, backgroundOpacity: background.opacity };
+      visible: manager.glass.visible, opacity: manager.glass.opacity, backgroundOpacity: background.opacity };
   } };
 }
 

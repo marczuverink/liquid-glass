@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { loadModule } = require('./helpers/load-module.cjs');
 
-function fixture(monitor, { backdrop = false } = {}) {
+function fixture(monitor) {
   const pending = new Map();
   const clock = { now: 0, step: 20000 };
   const errors = [];
@@ -51,26 +51,16 @@ function fixture(monitor, { backdrop = false } = {}) {
   root.add_child(target);
   target.set_size(1000, 80);
   target.set_position(monitor.x + 300, monitor.y + monitor.height - 90);
-  class Effect {
-    setPadding() {} setTintColor() {} setTintStrength() {} setCornerRadius() {}
-    setBrightness() {} setContrast() {} setSaturation() {} setBlurRadius() {} setLiveGeometryHook() {}
-    setIsDock() {} setShadowMaxRadius() {} setResolution() {} setGlassGeometry() {}
-    cleanup() { this.cleaned = true; }
-  }
-  class Sampler {
-    addExclusion() {} rebuildClones() {} rebindSelf() {} refresh() {} sync() {}
-    setOffset() {} destroy() { this.destroyed = true; }
-  }
   const calls = [];
-  // The stage-reading glass is one actor that also takes the effect's setters.
+  // The glass is one actor that also takes the shader setters.
   class Backdrop extends Actor {
     constructor(params) { super(); this.params = params; this.set_name('liquid-glass-bg-actor'); }
+    setPadding() {} setTintColor() {} setTintStrength() {} setCornerRadius() {}
+    setBrightness() {} setContrast() {} setSaturation() {} setBlurRadius() {} setLiveGeometryHook() {}
+    setIsDock() {} setShadowMaxRadius() {} setResolution() {}
     setGlassGeometry(...args) { calls.push(['geometry', ...args]); }
     syncSources() { calls.push(['sources']); }
     cleanup() { this.cleaned = true; }
-  }
-  for (const name of Object.getOwnPropertyNames(Effect.prototype)) {
-    if (!Object.hasOwn(Backdrop.prototype, name)) Backdrop.prototype[name] = Effect.prototype[name];
   }
   const bindings = {
     Main: { layoutManager: { uiGroup: group, primaryIndex: 0,
@@ -79,11 +69,10 @@ function fixture(monitor, { backdrop = false } = {}) {
     SAME_FRAME_WINDOW_US: 4000,
     Meta: { LaterType: { BEFORE_REDRAW: 0 } },
     global: { stage, compositor: { get_laters: () => laters } },
-    UnpickableActor: Actor, LiquidEffect: Effect, BackdropGlass: Backdrop, backdropDefault: backdrop,
-    WindowCloneManager: Sampler, UILayerSampler: Sampler,
+    BackdropGlass: Backdrop,
     ensureGlassAllocated() {}, isFrameSyncFrozen: () => false,
     isActorValid: actor => !!actor && !actor.destroyed,
-    reportFrameLoopError(_, error) { errors.push(error); }, syncGlassCaptureClip() {},
+    reportFrameLoopError(_, error) { errors.push(error); },
     setClipIfChanged(actor, ...args) { actor.set_clip(...args); },
   };
   const { DashManager: Manager } = loadModule(path.join(__dirname,
@@ -100,27 +89,26 @@ for (const monitor of [
   { x: 1920, y: 0, width: 1920, height: 1200 },
   { x: -1920, y: -120, width: 1920, height: 1200 },
 ]) {
-  test(`re-enabling dock glass recreates full-size capture at ${monitor.x},${monitor.y}`, () => {
+  test(`re-enabling dock glass recreates a monitor-sized glass at ${monitor.x},${monitor.y}`, () => {
     const { manager } = fixture(monitor);
     for (let cycle = 0; cycle < 3; cycle++) {
       manager._applyEffect();
       manager._syncGeometry();
-      assert.deepEqual(manager.bgActor.get_size(), [monitor.width, monitor.height]);
-      assert.deepEqual(manager.liquidBox.get_size(), [monitor.width, monitor.height]);
-      assert.deepEqual(manager.bgActor.get_transformed_position(), [monitor.x, monitor.y]);
+      assert.deepEqual(manager.glass.get_size(), [monitor.width, monitor.height]);
+      assert.deepEqual(manager.glass.get_transformed_position(), [monitor.x, monitor.y]);
       manager._removeEffect();
     }
   });
 }
 
-test('monitor origin changes update the capture even when dock bounds stay unchanged', () => {
+test('monitor origin changes move the glass even when dock bounds stay unchanged', () => {
   const monitor = { x: 1920, y: 0, width: 1920, height: 1200 };
   const { manager } = fixture(monitor);
   manager._applyEffect();
   manager._syncGeometry();
   monitor.x += 100;
   manager._syncGeometry();
-  assert.equal(manager.bgActor.x, monitor.x);
+  assert.equal(manager.glass.x, monitor.x);
 });
 
 test('rapid dock hide/show keeps exactly one frame observer and initial update', () => {
@@ -172,7 +160,7 @@ test('native frame updates keep dock geometry current on a secondary monitor', (
   target.x += 40;
   stage.emit('before-update');
   assert.equal(manager._lastBgX, before + 40);
-  assert.deepEqual(manager.bgActor.get_size(), [1920, 1200]);
+  assert.deepEqual(manager.glass.get_size(), [1920, 1200]);
   manager.cleanup();
 });
 
@@ -196,24 +184,22 @@ test('changing glass expansion requests a frame even on an idle desktop', () => 
   manager._bindSettings();
   manager._applyEffect();
   settings.emit('changed::dock-glass-expand');
-  assert.equal(manager.bgActor.redraws, 1);
+  assert.equal(manager.glass.redraws, 1);
   manager.cleanup();
   assert.equal(settings.handlers.size, 0);
 });
 
-test('removing the effect leaves no capture actors, effects or callbacks behind', () => {
+test('removing the effect cleans up and destroys the glass and leaves no callbacks behind', () => {
   const { manager, target, pending, stage } = fixture({ x: 0, y: 0, width: 1920, height: 1080 });
   manager._applyEffect();
-  const { bgActor, effect, _uiSampler, _windowCloneManager } = manager;
+  const glass = manager.glass;
   manager._removeEffect();
   assert.equal(pending.size, 0);
   assert.equal(stage.handlers.size, 0);
   assert.equal(target.handlers.size, 0);
-  assert.equal(bgActor.destroyed, true);
-  assert.equal(effect.cleaned, true);
-  assert.equal(_uiSampler.destroyed, true);
-  assert.equal(_windowCloneManager.destroyed, true);
-  assert.equal(manager.bgActor, null);
+  assert.equal(glass.cleaned, true);
+  assert.equal(glass.destroyed, true);
+  assert.equal(manager.glass, null);
   assert.doesNotThrow(() => manager._removeEffect());
 });
 
@@ -238,45 +224,25 @@ test('two monitors updating one frame drive a single dock geometry sync', () => 
   manager.cleanup();
 });
 
-test('the stage-reading dock glass is one actor below the dock, with no capture tree', () => {
+test('the dock glass is one actor below the dock', () => {
   const monitor = { x: 1920, y: 0, width: 1920, height: 1200 };
-  const { manager, group } = fixture(monitor, { backdrop: true });
+  const { manager, group } = fixture(monitor);
   manager._applyEffect();
-  assert.equal(manager.bgActor, manager.effect);
-  assert.equal(manager.bgActor.params.owner, 'dock');
-  assert.equal(manager.bgActor.get_parent(), group);
-  assert.equal(manager.liquidBox, null);
-  assert.equal(manager._cloneContainer, null);
-  assert.equal(manager._uiSampler, null);
-  assert.equal(manager._windowCloneManager, null);
+  assert.equal(manager.glass.params.owner, 'dock');
+  assert.equal(manager.glass.get_parent(), group);
   manager.cleanup();
 });
 
-test('the stage-reading dock glass syncs its sources after this frame\'s geometry', () => {
+test('the dock glass syncs its sources after this frame\'s geometry', () => {
   const monitor = { x: 1920, y: 0, width: 1920, height: 1200 };
-  const { manager, calls } = fixture(monitor, { backdrop: true });
+  const { manager, calls } = fixture(monitor);
   manager._applyEffect();
   manager._syncGeometry();
-  assert.deepEqual(manager.bgActor.get_size(), [monitor.width, monitor.height]);
-  assert.deepEqual(manager.bgActor.get_transformed_position(), [monitor.x, monitor.y]);
+  assert.deepEqual(manager.glass.get_size(), [monitor.width, monitor.height]);
+  assert.deepEqual(manager.glass.get_transformed_position(), [monitor.x, monitor.y]);
   const kinds = calls.map(c => c[0]);
   assert.ok(kinds.includes('geometry'));
   assert.equal(kinds.lastIndexOf('sources'), kinds.length - 1);
   assert.ok(kinds.lastIndexOf('geometry') < kinds.lastIndexOf('sources'));
   manager.cleanup();
-});
-
-test('removing the stage-reading dock glass cleans it up and destroys it', () => {
-  const { manager, pending, stage, target } = fixture({ x: 0, y: 0, width: 1920, height: 1080 }, { backdrop: true });
-  manager._applyEffect();
-  const glass = manager.bgActor;
-  manager._removeEffect();
-  assert.equal(glass.cleaned, true);
-  assert.equal(glass.destroyed, true);
-  assert.equal(manager.bgActor, null);
-  assert.equal(manager.effect, null);
-  assert.equal(manager._backdrop, null);
-  assert.equal(pending.size, 0);
-  assert.equal(stage.handlers.size, 0);
-  assert.equal(target.handlers.size, 0);
 });

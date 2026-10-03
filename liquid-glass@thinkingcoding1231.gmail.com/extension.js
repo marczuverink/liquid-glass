@@ -15,8 +15,6 @@ import {ApplicationManager} from './dist/applicationManager.js';
 import {WindowListService} from './dist/windowListService.js';
 import {Logger} from './dist/logger.js';
 import {adaptiveColorTweener} from './dist/animation/colors.js';
-import {destroySharedBackgroundSource} from './dist/capture/background.js';
-import {releaseAllClonedWindowActors} from './dist/capture/windowCulling.js';
 import {installGlassDiagnostics, removeGlassDiagnostics, flushGlassRing,
   dumpGlassState} from './dist/diagnostics/glass.js';
 import {diagnosticLog, setUtilsLogger} from './dist/diagnostics/logging.js';
@@ -32,8 +30,8 @@ export default class LiquidGlassExtension extends Extension {
   enable() {
     this._settings = this.getSettings();
     this._logger = new Logger(this._settings);
-    // The capture and actor modules have no settings of their own; they log
-    // through the same `output-logs`-gated logger.
+    // Modules without settings of their own log through the same
+    // `output-logs`-gated logger.
     setUtilsLogger(this._logger);
     installGlassDiagnostics();
 
@@ -103,8 +101,6 @@ export default class LiquidGlassExtension extends Extension {
 
     // Shared state that no single manager owns.
     adaptiveColorTweener.stopAll();
-    destroySharedBackgroundSource();
-    releaseAllClonedWindowActors();
 
     if (this._quickSettingsTimeoutId) {
       GLib.Source.remove(this._quickSettingsTimeoutId);

@@ -1,15 +1,16 @@
 // Glass that reads what is behind it from the stage framebuffer while the
-// stage is painted (see stageCopy.ts), instead of rebuilding the backdrop
-// from clones. Relays (relays.ts) put the whole sample area into the redraw
-// clip whenever anything behind it changes, so a reused copy is never stale.
+// stage is painted (see stageCopy.ts). Relays (relays.ts) put the whole sample
+// area into the redraw clip whenever anything behind it changes, so a reused
+// copy is never stale.
 import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import Shell from 'gi://Shell';
+import Gio from 'gi://Gio';
 import { GlassRenderer } from './glassRenderer.js';
 import { StageCopier, coglContext } from './stageCopy.js';
 import { RelaySet, SAMPLE_MARGIN, localToStage } from './relays.js';
-import { registerBackdropGlass, unregisterBackdropGlass } from '../diagnostics/glass.js';
+import { registerGlass, unregisterGlass } from '../diagnostics/glass.js';
 
 /**
  * What every stage-reading glass shares: the renderer and its setters, the
@@ -30,6 +31,7 @@ export const GlassActor = GObject.registerClass(class GlassActor extends Clutter
         this._inLiveGeometry = false;
         this._batchDepth = 0;
         this._batchDirty = false;
+        this._shaderLoad = new Gio.Cancellable();
         this._paints = 0;
         this._blurRuns = 0;
         this._blurSkips = 0;
@@ -41,7 +43,7 @@ export const GlassActor = GObject.registerClass(class GlassActor extends Clutter
             repaint: () => this._queueRepaint(),
             setDiagnostics: enabled => { this._diagEnabled = enabled; },
         });
-        registerBackdropGlass(this);
+        registerGlass(this);
         this._loadShaders();
     }
 
@@ -51,9 +53,12 @@ export const GlassActor = GObject.registerClass(class GlassActor extends Clutter
     async _loadShaders() {
         const start = GLib.get_monotonic_time();
         try {
-            await this._renderer.pipelines.load(this._extensionPath);
+            await this._renderer.pipelines.load(this._extensionPath, this._shaderLoad);
         }
         catch (e) {
+            // Cancelled by cleanup(): the glass is gone.
+            if (e instanceof GLib.Error && e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                return;
             this._logger?.error(`[Liquid Glass] Failed to load shaders: ${e}`);
             return;
         }
@@ -139,8 +144,8 @@ export const GlassActor = GObject.registerClass(class GlassActor extends Clutter
     /**
      * Blurs `texture`, which holds `blurRect` (shader space) of the backdrop,
      * unless `key` says the last blur is still current. The pool works in
-     * shader-space pixels, like LiquidEffect's, so the blur radius means the
-     * same at every monitor scale.
+     * shader-space pixels, so the blur radius means the same at every
+     * monitor scale.
      */
     _runBlur(root, ctx, texture, blurRect, key) {
         const blur = this._renderer.blur;
@@ -162,7 +167,7 @@ export const GlassActor = GObject.registerClass(class GlassActor extends Clutter
 
     // Draws glass.frag over the part of the glass that can be non-transparent.
     _composite(root, backdrop, blurRect, kx, ky, resW, resH) {
-        this._renderer.bindBackdrop(backdrop, [0, 0, 1, 1], blurRect, true);
+        this._renderer.bindBackdrop(backdrop, blurRect);
         const r = this._renderer.geometry.compositeRect() ?? [0, 0, resW, resH];
         const drawRect = [r[0] * kx, r[1] * ky, (r[0] + r[2]) * kx, (r[1] + r[3]) * ky];
         const drawUV = [r[0] / resW, r[1] / resH, (r[0] + r[2]) / resW, (r[1] + r[3]) / resH];
@@ -229,7 +234,12 @@ export const GlassActor = GObject.registerClass(class GlassActor extends Clutter
         return this._renderer.uniforms.values;
     }
 
-    /** See LiquidEffect.setLiveGeometryHook(). */
+    /**
+     * Runs `fn` at the start of every paint, when the allocation of whatever
+     * the glass follows is current, so it can correct the geometry the frame
+     * sync read before the relayout. Setters called from it do not queue
+     * another repaint.
+     */
     setLiveGeometryHook(fn) {
         this._liveGeometryHook = fn;
     }
@@ -249,9 +259,10 @@ export const GlassActor = GObject.registerClass(class GlassActor extends Clutter
     }
 
     cleanup() {
+        this._shaderLoad.cancel();
         // The hook's closure holds the manager and its actors.
         this._liveGeometryHook = null;
-        unregisterBackdropGlass(this);
+        unregisterGlass(this);
         this._renderer.cleanup();
     }
 
@@ -335,9 +346,11 @@ export const BackdropGlass = GObject.registerClass(class BackdropGlass extends G
     /**
      * Places the sample area and the relays for this frame. Call it every frame
      * from before-update, after this frame's geometry setters: a redraw queued
-     * there lands in the same frame's clip.
+     * there lands in the same frame's clip. `moved` says an ancestor moved the
+     * glass on screen this frame. An X11 window actor's paint volume leaves out
+     * its children, so moving the window does not redraw the area by itself.
      */
-    syncSources() {
+    syncSources(moved = false) {
         const area = this._sampleAreaRect();
         if (!area)
             return;
@@ -345,7 +358,7 @@ export const BackdropGlass = GObject.registerClass(class BackdropGlass extends G
         // A glass that was fully transparent was not painted when the backdrop
         // changed, so its copy is old as well.
         const painted = this.get_paint_opacity() > 0;
-        if (changed || (painted && !this._wasPainted))
+        if (changed || moved || (painted && !this._wasPainted))
             this._relays.redrawArea();
         this._wasPainted = painted;
         this._copier.prune(this.peek_stage_views());
