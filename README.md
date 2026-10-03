@@ -181,20 +181,29 @@ A significant part of this codebase was written with the help of AI coding assis
 
 
 ## Roadmap
+
+### Done
 - [x] Perfect the WebGL/Three.js Prototype
 - [x] Port GLSL shaders to GNOME Shell
 - [x] Apply Liquid Glass to Top Panel Menus
+- [x] Extend glass to more panel menus (keyboard layout, Vitals, desktop right-click menu)
 - [x] Add Dash to Dock support
 - [x] Add Notifications support
 - [x] Add Settings Feature
+- [x] Add Simple and Advanced preference views
 - [x] Add Adaptive Text Coloring
 - [x] Add Quick Settings support (Background mode)
-- [x] Add OSD support
 - [x] Add Quick Settings Toggle mode (per-toggle glass)
+- [x] Add OSD support
 - [x] Add Application Window support (originally by [@hoshizora-chi](https://github.com/hoshizora-chi))
-- [ ] Improve performance
-- [ ] Publish to extensions.gnome.org (not approved yet)
+- [x] Add window blacklist with a visual window picker
+- [x] Match the lens and edge to macOS 27
+- [x] Improve performance (blur reuse, region-limited blur, reading the backdrop from the stage)
+- [x] Support GNOME 51
 
+### Next
+- [ ] Publish to extensions.gnome.org (not approved yet)
+- [ ] glass-lib: a glass library for apps
 
 ## License
 
