@@ -92,19 +92,6 @@ test('stopping or restarting a later loop from inside its own step is honoured',
   assert.equal(f.pending.size, 1);
 });
 
-test('other glass backgrounds are excluded, the own one and plain actors are not', () => {
-  const actor = (name, children = []) => ({ get_name: () => name, get_children: () => children });
-  const self = actor('liquid-glass-bg-actor'), other = actor('liquid-glass-bg-actor');
-  const wrapped = actor('dock', [actor('liquid-box')]), plain = actor('panel', [actor('label')]);
-  const { excludeOtherGlass } = createModuleLoader({
-    Main: { layoutManager: { uiGroup: { get_children: () => [self, other, wrapped, plain] } } },
-  })(path.join(dist, 'capture/glassExclusions.js'));
-  const excluded = [];
-  excludeOtherGlass({ addExclusion: a => excluded.push(a) }, self);
-  assert.deepEqual(excluded, [other, wrapped]);
-  excludeOtherGlass(null, self);
-});
-
 test('a sync loop survives a throwing step and stops itself once no longer alive', () => {
   const f = fixture();
   const signal = f.slot(), first = f.slot();

@@ -2,23 +2,15 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import GLib from 'gi://GLib';
-import { LiquidEffect } from './liquidEffect.js';
 import { BackdropGlass } from './rendering/backdropGlass.js';
-import type { GlassSurface } from './rendering/glassSurface.js';
-import { backdropDefault } from './diagnostics/glass.js';
-import { createCaptureActors } from './actors/captureActors.js';
 import { isActorValid } from './actors/lifecycle.js';
 import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
 import Gio from 'gi://Gio';
-import { UILayerSampler } from './capture/uiLayerSampler.js';
-import { WindowCloneManager } from './capture/windowClones.js';
 import { reportFrameLoopError } from './diagnostics/logging.js';
 import { ensureGlassAllocated } from './actors/allocation.js';
 import { isFrameSyncFrozen, SAME_FRAME_WINDOW_US } from './animation/frameSync.js';
 import { startStageLoop, stopStageLoop } from './animation/frameLoops.js';
-import { excludeOtherGlass } from './capture/glassExclusions.js';
 import { setClipIfChanged } from './actors/writes.js';
-import { syncGlassCaptureClip } from './capture/clip.js';
 import { resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb, rgbToHex } from './animation/colors.js';
 
 import { Logger } from './logger.js';
@@ -33,17 +25,8 @@ interface OsdState {
   osdWindow: any;
   targetBox: St.Widget;
 
-  // Monitor-sized. With a LiquidEffect it holds liquidBox, which carries the
-  // effect; a BackdropGlass is bgActor and effect at once.
-  bgActor: Clutter.Actor | null;
-  liquidBox: Clutter.Actor | null;
-  _cloneContainer: Clutter.Actor | null;
-
-  effect: GlassSurface | null;
-  backdrop: BackdropGlass | null;
-
-  _windowCloneManager: WindowCloneManager | null;
-  _uiSampler: UILayerSampler | null;
+  // Monitor-sized.
+  glass: BackdropGlass | null;
 
   _lastBgW?: number;
   _lastBgH?: number;
@@ -139,7 +122,7 @@ export class OsdManager {
       if (this._isEffectActive) {
         let colorArray = hexToColorArray(this._settings.get_string('osd-tint-color'));
         for (let state of this._osdStates) {
-          if (state.effect) state.effect.setTintColor(...colorArray);
+          state.glass?.setTintColor(...colorArray);
         }
       }
     });
@@ -149,7 +132,7 @@ export class OsdManager {
         this._baseTint = this._settings.get_double('osd-tint-strength');
         for (let state of this._osdStates) {
           state._currentTint = this._baseTint;
-          if (state.effect) state.effect.setTintStrength(this._baseTint);
+          state.glass?.setTintStrength(this._baseTint);
         }
       }
     });
@@ -158,7 +141,7 @@ export class OsdManager {
       if (this._isEffectActive) {
         let radius = this._settings.get_int('osd-blur-radius');
         for (let state of this._osdStates) {
-          if (state.effect) state.effect.setBlurRadius(radius);
+          state.glass?.setBlurRadius(radius);
         }
       }
     });
@@ -167,7 +150,7 @@ export class OsdManager {
       if (this._isEffectActive) {
         let radius = this._settings.get_double('osd-corner-radius');
         for (let state of this._osdStates) {
-          if (state.effect) state.effect.setCornerRadius(radius);
+          state.glass?.setCornerRadius(radius);
         }
       }
     });
@@ -175,7 +158,7 @@ export class OsdManager {
     connectSetting('osd-glass-expand', () => {
       if (this._isEffectActive) {
         this._glassExpand = this._settings.get_int('osd-glass-expand');
-        for (const state of this._osdStates) state.bgActor?.queue_redraw();
+        for (const state of this._osdStates) state.glass?.queue_redraw();
       }
     });
 
@@ -183,7 +166,7 @@ export class OsdManager {
       if (this._isEffectActive) {
         let v = this._settings.get_double('osd-brightness');
         for (let state of this._osdStates) {
-          if (state.effect) state.effect.setBrightness(v);
+          state.glass?.setBrightness(v);
         }
       }
     });
@@ -192,7 +175,7 @@ export class OsdManager {
       if (this._isEffectActive) {
         let v = this._settings.get_double('osd-saturation');
         for (let state of this._osdStates) {
-          if (state.effect) state.effect.setSaturation(v);
+          state.glass?.setSaturation(v);
         }
       }
     });
@@ -201,7 +184,7 @@ export class OsdManager {
       if (this._isEffectActive) {
         let v = this._settings.get_double('osd-contrast');
         for (let state of this._osdStates) {
-          if (state.effect) state.effect.setContrast(v);
+          state.glass?.setContrast(v);
         }
       }
     });
@@ -251,9 +234,6 @@ export class OsdManager {
       this._setupOsdEffect(osdWindow);
     }
 
-    // Each monitor's glass must not clone the others'.
-    for (const state of this._osdStates) this._excludeOtherGlass(state);
-
     // One stage loop for every monitor's OSD (see DockManager's frameTick).
     const frameTick = () => {
       if (!this._isEffectActive) return;
@@ -264,7 +244,7 @@ export class OsdManager {
       this._lastTickUs = nowUs;
 
       for (let state of this._osdStates) {
-        ensureGlassAllocated(state.bgActor);
+        ensureGlassAllocated(state.glass);
         try {
           this._syncGeometry(state);
         } catch (e) {
@@ -284,10 +264,6 @@ export class OsdManager {
     });
   }
 
-  private _excludeOtherGlass(state: OsdState): void {
-    excludeOtherGlass(state._uiSampler, state.bgActor);
-  }
-
   _setupOsdEffect(osdWindow) {
     // The OSD's 'osd-window' box, which draws its background.
     const targetBox: St.Widget | null = osdWindow._hbox ?? null;
@@ -299,21 +275,11 @@ export class OsdManager {
     targetBox.add_style_class_name('liquid-glass-transparent');
     targetBox.translation_y = -this._osdYOffset;
 
-    const backdrop: BackdropGlass | null = backdropDefault
-      ? new BackdropGlass({
-        extensionPath: this.extensionPath, settings: this._settings, logger: this._logger, owner: 'osd',
-      } as any)
-      : null;
-    let bgActor: Clutter.Actor;
-    let liquidBox: Clutter.Actor | null = null;
-    let cloneContainer: Clutter.Actor | null = null;
-    if (backdrop) {
-      bgActor = backdrop;
-      bgActor.set_size(1.0, 1.0);
-    } else {
-      ({ bgActor, liquidBox, cloneContainer } = createCaptureActors());
-    }
-    bgActor.set_pivot_point(0.0, 0.0);
+    const glass = new BackdropGlass({
+      extensionPath: this.extensionPath, settings: this._settings, logger: this._logger, owner: 'osd',
+    } as any);
+    glass.set_size(1.0, 1.0);
+    glass.set_pivot_point(0.0, 0.0);
 
     // The OSD's ancestor that is a direct child of uiGroup.
     let osdRoot: Clutter.Actor = osdWindow;
@@ -323,12 +289,11 @@ export class OsdManager {
       osdRoot = p;
     }
 
-    // Below the OSD, so the glass does not clone itself or the OSD, and a
-    // BackdropGlass reads the stage before the OSD is drawn.
+    // Below the OSD, so the glass reads the stage before the OSD is drawn.
     if (osdRoot.get_parent() === Main.layoutManager.uiGroup) {
-      Main.layoutManager.uiGroup.insert_child_below(bgActor, osdRoot);
+      Main.layoutManager.uiGroup.insert_child_below(glass, osdRoot);
     } else {
-      Main.layoutManager.uiGroup.add_child(bgActor);
+      Main.layoutManager.uiGroup.add_child(glass);
     }
 
     let blurRadius = this._settings.get_int('osd-blur-radius');
@@ -338,49 +303,21 @@ export class OsdManager {
     let saturation = this._settings.get_double('osd-saturation');
     let contrast = this._settings.get_double('osd-contrast');
 
-    const effect: GlassSurface = backdrop ?? new LiquidEffect({
-      extensionPath: this.extensionPath, settings: this._settings, owner: 'osd',
-    } as any);
-    effect.setPadding(SHADER_PADDING);
-    effect.setTintColor(...hexToColorArray(tintColorStr));
-    effect.setTintStrength(this._baseTint);
-    effect.setCornerRadius(cornerRadius);
-    effect.setIsDock(false);
-    effect.setBrightness(brightness);
-    effect.setSaturation(saturation);
-    effect.setContrast(contrast);
-    effect.setBlurRadius(blurRadius);
-    if (effect instanceof LiquidEffect) liquidBox!.add_effect(effect);
-
-    bgActor.hide();
-
-    let windowCloneManager: WindowCloneManager | null = null;
-    let uiSampler: UILayerSampler | null = null;
-    if (!backdrop) {
-      windowCloneManager = new WindowCloneManager(liquidBox!, cloneContainer!, 'lg-osd');
-      uiSampler = new UILayerSampler(
-        bgActor,
-        liquidBox!,
-        [osdRoot, global.windowGroup, global.window_group],
-        cloneContainer!,
-        'osd'
-      );
-
-      windowCloneManager.rebuildClones();
-      uiSampler.rebindSelf();
-      uiSampler.refresh();
-    }
+    glass.setPadding(SHADER_PADDING);
+    glass.setTintColor(...hexToColorArray(tintColorStr));
+    glass.setTintStrength(this._baseTint);
+    glass.setCornerRadius(cornerRadius);
+    glass.setIsDock(false);
+    glass.setBrightness(brightness);
+    glass.setSaturation(saturation);
+    glass.setContrast(contrast);
+    glass.setBlurRadius(blurRadius);
+    glass.hide();
 
     let state: OsdState = {
       osdWindow,
       targetBox,
-      bgActor,
-      liquidBox,
-      _cloneContainer: cloneContainer,
-      effect,
-      backdrop,
-      _windowCloneManager: windowCloneManager,
-      _uiSampler: uiSampler,
+      glass,
       _lastBgW: undefined,
       _lastBgH: undefined,
       _lastBgX: undefined,
@@ -398,23 +335,14 @@ export class OsdManager {
     // The shell destroys the OSD window of a removed monitor.
     state._destroyId = osdWindow.connect('destroy', () => {
       this._osdStates = this._osdStates.filter(s => s !== state);
-      // The effect is cleaned up before its actor is destroyed.
-      if (state.effect) {
-        state.effect.cleanup();
-        state.effect = null;
-      }
-      state.backdrop = null;
-      // At shell shutdown the stage may have destroyed it already.
-      if (isActorValid(state.bgActor)) state.bgActor!.destroy();
-      state.bgActor = null;
-      state._uiSampler?.destroy();
-      state._windowCloneManager?.destroy();
+      this._destroyGlass(state);
     });
   }
 
   // Every frame, for one monitor's OSD.
   _syncGeometry(state: OsdState) {
-    if (!state.bgActor || !state.targetBox) return;
+    const glass = state.glass;
+    if (!glass || !state.targetBox) return;
 
     let [w, h] = state.targetBox.get_size();
     let [absX, absY] = state.targetBox.get_transformed_position();
@@ -436,13 +364,13 @@ export class OsdManager {
     } else if (!isVisible && state._wasVisible) {
       state._wasVisible = false;
     }
-    state.bgActor.opacity = currentOpacity;
+    glass.opacity = currentOpacity;
 
     if (!isVisible) {
-      state.bgActor.hide();
+      glass.hide();
       return;
-    } else if (!state.bgActor.visible) {
-      state.bgActor.show();
+    } else if (!glass.visible) {
+      glass.show();
     }
 
     const visualW = w;
@@ -472,56 +400,34 @@ export class OsdManager {
     if (state._lastBgW !== bgW || state._lastBgH !== bgH ||
       state._lastBgX !== bgX_abs || state._lastBgY !== bgY_abs ||
       state._lastScreenW !== screenW || state._lastScreenH !== screenH) {
-      state.bgActor.remove_transition('size');
-      state.bgActor.remove_transition('position');
-      state.bgActor.set_position(monitorX, monitorY);
-      state.bgActor.set_size(screenW, screenH);
-      state.bgActor.remove_transition('size');
-      state.bgActor.remove_transition('position');
-
-      state.liquidBox?.set_position(0, 0);
-      state.liquidBox?.set_size(screenW, screenH);
+      glass.remove_transition('size');
+      glass.remove_transition('position');
+      glass.set_position(monitorX, monitorY);
+      glass.set_size(screenW, screenH);
+      glass.remove_transition('size');
+      glass.remove_transition('position');
 
       // Limit drawing to the glass plus room for its shadow.
       const CLIP_PADDING = 200;
-      state.liquidBox?.remove_clip();
       setClipIfChanged(
-        state.bgActor,
+        glass,
         localBgX - CLIP_PADDING, localBgY - CLIP_PADDING,
         bgW + CLIP_PADDING * 2, bgH + CLIP_PADDING * 2
       );
 
       const SHADOW_MAX_RADIUS = CLIP_PADDING - 20;
-      state.effect?.setShadowMaxRadius(SHADOW_MAX_RADIUS);
+      glass.setShadowMaxRadius(SHADOW_MAX_RADIUS);
 
-      state.effect?.setResolution(screenW, screenH);
-      state.effect?.setGlassGeometry(localBgX, localBgY, bgW, bgH);
+      glass.setResolution(screenW, screenH);
+      glass.setGlassGeometry(localBgX, localBgY, bgW, bgH);
 
       state._lastBgW = bgW; state._lastBgH = bgH;
       state._lastBgX = bgX_abs; state._lastBgY = bgY_abs;
       state._lastScreenW = screenW; state._lastScreenH = screenH;
     }
 
-    if (state.backdrop) {
-      state.backdrop.syncSources();
-      return;
-    }
-
-    state._windowCloneManager?.setOffset(-monitorX, -monitorY);
-    state._uiSampler?.refresh();
-
-    // After setGlassGeometry() and before the samplers sync (see capture/clip.ts).
-    syncGlassCaptureClip({
-      cloneContainer: state._cloneContainer,
-      effect: state.effect,
-      originX: monitorX,
-      originY: monitorY,
-      uiSampler: state._uiSampler,
-      windowCloneManager: state._windowCloneManager,
-    });
-
-    state._uiSampler?.sync(monitorX, monitorY, screenW, screenH);
-    state._windowCloneManager?.sync();
+    // After the geometry setters, so the relays cover this frame's rect.
+    glass.syncSources();
   }
 
   private _osdVisualHeight(state: OsdState, h: number): number {
@@ -563,23 +469,16 @@ export class OsdManager {
   _cleanupOsdState(state: OsdState) {
     this._restoreOsdTarget(state);
 
-    // The effect is cleaned up before its actor is destroyed.
-    if (state.effect) {
-      state.effect.cleanup();
-      state.effect = null;
-    }
-    state.backdrop = null;
+    this._destroyGlass(state);
+  }
 
+  private _destroyGlass(state: OsdState): void {
+    const glass = state.glass;
+    if (!glass) return;
+    state.glass = null;
+    glass.cleanup();
     // At shell shutdown the stage may have destroyed it already.
-    if (isActorValid(state.bgActor)) state.bgActor!.destroy();
-    state.bgActor = null;
-    state.liquidBox = null;
-    state._cloneContainer = null;
-
-    state._uiSampler?.destroy();
-    state._uiSampler = null;
-    state._windowCloneManager?.destroy();
-    state._windowCloneManager = null;
+    if (isActorValid(glass)) glass.destroy();
   }
 
   private _restoreOsdTarget(state: OsdState): void {
@@ -698,7 +597,7 @@ export class OsdManager {
 
     this._contrastSampler
       .chooseColorsForActors(targets, this._adaptiveConfig, null,
-        () => this._osdStates.reduce((sum: number, st: OsdState) => sum + (st.effect?.paintCount ?? NaN), 0))
+        () => this._osdStates.reduce((sum: number, st: OsdState) => sum + (st.glass?.paintCount ?? NaN), 0))
       .then(colorMap => {
         this._applyAdaptiveColorMap(colorMap, isFirst);
       })

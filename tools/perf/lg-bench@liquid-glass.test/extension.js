@@ -5,12 +5,12 @@
 // From Looking Glass:
 //   global._lgBench.run('all')                every scenario, B1 to B15
 //   global._lgBench.run('B7')                 one of them ('B9a', ['B2', 'B3'], ...)
-//   global._lgBench.run('all', {ab: true})    once with the stage-reading glass, then once with the capturing glass
+//   global._lgBench.run('all', {ab: true})    once with the glass, then once with no UI glass at all
 //   options:
 //     seconds  measured per scenario (default 30)
 //     settle   waited before measuring (default 4)
-//     modes    any of 'stage', 'capture' and 'none' (no UI glass at all), each run in turn;
-//              ab: true is ['stage', 'capture']. Without either, the glass is used as it is.
+//     modes    any of 'stage' (freshly built glass) and 'none' (no UI glass at all), each run in turn;
+//              ab: true is ['stage', 'none']. Without either, the glass is used as it is.
 //   global._lgBench.stop()   global._lgBench.list()   global._lgBench.running
 //
 // Each measured second's monitor line carries label=<scenario>/<mode>.
@@ -143,8 +143,8 @@ class Bench {
         if (!scenarios.length)
             return `no such scenario: ${which}`;
         const opts = {seconds: 30, settle: 4, ab: false, ...options};
-        opts.modes ??= opts.ab ? ['stage', 'capture'] : [null];
-        if (opts.modes.some(m => m !== null && !['stage', 'capture', 'none'].includes(m)))
+        opts.modes ??= opts.ab ? ['stage', 'none'] : [null];
+        if (opts.modes.some(m => m !== null && !['stage', 'none'].includes(m)))
             return `unknown mode in ${opts.modes}`;
         this._running = true;
         this._aborted = false;
@@ -215,7 +215,6 @@ class Bench {
             saved,
             minimized: [],
             workspace: global.workspace_manager.get_active_workspace_index(),
-            backdrop: lg().backdropEnabled(),
             monitorWasRunning: lg().monitorRunning(),
         };
     }
@@ -239,10 +238,6 @@ class Bench {
             await this._quit(appId);
         for (const [settings, key, value] of state.saved)
             settings.set_value(key, value);
-        if (lg() && lg().backdropEnabled() !== state.backdrop) {
-            lg().backdrop(state.backdrop);
-            await this._rebuildGlass(plainSleep);
-        }
         if (lg() && !state.monitorWasRunning)
             lg().monitorStop();
         for (const win of state.minimized) {
@@ -370,7 +365,7 @@ class Bench {
     }
 
     _parkPointer() {
-        this._pointer ??= Clutter.get_default_backend().get_default_seat()
+        this._pointer ??= global.stage.context.get_backend().get_default_seat()
             .create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
         const m = this._monitor();
         this._pointer.notify_absolute_motion(GLib.get_monotonic_time(), m.x + 1, m.y + Math.round(m.height * 0.55));
@@ -396,7 +391,7 @@ class Bench {
     _describeDisplay() {
         const monitors = Main.layoutManager.monitors.map(m => `${m.width}x${m.height}@${m.geometry_scale}`);
         const rates = global.stage.peek_stage_views().map(v => `${v.get_refresh_rate().toFixed(0)}Hz`);
-        return `monitors=${monitors.join(',')} refresh=${rates.join(',')} backdrop=${lg().backdropEnabled() ? 'stage' : 'capture'}`;
+        return `monitors=${monitors.join(',')} refresh=${rates.join(',')}`;
     }
 
     async _ensureMedia() {
@@ -647,11 +642,11 @@ class Bench {
             lg().monitor(0);
     }
 
-    // 'stage' and 'capture' start from freshly built glass; 'none' turns the
-    // UI glass off; null keeps what is there.
+    // 'stage' starts from freshly built glass; 'none' turns the UI glass off;
+    // null keeps what is there.
     async _useMode(mode) {
         if (mode === null) {
-            this._mode = lg().backdropEnabled() ? 'stage' : 'capture';
+            this._mode = 'stage';
             return;
         }
         this._mode = mode;
@@ -661,12 +656,11 @@ class Bench {
             await this._sleep(1500);
             return;
         }
-        lg().backdrop(mode === 'stage');
         await this._rebuildGlass(ms => this._sleep(ms));
     }
 
-    // Glass is built with the mode current at the time, so the extension is
-    // restarted, as a user would toggle it.
+    // The extension is restarted, as a user would toggle it, so every glass
+    // starts fresh.
     async _rebuildGlass(sleep) {
         Main.extensionManager.disableExtension(LG_UUID);
         await sleep(1000);

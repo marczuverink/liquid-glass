@@ -59,7 +59,7 @@ uniform float blur_tex_h;
 // it builds towards the rim. A slider for it would fight profile_shape_n.
 #define EDGE_LENS_FALLOFF 2.4
 
-// Hard limit (px) on how far the rim may sample. LiquidEffect.EDGE_LENS_REACH
+// Hard limit (px) on how far the rim may sample. GlassGeometry.EDGE_LENS_REACH
 // sizes the blurred region from the same figure; change both together.
 #define EDGE_LENS_REACH 96.0
 
@@ -69,8 +69,8 @@ uniform float blur_tex_h;
 // it gets the whole lens scaled down (lensScaleFor()).
 #define EDGE_LENS_BAND 22.0
 
-// Diagnostic switches, set through global._lgGlass. LiquidEffect seeds them
-// because an unset uniform reads 0.0.
+// Diagnostic switches, set through global._lgGlass. MaterialSettings seeds
+// them because an unset uniform reads 0.0.
 //   edge_taps_enabled  1 = footprint taps in sampleBackdrop(), 0 = plain RGSS
 //   early_exit_enabled 1 = the two early exits in main(), 0 = full path
 //   debug_view         0 = normal, 1 = shadow (red) and shape (green) masks
@@ -349,6 +349,13 @@ float ditherLSB(vec2 p) {
     return (fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
 }
 
+// erfc(x) for x >= 0 (Abramowitz and Stegun 7.1.27, error below 5e-4).
+float erfcPositive(float x) {
+    float p = 1.0 + x * (0.278393 + x * (0.230389 + x * (0.000972 + x * 0.078108)));
+    float p2 = p * p;
+    return 1.0 / (p2 * p2);
+}
+
 // Brightness, contrast around mid grey, and saturation with Rec. 601 luma.
 vec3 applySCB(vec3 color, float b, float c, float s) {
     color *= b;
@@ -465,8 +472,8 @@ void main() {
         return;
     }
 
-    // Drop shadow: a dark umbra at the edge, a wider penumbra, a slight
-    // extension away from the light, and a cool tint instead of pure black.
+    // Drop shadow: dark at the edge and fading smoothly outwards, slightly
+    // longer away from the light, and a cool tint instead of pure black.
 
     // Screen-space direction the shadow falls in (y points down).
     float lightAngleRad = radians(light_angle_deg);
@@ -483,11 +490,11 @@ void main() {
     float dirRadius    = 0.85 + lightAlignment * 0.15;
     float dirIntensity = 0.85 + lightAlignment * 0.15;
 
-    // Capped to the room the actor has, so the penumbra is never cut off.
+    // Capped to the room the actor has, so the fade is never cut off.
     float maxRadius = max(shadow_max_radius, 5.0);
     float effectiveRadius    = min(shadow_radius * dirRadius, maxRadius);
 
-    // A radius of 0 turns the shadow off; the umbra's divisor floor would
+    // A radius of 0 turns the shadow off; the radius floor below would
     // otherwise leave a thin dark band at the edge.
     float radiusEnable = smoothstep(0.0, 0.75, shadow_radius);
     float effectiveIntensity = shadow_intensity * dirIntensity * radiusEnable;
@@ -496,33 +503,26 @@ void main() {
     // zero intensity and draws a dark hairline.
     float safeRadius = max(effectiveRadius, 0.001);
 
-    // Umbra: linear decay over 0.4 of the radius.
-    float umbra_t = clamp(d / max(safeRadius * 0.40, 0.5), 0.0, 1.0);
-    float umbra  = (1.0 - umbra_t) * 0.80;
-
-    // Penumbra with a quintic ease, which reaches zero with zero slope and
-    // curvature, so no ring shows at its outer edge.
-    float penumbra_t = clamp(d / safeRadius, 0.0, 1.0);
-    float penumbraFade = 1.0 - penumbra_t;
-    float penumbraEase = penumbraFade * penumbraFade * penumbraFade *
-        (penumbraFade * (penumbraFade * 6.0 - 15.0) + 10.0);
-    float penumbra = penumbraEase * 0.55;
+    // The shadow of a soft edge: a tight and a broad Gaussian-blurred edge,
+    // faded out by (1 - t^2)^3, which reaches zero at the radius with zero
+    // slope and curvature. A profile built from pieces creases where they
+    // meet, and the eye reads the crease as the shadow's border.
+    float shadow_t = clamp(d / safeRadius, 0.0, 1.0);
+    float edgeShadow = 0.18 * erfcPositive(shadow_t * 2.619) +
+        1.17 * erfcPositive(shadow_t * 0.895);
+    float shadowWindow = 1.0 - shadow_t * shadow_t;
+    shadowWindow = shadowWindow * shadowWindow * shadowWindow;
 
     // Only outside the glass shape.
     float shadowAlpha = clamp(
-        (umbra + penumbra) * outsideMask * effectiveIntensity,
+        edgeShadow * shadowWindow * outsideMask * effectiveIntensity,
         0.0, 1.0
     );
 
-    // Fades out over the last 15% before maxRadius, with the same quintic
-    // ease, so a radius pushed to the limit is not clipped at the actor edge.
-    float boundsFade = 1.0 - smoothstep(maxRadius * 0.85, maxRadius, d);
-    float boundsMask = boundsFade * boundsFade * boundsFade *
-        (boundsFade * (boundsFade * 6.0 - 15.0) + 10.0);
-    shadowAlpha *= boundsMask;
-
-    // Hard cutoff that does not depend on the driver's smoothstep().
-    shadowAlpha *= 1.0 - step(maxRadius, d);
+    // The framebuffer keeps 8 bits, so the faint tail ends in a visible
+    // 1/255 step. Noise of half a step rounds it stochastically instead.
+    if (shadowAlpha > 0.0)
+        shadowAlpha = max(shadowAlpha + ditherLSB(pixel_coord + vec2(37.0, 17.0)), 0.0);
 
     if (multi_region_mode > 0.5) {
         shadowAlpha = 0.0;

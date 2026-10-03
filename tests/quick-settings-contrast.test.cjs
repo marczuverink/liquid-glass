@@ -202,14 +202,13 @@ test('turning adaptive contrast off also rejects an already queued hover update'
 for (const honourFreeze of [true, false]) test(`quick-settings frame sync keeps one loop (freeze honoured: ${honourFreeze}) and stops cleanly`, () => {
   const { manager, pending, load, stage, handlers, clock } = fixture();
   const { setFrameSyncFrozen } = load(path.join(dist, 'animation/frameSync.js'));
-  let syncs = 0, builds = 0;
+  let syncs = 0;
   Object.assign(manager, { _frameSyncId: 0, _frameSignalId: 0, _torndown: false, targetActor: { mapped: true },
-    bgActor: { get_parent: () => null, mapped: false, visible: false }, _buildClones() { builds++; } });
+    glass: { get_parent: () => null, mapped: false, visible: false } });
   const runFirst = () => { const callbacks = [...pending.values()]; pending.clear(); callbacks.forEach(fn => fn()); };
   const frame = () => { clock.now += 16000; stage.emit('before-update'); };
   manager._startFrameSync(() => syncs++, 'test', honourFreeze);
   manager._startFrameSync(() => syncs++, 'test', honourFreeze);
-  assert.equal(builds, 1);
   assert.equal(handlers.size, 1, 'one before-update handler');
   assert.equal(pending.size, 1, 'one later for the frame the loop starts in');
   clock.now += 16000;
@@ -243,12 +242,13 @@ for (const honourFreeze of [true, false]) test(`quick-settings frame sync keeps 
 test('equal numbers in the other coordinate space still move the quick-settings glass', () => {
   const { manager } = fixture();
   const positions = [];
-  const bgActor = { remove_transition() {}, set_size() {}, set_clip() {}, set_position(x, y) { positions.push([x, y]); } };
-  Object.assign(manager, { bgActor, liquidBox: null, effect: null });
-  manager._applyPanelBounds(bgActor, 10, 20, 300, 200, 0, 0, 1920, 1080);
-  manager._applyPanelBounds(bgActor, 10, 20, 300, 200, 0, 0, 1920, 1080);
+  const glass = { remove_transition() {}, set_size() {}, set_clip() {}, set_position(x, y) { positions.push([x, y]); },
+    setShadowMaxRadius() {}, setResolution() {}, setGlassGeometry() {} };
+  Object.assign(manager, { glass });
+  manager._applyPanelBounds(glass, 10, 20, 300, 200, 0, 0, 1920, 1080);
+  manager._applyPanelBounds(glass, 10, 20, 300, 200, 0, 0, 1920, 1080);
   assert.equal(positions.length, 1, 'unchanged panel bounds are skipped');
-  manager._applyToggleBounds(bgActor, 10, 20, 300, 200, -5, -5, 1920, 1080);
+  manager._applyToggleBounds(glass, 10, 20, 300, 200, -5, -5, 1920, 1080);
   assert.equal(positions.length, 2, 'the toggle path does not reuse the panel path cache');
   assert.deepEqual(positions[1], [-5, -5]);
 });

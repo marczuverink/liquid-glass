@@ -45,9 +45,7 @@ test('geometry clipping remains conservative for shadows, blur reach and multipl
   geometry.rect = [500, 400, 300, 120];
   const composite = geometry.compositeRect();
   assert.deepEqual(composite, [486, 386, 328, 148]);
-  const blur = geometry.blurRect(), capture = geometry.captureClip(15);
-  assert.ok(capture[0] <= blur[0] && capture[1] <= blur[1]);
-  assert.ok(capture[0] + capture[2] >= blur[0] + blur[2]);
+  const blur = geometry.blurRect();
   assert.equal(blur[2] % GlassGeometry.BLUR_RECT_QUANTUM, 0);
   assert.equal(blur[3] % GlassGeometry.BLUR_RECT_QUANTUM, 0);
   geometry.multiRegion = true;
@@ -57,7 +55,6 @@ test('geometry clipping remains conservative for shadows, blur reach and multipl
   assert.equal(geometry.compositeRect(), null);
   geometry.blurEnabled = false;
   assert.equal(geometry.blurRect(), null);
-  assert.ok(geometry.captureClip(15), 'capture clipping is independent of blur clipping');
 });
 
 test('refraction margins cover the shader sampling reach on both axes and nothing more', () => {
@@ -69,15 +66,14 @@ test('refraction margins cover the shader sampling reach on both axes and nothin
       edge_smoothing: 0.5, displacement_scale: 10.5, ior: 2.4, chroma_strength: 0, ...extra }));
     const geometry = new GlassGeometry(uniforms);
     geometry.rect = [1800, 1000, 120, 80];
-    const blur = geometry.blurRect(), capture = geometry.captureClip(0);
-    return { blurX: 1800 - blur[0], blurY: 1000 - blur[1], captureX: 1800 - capture[0], captureY: 1000 - capture[1] };
+    const blur = geometry.blurRect();
+    return { blurX: 1800 - blur[0], blurY: 1000 - blur[1], blurW: blur[2], blurH: blur[3] };
   };
   const base = margins({});
-  assert.equal(base.captureX, base.captureY, 'the same capture margin horizontally and vertically');
   assert.ok(base.blurX >= reach && base.blurY >= reach, `blur margin ${base.blurX}x${base.blurY} covers ${reach}`);
-  assert.ok(base.captureX >= reach, `capture margin ${base.captureX} covers ${reach}`);
   assert.deepEqual(margins({ ior: 1.2, displacement_scale: 200 }), base, 'refraction settings cannot grow the margin past the shader clamp');
-  assert.ok(margins({ chroma_strength: 8 }).captureX >= base.captureX + 8 - 1, 'chroma offset is covered');
+  const chroma = margins({ chroma_strength: 8 });
+  assert.ok(chroma.blurX + chroma.blurW >= base.blurX + base.blurW + 8 - 1, 'chroma offset is covered');
 });
 
 test('the lens reach constant matches the shader clamp', () => {
@@ -87,16 +83,15 @@ test('the lens reach constant matches the shader clamp', () => {
   assert.match(shader, /min\(footprintPx, 64\.0\) \* 0\.5/, 'footprint spread still caps at 32 px');
 });
 
-test('invalid, empty and almost-fullscreen geometry falls back to the full capture', () => {
+test('invalid, empty and almost-fullscreen geometry falls back to the whole glass', () => {
   const { GlassGeometry } = loadModule(path.join(dist, 'rendering/geometry.js'));
   const uniforms = new Map();
   const geometry = new GlassGeometry(uniforms);
-  for (const operation of [() => geometry.blurRect(), () => geometry.compositeRect(), () => geometry.captureClip(10)]) assert.equal(operation(), null);
+  for (const operation of [() => geometry.blurRect(), () => geometry.compositeRect()]) assert.equal(operation(), null);
   uniforms.set('resolution_x', 100); uniforms.set('resolution_y', 100);
   geometry.rect = [0, 0, 100, 100];
   assert.equal(geometry.blurRect(), null);
   assert.equal(geometry.compositeRect(), null);
-  assert.equal(geometry.captureClip(10), null);
 });
 
 function blurFixture() {
@@ -187,79 +182,4 @@ for (const method of [0, 1]) test(`blur method ${method} is reused across frames
   assert.equal(blur.canReuse(input(1)), false, 'a render without an input key is never reused');
   blur.clear();
   assert.equal(blur.canReuse(input(1)), false);
-});
-
-test('crop target is reused until dimensions change', () => {
-  const { load, bases, passes, context, texture, root, textures } = gpuFixture();
-  bases.initialize(context);
-  const { CropPass } = load(path.join(dist, 'rendering/crop.js'));
-  const crop = new CropPass(bases, passes), src = texture(803, 603);
-  const render = (w, h) => crop.render(root(), context, src, 803, 603, w, h, [0, 0, 1, 1]);
-  const first = render(800, 600);
-  assert.equal(render(800, 600), first);
-  assert.equal(textures.length, 1);
-  assert.notEqual(render(790, 590), first);
-  crop.clear();
-  assert.notEqual(render(800, 600), src);
-});
-
-async function effectFixture() {
-  const f = gpuFixture();
-  const { LiquidEffect } = f.load(path.join(dist, 'liquidEffect.js'));
-  const actor = { redraws: 0, get_size: () => [800, 600], get_paint_opacity: () => 128,
-    get_name: () => 'test-glass', queue_redraw() { this.redraws++; }, get_parent: () => null };
-  const effect = new LiquidEffect({ extensionPath: '/ext', logger: f.logger, actor, texture: f.texture(803, 603) });
-  await new Promise(resolve => setImmediate(resolve));
-  effect.setResolution(800, 600); effect.setGlassGeometry(0, 0, 800, 600);
-  const paint = () => { const node = f.root(); effect.vfunc_paint_target(node, { get_framebuffer: () => ({}) }); return node; };
-  return { ...f, effect, actor, paint, LiquidEffect };
-}
-
-test('effect integration preserves same-frame blur reuse, shader reload and faded opacity', async () => {
-  const { effect, paint, layers, actor, stageHandlers, errors, root } = await effectFixture();
-  assert.ok(actor.redraws > 0, 'async shader readiness damages the actor');
-  const first = paint();
-  const count = layers.length;
-  assert.ok(count > 0);
-  assert.equal(effect.fallbacks, 0);
-  assert.deepEqual(first.children.at(-1).pipeline.color, [128 / 255, 128 / 255, 128 / 255, 128 / 255]);
-  paint();
-  assert.equal(layers.length, count, 'repeat paint reuses the same frame’s blur');
-  for (const callback of stageHandlers.values()) callback();
-  paint();
-  assert.equal(layers.length, count, 'a later frame reuses the blur of an unchanged capture');
-  effect.vfunc_paint(root(), {}, 1);
-  for (const callback of stageHandlers.values()) callback();
-  paint();
-  assert.ok(layers.length > count, 'a re-rendered capture is blurred again');
-  effect.reloadShaders();
-  paint();
-  assert.equal(effect.fallbacks, 0);
-  assert.deepEqual(errors, []);
-  effect.cleanup();
-  assert.equal(stageHandlers.size, 0);
-});
-
-test('geometry changes in the same frame invalidate reuse even when the quantized pool size matches', async () => {
-  const { effect, paint, layers, actor } = await effectFixture();
-  actor.get_size = () => [1920, 1080];
-  effect.texture = { get_width: () => 1920, get_height: () => 1080 };
-  effect.setResolution(1920, 1080); effect.setGlassGeometry(600, 600, 300, 100);
-  paint();
-  const before = layers.length;
-  effect.setGlassGeometry(610, 600, 300, 100);
-  paint();
-  assert.ok(layers.length > before);
-  effect.cleanup();
-});
-
-test('effect setters batch repaints and unchanged values do not dirty the capture', async () => {
-  const { effect } = await effectFixture();
-  effect.setTintStrength(0.5);
-  const before = effect.repaints;
-  effect.setTintStrength(0.5);
-  assert.equal(effect.repaints, before);
-  effect.beginBatch(); effect.setTintStrength(0.6); effect.setCornerRadius(25); effect.setBrightness(1.1); effect.endBatch();
-  assert.equal(effect.repaints, before + 1);
-  effect.cleanup();
 });

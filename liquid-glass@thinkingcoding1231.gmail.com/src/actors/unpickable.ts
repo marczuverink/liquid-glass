@@ -3,21 +3,9 @@ import Clutter from 'gi://Clutter';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 
-// The glass is built from clones and helper actors layered around real shell
-// UI. They are hidden from picking so that pointer events and Looking Glass's
-// picker reach the real actors instead.
-
-export const UnpickableClone = GObject.registerClass(
-  class UnpickableClone extends Clutter.Clone {
-    _init(params: any = {}): void {
-      super._init(params);
-      Shell.util_set_hidden_from_pick(this, true);
-    }
-
-    vfunc_pick(_pickContext: any): void {
-    }
-  }
-);
+// Helper actors layered around real shell UI. They are hidden from picking so
+// that pointer events and Looking Glass's picker reach the real actors
+// instead.
 
 // A plain Clutter.Actor rather than an St.Widget, so no theme padding gets in
 // the way of pixel-exact layout.

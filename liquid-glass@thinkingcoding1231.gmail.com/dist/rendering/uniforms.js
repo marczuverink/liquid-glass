@@ -37,8 +37,8 @@ export class UniformState {
     // changed values instead of about 60 scalars and 8 arrays.
     _appliedUniforms = new Map();
     _appliedUniformArrays = new Map();
-    // Set when a value actually changed; LiquidEffect repaints only then.
-    // Changes behind the glass arrive as damage through the clones, not here.
+    // Set when a value actually changed; the glass repaints only then.
+    // Changes behind the glass arrive through the relays, not here.
     _uniformsDirty = false;
     // Reused for scalar uploads; Cogl copies the values during the call.
     _uniformScratch = [0];

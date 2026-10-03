@@ -51,12 +51,15 @@ export const BackdropReader = GObject.registerClass(
     // The stage rect [x0, y0, x1, y1] to copy. The actor covers it, so it is
     // painted whenever the rect is redrawn.
     setStageRect(rect: number[]): void {
+      // The glass maps its rect through its own transform, which is not
+      // finite before its first allocation.
+      if (!rect.every(Number.isFinite)) return;
       this._rect = rect;
       const parent = this.get_parent();
       if (!parent) return;
       const [ok0, x0, y0] = parent.transform_stage_point(rect[0], rect[1]);
       const [ok1, x1, y1] = parent.transform_stage_point(rect[2], rect[3]);
-      if (!ok0 || !ok1) return;
+      if (!ok0 || !ok1 || ![x0, y0, x1, y1].every(Number.isFinite)) return;
       setTranslationIfChanged(this, x0, y0);
       setScaleIfChanged(this, Math.max(x1 - x0, 1) / READER_BASE, Math.max(y1 - y0, 1) / READER_BASE);
     }

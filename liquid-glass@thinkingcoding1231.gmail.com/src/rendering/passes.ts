@@ -1,25 +1,19 @@
 import Clutter from 'gi://Clutter';
 import Cogl from 'gi://Cogl';
-import type { Logger } from '../logger.js';
-
 export class RenderPasses {
   // Per-pass pipeline copies; see pipeline().
   private _passPipelines = new Map<string, { base: Cogl.Pipeline; copy: Cogl.Pipeline }>();
-  // Logs the UV mismatch in composite() only once.
-  private _uvMismatchWarned = false;
-
-  constructor(private _logger?: Logger) {}
 
   clear(): void {
     this._passPipelines.clear();
   }
 
   /**
-   * A copy of `base` for one pass. Paint nodes run after vfunc_paint_target()
-   * returns, so passes sharing a pipeline would all draw with the last pass's
-   * uniforms. Copies are copy-on-write and are replaced only when `base` is
-   * (a shader recompile). Blending is plain replace: a LayerNode does not
-   * clear, and every pass covers its whole target.
+   * A copy of `base` for one pass. Paint nodes run after the paint that
+   * queued them returns, so passes sharing a pipeline would all draw with the
+   * last pass's uniforms. Copies are copy-on-write and are replaced only when
+   * `base` is (a shader recompile). Blending is plain replace: a LayerNode
+   * does not clear, and every pass covers its whole target.
    */
   pipeline(key: string, base: Cogl.Pipeline): Cogl.Pipeline {
     const cached = this._passPipelines.get(key);
@@ -32,11 +26,11 @@ export class RenderPasses {
   }
 
   /**
-   * Queues a render-to-texture pass as a paint node. vfunc_paint_target()
-   * runs while the node tree is built, before the offscreen capture is drawn;
-   * immediate drawing would sample the previous frame's capture. As a child
-   * of the effect's node, the pass runs after the capture. The projection is
-   * framebuffer state, so setting it at build time is fine.
+   * Queues a render-to-texture pass as a paint node. An actor builds its
+   * node tree first and runs it afterwards, so the backdrop copy queued in the
+   * same tree has not reached its texture yet; drawing immediately would read
+   * the previous copy. As a paint node the pass runs after it. The
+   * projection is framebuffer state, so setting it at build time is fine.
    */
   add(
     parentNode: any, targetFbo: any, pipeline: Cogl.Pipeline,
@@ -56,31 +50,17 @@ export class RenderPasses {
   }
 
   /**
-   * Queues the final composite as a paint node, after the capture and the
-   * blur passes. Both layers share one UV range (the crop pass guarantees
-   * it), because add_multitexture_rectangle()'s introspection is broken and
-   * crashes the shell.
+   * Queues the final composite as a paint node, after the copy and the blur
+   * passes. Every layer is drawn with the same UV range:
+   * add_multitexture_rectangle()'s introspection is broken and crashes the
+   * shell.
    */
-  composite(
-    parentNode: any, pipeline: Cogl.Pipeline, dest: number[], layer0UV: number[], layer1UV: number[]
-  ): void {
-    if (layer0UV[0] !== layer1UV[0] || layer0UV[1] !== layer1UV[1] ||
-      layer0UV[2] !== layer1UV[2] || layer0UV[3] !== layer1UV[3]) {
-      if (!this._uvMismatchWarned) {
-        this._uvMismatchWarned = true;
-        this._logger?.error(
-          '[Liquid Glass] composite layers disagree on UV range ' +
-          `(layer0=[${layer0UV}] layer1=[${layer1UV}]); drawing with layer 0's range. ` +
-          'This means the crop pass did not run when it was needed.'
-        );
-      }
-    }
-
+  composite(parentNode: any, pipeline: Cogl.Pipeline, dest: number[], uv: number[]): void {
     const drawNode = Clutter.PipelineNode.new(pipeline);
     parentNode.add_child(drawNode);
     drawNode.add_texture_rectangle(
       new Clutter.ActorBox({ x1: dest[0], y1: dest[1], x2: dest[2], y2: dest[3] }),
-      layer0UV[0], layer0UV[1], layer0UV[2], layer0UV[3]
+      uv[0], uv[1], uv[2], uv[3]
     );
   }
 }

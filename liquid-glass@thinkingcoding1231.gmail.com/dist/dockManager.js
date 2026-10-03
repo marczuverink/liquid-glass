@@ -1,18 +1,11 @@
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import GLib from 'gi://GLib';
-import { LiquidEffect } from './liquidEffect.js';
 import { BackdropGlass } from './rendering/backdropGlass.js';
-import { backdropDefault } from './diagnostics/glass.js';
-import { createCaptureActors } from './actors/captureActors.js';
-import { UILayerSampler } from './capture/uiLayerSampler.js';
-import { WindowCloneManager } from './capture/windowClones.js';
 import { reportFrameLoopError } from './diagnostics/logging.js';
 import { ensureGlassAllocated } from './actors/allocation.js';
 import { isFrameSyncFrozen, SAME_FRAME_WINDOW_US } from './animation/frameSync.js';
 import { startStageLoop, stopStageLoop } from './animation/frameLoops.js';
-import { excludeOtherGlass } from './capture/glassExclusions.js';
 import { setClipIfChanged } from './actors/writes.js';
-import { syncGlassCaptureClip } from './capture/clip.js';
 import { isActorValid } from './actors/lifecycle.js';
 import { hexToColorArray } from './animation/colors.js';
 import { clipDockBounds, dockEdges, balanceDockBounds, insetDockBounds, visibleDockSize } from './actors/dockGeometry.js';
@@ -23,13 +16,8 @@ export class DashManager {
     extensionPath;
     targetActor;
     _settings;
-    bgActor = null;
-    effect = null;
-    // With a LiquidEffect, bgActor (monitor-sized) holds liquidBox, which
-    // carries the effect and holds the clone container. A BackdropGlass is
-    // bgActor and effect at once and needs neither.
-    liquidBox = null;
-    _backdrop = null;
+    // Monitor-sized; see _syncDockGlass().
+    glass = null;
     _lastScreenW;
     _lastScreenH;
     _glassExpand;
@@ -42,7 +30,6 @@ export class DashManager {
     _originalStyle;
     _currentMarginStyle;
     _dockParent = null;
-    _cloneContainer = null;
     _lastAbsX;
     _lastAbsY;
     _lastTW;
@@ -61,8 +48,6 @@ export class DashManager {
     // What the last _syncGeometry() based the glass rect on; see
     // _syncGlassGeometryLive().
     _liveRef = null;
-    _uiSampler = null;
-    _windowCloneManager = null;
     _logger;
 
     constructor(extensionPath, targetActor, settings, logger) {
@@ -102,9 +87,9 @@ export class DashManager {
             }
         });
         connectSetting('dock-glass-expand', () => {
-            if (this.effect && this._isEffectActive) {
+            if (this.glass && this._isEffectActive) {
                 this._glassExpand = this._settings.get_int('dock-glass-expand');
-                this.bgActor?.queue_redraw();
+                this.glass?.queue_redraw();
             }
         });
         connectSetting('dock-margin-bottom', () => {
@@ -113,39 +98,39 @@ export class DashManager {
             this._marginValue = this._settings.get_int('dock-margin-bottom') || 0;
         });
         connectSetting('dock-tint-color', () => {
-            if (this.effect && this._isEffectActive) {
+            if (this.glass && this._isEffectActive) {
                 let colorArray = hexToColorArray(this._settings.get_string('dock-tint-color'));
-                this.effect.setTintColor(...colorArray);
+                this.glass.setTintColor(...colorArray);
             }
         });
         connectSetting('dock-tint-strength', () => {
-            if (this.effect && this._isEffectActive) {
-                this.effect.setTintStrength(this._settings.get_double('dock-tint-strength'));
+            if (this.glass && this._isEffectActive) {
+                this.glass.setTintStrength(this._settings.get_double('dock-tint-strength'));
             }
         });
         connectSetting('dock-blur-radius', () => {
             const radius = this._settings.get_int('dock-blur-radius');
-            if (this.effect && this._isEffectActive)
-                this.effect.setBlurRadius(radius);
+            if (this.glass && this._isEffectActive)
+                this.glass.setBlurRadius(radius);
         });
         connectSetting('dock-corner-radius', () => {
-            if (this.effect && this._isEffectActive) {
-                this.effect.setCornerRadius(this._settings.get_double('dock-corner-radius'));
+            if (this.glass && this._isEffectActive) {
+                this.glass.setCornerRadius(this._settings.get_double('dock-corner-radius'));
             }
         });
         connectSetting('dock-brightness', () => {
-            if (this.effect && this._isEffectActive) {
-                this.effect.setBrightness(this._settings.get_double('dock-brightness'));
+            if (this.glass && this._isEffectActive) {
+                this.glass.setBrightness(this._settings.get_double('dock-brightness'));
             }
         });
         connectSetting('dock-contrast', () => {
-            if (this.effect && this._isEffectActive) {
-                this.effect.setContrast(this._settings.get_double('dock-contrast'));
+            if (this.glass && this._isEffectActive) {
+                this.glass.setContrast(this._settings.get_double('dock-contrast'));
             }
         });
         connectSetting('dock-saturation', () => {
-            if (this.effect && this._isEffectActive) {
-                this.effect.setSaturation(this._settings.get_double('dock-saturation'));
+            if (this.glass && this._isEffectActive) {
+                this.glass.setSaturation(this._settings.get_double('dock-saturation'));
             }
         });
     }
@@ -204,16 +189,11 @@ export class DashManager {
         if (this._dockParent) {
             this._dockParent.add_style_class_name('liquid-glass-transparent');
         }
-        if (backdropDefault) {
-            this._backdrop = new BackdropGlass({
-                extensionPath: this.extensionPath, settings: this._settings, logger: this._logger, owner: 'dock',
-            });
-            this.bgActor = this._backdrop;
-        }
-        else {
-            ({ bgActor: this.bgActor, liquidBox: this.liquidBox, cloneContainer: this._cloneContainer } = createCaptureActors());
-        }
-        this.bgActor.set_size(1.0, 1.0);
+        const glass = new BackdropGlass({
+            extensionPath: this.extensionPath, settings: this._settings, logger: this._logger, owner: 'dock',
+        });
+        this.glass = glass;
+        glass.set_size(1.0, 1.0);
         this._applyMargin();
         this._marginValue = this._settings.get_int('dock-margin-bottom');
         this._glassExpand = this._settings.get_int("dock-glass-expand");
@@ -224,13 +204,12 @@ export class DashManager {
                 break;
             dockRoot = p;
         }
-        // Below the dock, so the glass does not clone itself or the dock, and
-        // a BackdropGlass reads the stage before the dock is drawn.
+        // Below the dock, so the glass reads the stage before the dock is drawn.
         if (dockRoot && dockRoot.get_parent() === Main.layoutManager.uiGroup) {
-            Main.layoutManager.uiGroup.insert_child_below(this.bgActor, dockRoot);
+            Main.layoutManager.uiGroup.insert_child_below(glass, dockRoot);
         }
         else {
-            Main.layoutManager.uiGroup.add_child(this.bgActor);
+            Main.layoutManager.uiGroup.add_child(glass);
         }
         let blurRadius = this._settings.get_int('dock-blur-radius');
         let tintColorStr = this._settings.get_string('dock-tint-color');
@@ -239,44 +218,25 @@ export class DashManager {
         let brightness = this._settings.get_double('dock-brightness');
         let contrast = this._settings.get_double('dock-contrast');
         let saturation = this._settings.get_double('dock-saturation');
-        const effect = this._backdrop ?? new LiquidEffect({
-            extensionPath: this.extensionPath, settings: this._settings, logger: this._logger, owner: 'dock',
-        });
-        this.effect = effect;
-        effect.setPadding(SHADER_PADDING);
-        effect.setTintColor(...hexToColorArray(tintColorStr));
-        effect.setTintStrength(tintStrength);
-        effect.setCornerRadius(cornerRadius);
-        effect.setBrightness(brightness);
-        effect.setContrast(contrast);
-        effect.setSaturation(saturation);
-        effect.setBlurRadius(blurRadius);
-        effect.setIsDock(true);
+        glass.setPadding(SHADER_PADDING);
+        glass.setTintColor(...hexToColorArray(tintColorStr));
+        glass.setTintStrength(tintStrength);
+        glass.setCornerRadius(cornerRadius);
+        glass.setBrightness(brightness);
+        glass.setContrast(contrast);
+        glass.setSaturation(saturation);
+        glass.setBlurRadius(blurRadius);
+        glass.setIsDock(true);
         // Dash to Dock slides by relayout, so the frame tick sees last frame's
         // position; the paint-time hook corrects it.
-        effect.setLiveGeometryHook(() => this._syncGlassGeometryLive());
-        if (effect instanceof LiquidEffect) {
-            this.liquidBox.add_effect(effect);
-            this._windowCloneManager = new WindowCloneManager(this.liquidBox, this._cloneContainer, 'lg-dock');
-            // The dock is excluded both directly and through targetActor's uiGroup
-            // ancestor, which stays correct after Dash to Dock rebuilds its container.
-            this._uiSampler = new UILayerSampler(this.bgActor, this.liquidBox, [dockRoot, global.windowGroup, global.window_group], this._cloneContainer, 'dock', [this.targetActor]);
-        }
-        this.bgActor.show();
-        let buildClones = () => {
-            if (!this.bgActor)
-                return;
-            excludeOtherGlass(this._uiSampler, this.bgActor);
-            this._windowCloneManager?.rebuildClones();
-            this._uiSampler?.rebindSelf();
-            this._uiSampler?.refresh();
-        };
+        glass.setLiveGeometryHook(() => this._syncGlassGeometryLive());
+        glass.show();
         // Follows the stage's own frames (startStageLoop()), so it costs nothing
         // while nothing changes. Errors are reported rate-limited instead of
         // logged every frame; SAME_FRAME_WINDOW_US keeps two stage views from
         // stepping it twice in one frame.
         let frameTick = () => {
-            if (!this._isEffectActive || !this.bgActor || !this.targetActor.mapped)
+            if (!this._isEffectActive || !this.glass || !this.targetActor.mapped)
                 return;
             if (isFrameSyncFrozen())
                 return;
@@ -286,7 +246,7 @@ export class DashManager {
             this._lastTickUs = nowUs;
             try {
                 // Checked before this frame's sync dirties anything.
-                ensureGlassAllocated(this.bgActor);
+                ensureGlassAllocated(this.glass);
                 this._syncGeometry();
             }
             catch (e) {
@@ -296,7 +256,6 @@ export class DashManager {
         let startFrameSync = () => {
             if (this._frameSignalId !== 0)
                 return;
-            buildClones();
             startStageLoop(this._frameSignalSlot, this._frameSlot, frameTick);
         };
         // The glass is the dock's sibling, so it stays up when the dock is
@@ -316,24 +275,24 @@ export class DashManager {
         }
     }
 
-    // Runs at paint time (see LiquidEffect.setLiveGeometryHook()), when the
+    // Runs at paint time (see GlassActor.setLiveGeometryHook()), when the
     // dock's allocation is current. _syncGeometry() keeps per-frame state and
     // must run once per frame, so only the glass rect's position is corrected
     // here, by how far the dock moved since the tick.
     _syncGlassGeometryLive() {
         const ref = this._liveRef;
-        if (!ref || !this.effect)
+        if (!ref || !this.glass)
             return;
         if (!ref.actor?.mapped)
             return;
         const [nx, ny] = ref.actor.get_transformed_position();
         if (!Number.isFinite(nx) || !Number.isFinite(ny))
             return;
-        this.effect.setGlassGeometry(ref.rect[0] + (nx - ref.rawX), ref.rect[1] + (ny - ref.rawY), ref.rect[2], ref.rect[3]);
+        this.glass.setGlassGeometry(ref.rect[0] + (nx - ref.rawX), ref.rect[1] + (ny - ref.rawY), ref.rect[2], ref.rect[3]);
     }
 
     _syncGeometry() {
-        if (!this.bgActor || !this.targetActor || !this.targetActor.mapped)
+        if (!this.glass || !this.targetActor || !this.targetActor.mapped)
             return;
         let bounds = this._readDockBounds();
         if (!bounds)
@@ -354,10 +313,10 @@ export class DashManager {
             this._hideGlass();
             return;
         }
-        this.bgActor.show();
-        this.bgActor.opacity = this.targetActor.opacity;
+        this.glass.show();
+        this.glass.opacity = this.targetActor.opacity;
         this._syncDockVisibility(bounds, monitor);
-        this._syncDockCapture(bounds, monitor);
+        this._syncDockGlass(bounds, monitor);
     }
 
     _actorBounds(actor) {
@@ -451,26 +410,26 @@ export class DashManager {
                     `monitor=(${monitor?.x},${monitor?.y},${monitor?.width}x${monitor?.height}) ` +
                     `margin=${this._marginValue}`);
             }
-            this.bgActor.opacity = 0;
+            this.glass.opacity = 0;
         }
         else {
             if (this._lastHidden === true) {
                 this._lastHidden = false;
                 this._logger.log('[Liquid Glass][dock] glass visible again');
             }
-            this.bgActor.opacity = this.targetActor.opacity;
+            this.glass.opacity = this.targetActor.opacity;
         }
     }
 
-    _syncDockCapture(bounds, monitor) {
+    _syncDockGlass(bounds, monitor) {
         const { absX, absY, baseW, baseH } = bounds;
         const w = Math.max(1.0, baseW), h = Math.max(1.0, baseH);
         let bgW = Math.max(1.0, w + (SHADER_PADDING * 2) + (this._glassExpand * 2));
         let bgH = Math.max(1.0, h + (SHADER_PADDING * 2) + (this._glassExpand * 2));
         let bgX = absX - SHADER_PADDING - this._glassExpand;
         let bgY = absY - SHADER_PADDING - this._glassExpand;
-        // bgActor and liquidBox cover the whole monitor, so the capture's
-        // coordinates match the stage's, as Blur My Shell's panel blur requires.
+        // The glass covers the whole monitor; the shader draws only the glass
+        // rect, in monitor-local coordinates.
         let screenW = monitor.width;
         let screenH = monitor.height;
         // Monitor-local, as the shader uses them.
@@ -479,15 +438,13 @@ export class DashManager {
         if (this._lastBgW !== bgW || this._lastBgH !== bgH ||
             this._lastBgX !== bgX || this._lastBgY !== bgY ||
             this._lastScreenW !== screenW || this._lastScreenH !== screenH ||
-            this.bgActor.x !== monitor.x || this.bgActor.y !== monitor.y) {
-            this.bgActor.remove_transition('size');
-            this.bgActor.remove_transition('position');
-            this.bgActor.set_position(monitor.x, monitor.y);
-            this.bgActor.set_size(screenW, screenH);
-            this.bgActor.remove_transition('size');
-            this.bgActor.remove_transition('position');
-            this.liquidBox?.set_position(0, 0);
-            this.liquidBox?.set_size(screenW, screenH);
+            this.glass.x !== monitor.x || this.glass.y !== monitor.y) {
+            this.glass.remove_transition('size');
+            this.glass.remove_transition('position');
+            this.glass.set_position(monitor.x, monitor.y);
+            this.glass.set_size(screenW, screenH);
+            this.glass.remove_transition('size');
+            this.glass.remove_transition('position');
             this._lastBgW = bgW;
             this._lastBgH = bgH;
             this._lastBgX = bgX;
@@ -498,35 +455,19 @@ export class DashManager {
         // Limit drawing to the dock plus room for its shadow (not
         // clip_to_allocation, which would cut the shadow off).
         const CLIP_PADDING = 200;
-        setClipIfChanged(this.bgActor, localBgX - CLIP_PADDING, localBgY - CLIP_PADDING, bgW + CLIP_PADDING * 2, bgH + CLIP_PADDING * 2);
+        setClipIfChanged(this.glass, localBgX - CLIP_PADDING, localBgY - CLIP_PADDING, bgW + CLIP_PADDING * 2, bgH + CLIP_PADDING * 2);
         const SHADOW_MAX_RADIUS = CLIP_PADDING - 20;
-        this.effect?.setShadowMaxRadius(SHADOW_MAX_RADIUS);
-        this.effect?.setResolution(screenW, screenH);
-        this.effect?.setGlassGeometry(localBgX, localBgY, bgW, bgH);
+        this.glass?.setShadowMaxRadius(SHADOW_MAX_RADIUS);
+        this.glass?.setResolution(screenW, screenH);
+        this.glass?.setGlassGeometry(localBgX, localBgY, bgW, bgH);
         const source = this._liveSource;
         this._liveRef = source ? {
             actor: source.actor,
             rawX: source.rawX, rawY: source.rawY,
             rect: [localBgX, localBgY, bgW, bgH],
         } : null;
-        this._windowCloneManager?.setOffset(-monitor.x, -monitor.y);
         // After the geometry setters, so the relays cover this frame's rect.
-        if (this._backdrop) {
-            this._backdrop.syncSources();
-            return;
-        }
-        // After setGlassGeometry() and before the samplers sync (see capture/clip.ts).
-        syncGlassCaptureClip({
-            cloneContainer: this._cloneContainer,
-            effect: this.effect,
-            originX: monitor.x,
-            originY: monitor.y,
-            uiSampler: this._uiSampler,
-            windowCloneManager: this._windowCloneManager,
-        });
-        this._uiSampler?.refresh();
-        this._uiSampler?.sync(monitor.x, monitor.y, screenW, screenH);
-        this._windowCloneManager?.sync();
+        this.glass.syncSources();
     }
 
     get _frameSlot() {
@@ -539,7 +480,7 @@ export class DashManager {
 
     // The next sync shows it again and updates everything.
     _hideGlass() {
-        this.bgActor?.hide();
+        this.glass?.hide();
         this._lastBgW = undefined;
         this._lastBgH = undefined;
         this._lastBgX = undefined;
@@ -576,19 +517,13 @@ export class DashManager {
         if (isActorValid(this._dockParent))
             this._dockParent.remove_style_class_name('liquid-glass-transparent');
         this._dockParent = null;
-        this.effect?.cleanup();
-        this.effect = null;
-        this._backdrop = null;
-        this._uiSampler?.destroy();
-        this._uiSampler = null;
-        this._windowCloneManager?.destroy();
-        this._windowCloneManager = null;
-        if (isActorValid(this.bgActor))
-            this.bgActor.destroy();
-        this.bgActor = null;
-        // Destroyed with bgActor.
-        this.liquidBox = null;
-        this._cloneContainer = null;
+        const glass = this.glass;
+        this.glass = null;
+        if (glass) {
+            glass.cleanup();
+            if (isActorValid(glass))
+                glass.destroy();
+        }
     }
 
     cleanup() {

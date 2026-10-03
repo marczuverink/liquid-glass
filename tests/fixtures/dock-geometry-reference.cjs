@@ -1,8 +1,8 @@
-module.exports = ({ Main, setClipIfChanged, syncGlassCaptureClip }) => {
+module.exports = ({ Main, setClipIfChanged }) => {
   const SHADER_PADDING = 20;
   return class ReferenceDock {
     _syncGeometry() {
-        if (!this.bgActor || !this.targetActor || !this.targetActor.mapped)
+        if (!this.glass || !this.targetActor || !this.targetActor.mapped)
             return;
         let sourceActor = this.targetActor;
         let children = this.targetActor.get_children();
@@ -187,7 +187,7 @@ module.exports = ({ Main, setClipIfChanged, syncGlassCaptureClip }) => {
         let w = Math.max(1.0, baseW);
         let h = Math.max(1.0, baseH);
         if (baseW <= 9 || baseH <= 9) {
-            this.bgActor.hide();
+            this.glass.hide();
             this._lastBgW = undefined;
             this._lastBgH = undefined;
             this._lastBgX = undefined;
@@ -195,9 +195,9 @@ module.exports = ({ Main, setClipIfChanged, syncGlassCaptureClip }) => {
             return;
         }
         else {
-            this.bgActor.show();
+            this.glass.show();
         }
-        this.bgActor.opacity = this.targetActor.opacity;
+        this.glass.opacity = this.targetActor.opacity;
         let visibleW = baseW;
         let visibleH = baseH;
         if (monitor) {
@@ -218,14 +218,14 @@ module.exports = ({ Main, setClipIfChanged, syncGlassCaptureClip }) => {
                     `monitor=(${monitor?.x},${monitor?.y},${monitor?.width}x${monitor?.height}) ` +
                     `margin=${this._marginValue}`);
             }
-            this.bgActor.opacity = 0;
+            this.glass.opacity = 0;
         }
         else {
             if (this._lastHidden === true) {
                 this._lastHidden = false;
                 this._logger.log('[Liquid Glass][dock] glass visible again');
             }
-            this.bgActor.opacity = this.targetActor.opacity;
+            this.glass.opacity = this.targetActor.opacity;
         }
         let bgW = Math.max(1.0, w + (SHADER_PADDING * 2) + (this._glassExpand * 2));
         let bgH = Math.max(1.0, h + (SHADER_PADDING * 2) + (this._glassExpand * 2));
@@ -238,15 +238,13 @@ module.exports = ({ Main, setClipIfChanged, syncGlassCaptureClip }) => {
         if (this._lastBgW !== bgW || this._lastBgH !== bgH ||
             this._lastBgX !== bgX || this._lastBgY !== bgY ||
             this._lastScreenW !== screenW || this._lastScreenH !== screenH ||
-            this.bgActor.x !== monitor.x || this.bgActor.y !== monitor.y) {
-            this.bgActor.remove_transition('size');
-            this.bgActor.remove_transition('position');
-            this.bgActor.set_position(monitor.x, monitor.y);
-            this.bgActor.set_size(screenW, screenH);
-            this.bgActor.remove_transition('size');
-            this.bgActor.remove_transition('position');
-            this.liquidBox?.set_position(0, 0);
-            this.liquidBox?.set_size(screenW, screenH);
+            this.glass.x !== monitor.x || this.glass.y !== monitor.y) {
+            this.glass.remove_transition('size');
+            this.glass.remove_transition('position');
+            this.glass.set_position(monitor.x, monitor.y);
+            this.glass.set_size(screenW, screenH);
+            this.glass.remove_transition('size');
+            this.glass.remove_transition('position');
             this._lastBgW = bgW;
             this._lastBgH = bgH;
             this._lastBgX = bgX;
@@ -255,23 +253,12 @@ module.exports = ({ Main, setClipIfChanged, syncGlassCaptureClip }) => {
             this._lastScreenH = screenH;
         }
         const CLIP_PADDING = 200;
-        setClipIfChanged(this.bgActor, localBgX - CLIP_PADDING, localBgY - CLIP_PADDING, bgW + CLIP_PADDING * 2, bgH + CLIP_PADDING * 2);
+        setClipIfChanged(this.glass, localBgX - CLIP_PADDING, localBgY - CLIP_PADDING, bgW + CLIP_PADDING * 2, bgH + CLIP_PADDING * 2);
         const SHADOW_MAX_RADIUS = CLIP_PADDING - 20;
-        this.effect?.setShadowMaxRadius(SHADOW_MAX_RADIUS);
-        this.effect?.setResolution(screenW, screenH);
-        this.effect?.setGlassGeometry(localBgX, localBgY, bgW, bgH);
-        this._windowCloneManager?.setOffset(-monitor.x, -monitor.y);
-        syncGlassCaptureClip({
-            cloneContainer: this._cloneContainer,
-            effect: this.effect,
-            originX: monitor.x,
-            originY: monitor.y,
-            uiSampler: this._uiSampler,
-            windowCloneManager: this._windowCloneManager,
-        });
-        this._uiSampler?.refresh();
-        this._uiSampler?.sync(monitor.x, monitor.y, screenW, screenH);
-        this._windowCloneManager?.sync();
+        this.glass.setShadowMaxRadius(SHADOW_MAX_RADIUS);
+        this.glass.setResolution(screenW, screenH);
+        this.glass.setGlassGeometry(localBgX, localBgY, bgW, bgH);
+        this.glass.syncSources();
     }
   };
 };

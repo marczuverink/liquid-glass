@@ -13,7 +13,7 @@ function fixture() {
   const bindings = {
     St: { Side: { LEFT: 0, RIGHT: 1, TOP: 2, BOTTOM: 3 } },
     Main: { layoutManager: { primaryMonitor: monitor }, panel: { height: 28 } },
-    getAllocatedSize, setClipIfChanged() {}, syncGlassCaptureClip() {},
+    getAllocatedSize, setClipIfChanged() {},
     ...loadModule(path.join(dist, 'actors/glassBounds.js'), { setClipIfChanged() {} }),
   };
   const code = fs.readFileSync(path.join(dist, 'uiManager.js'), 'utf8')
@@ -35,17 +35,17 @@ function fixture() {
     get_size() { return [body.width + (this.needsAllocation ? 48 : 24), body.height + 32]; },
     get_scale() { return [this.scale, this.scale]; },
   };
-  const background = {
+  const glass = {
     visible: true, show() { this.visible = true; }, hide() { this.visible = false; },
     remove_transition() {}, set_position() {}, set_size() {},
+    setShadowMaxRadius() {}, setResolution() {}, setCornerRadius() {},
+    setAnimationScale() {}, setGlassGeometry(...rect) { geometry.push(rect); }, syncSources() {},
   };
   Object.assign(manager, {
-    animActor: body, targetActor: outer, bgActor: background,
+    animActor: body, targetActor: outer, glass,
     _enableAnimation: true, _glassExpand: 0, _cornerRadius: 30,
     _menuXoffset: 0, _menuYoffset: 0,
     _getMenuMonitorGeometry: () => monitor,
-    effect: { setShadowMaxRadius() {}, setResolution() {}, setCornerRadius() {},
-      setAnimationScale() {}, setGlassGeometry(...rect) { geometry.push(rect); } },
   });
   return { manager, body, outer, geometry, monitor };
 }

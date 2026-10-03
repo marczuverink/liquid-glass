@@ -98,7 +98,7 @@ export class BlurRenderer {
     return {
       blurMethod: this._blurMethod, passCount: this.PASS_COUNT,
       pool: this._poolWidth + 'x' + this._poolHeight, poolLevels: this._blurFbos.length,
-      blurResult: result ? result.get_width() + 'x' + result.get_height() : 'NULL (layer 1 falls back to the SHARP capture)',
+      blurResult: result ? result.get_width() + 'x' + result.get_height() : 'NULL (layer 1 falls back to the unblurred copy)',
       radiusDown: this._blurRadiusDown, radiusUp: this._blurRadiusUp, targetRadius: this._targetRadius,
       gaussianPipelines: !!(this._gaussianHPipeline && this._gaussianVPipeline),
     };
@@ -182,7 +182,7 @@ export class BlurRenderer {
   }
 
   /**
-   * Allocates the pool for a (w, h) capture. Level i is w >> (i + 1) wide
+   * Allocates the pool for a (w, h) source. Level i is w >> (i + 1) wide
    * (level 0 at half resolution); glass-blur-downscale = 4 shifts every level
    * down one more step.
    */
@@ -228,7 +228,7 @@ export class BlurRenderer {
       const invW = 1.0 / currentSrc.get_width();
       const invH = 1.0 / currentSrc.get_height();
 
-      // Only the first pass reads the padded capture, through srcUV.
+      // Only the first pass reads the source, through srcUV.
       const uv = (i === 0) ? srcUV : [0, 0, 1, 1];
 
       // At downscale 4 the first pass is a 4x reduction, which Kawase's
@@ -329,7 +329,7 @@ export class BlurRenderer {
     this._upFbos = [];
     this._upTextures = [];
     this._blurResultTex = null;
-    // The reuse key holds the old capture texture.
+    // The reuse key holds the old source texture.
     this._renderedKey = null;
     this._poolWidth = 0;
     this._poolHeight = 0;

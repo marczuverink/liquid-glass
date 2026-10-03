@@ -25,12 +25,12 @@ export class GlassRenderer {
 
     constructor(params) {
         this._repaint = params.repaint;
-        this.passes = new RenderPasses(params.logger);
+        this.passes = new RenderPasses();
         this.pipelines = new ShaderPipelines(params.logger);
         this.blur = new BlurRenderer(this.pipelines, this.passes, () => this._repaint());
         this.uniforms = new UniformState();
         this.geometry = new GlassGeometry(this.uniforms.values);
-        this.material = new MaterialSettings(params.settings, this.uniforms, this.blur, params.setDiagnostics);
+        this.material = new MaterialSettings(params.settings, this.uniforms, this.blur, params.setDiagnostics, () => this._repaintIfDirty());
         this.material.initialize();
     }
 
@@ -46,20 +46,17 @@ export class GlassRenderer {
     }
 
     /**
-     * Binds the blurred backdrop for glass.frag, or `unblurredTex` when there is
-     * no blur. `blurRect` is the part of the glass the blurred texture holds, in
-     * shader space, or null for all of it; `unblurredInRect` says the unblurred
-     * texture holds only that part too. Returns the UV range for the composite
-     * quad's layers and the rect the shader was told about.
+     * Binds the backdrop for glass.frag: the blurred one, or `unblurredTex`
+     * when there is no blur. Both hold `blurRect`, the part of the glass the
+     * backdrop was copied for, in shader space.
      */
-    bindBackdrop(unblurredTex, unblurredUV, blurRect, unblurredInRect = false) {
+    bindBackdrop(unblurredTex, blurRect) {
         const compPipeline = this.pipelines.composite;
         const haveBlur = this.blur.passCount > 0 && this.blur.result !== null;
-        const activeRect = ((haveBlur || unblurredInRect) && blurRect) ? blurRect : null;
-        this.uniforms.set('blur_rect_x', activeRect ? activeRect[0] : 0.0);
-        this.uniforms.set('blur_rect_y', activeRect ? activeRect[1] : 0.0);
-        this.uniforms.set('blur_rect_w', activeRect ? activeRect[2] : 0.0);
-        this.uniforms.set('blur_rect_h', activeRect ? activeRect[3] : 0.0);
+        this.uniforms.set('blur_rect_x', blurRect[0]);
+        this.uniforms.set('blur_rect_y', blurRect[1]);
+        this.uniforms.set('blur_rect_w', blurRect[2]);
+        this.uniforms.set('blur_rect_h', blurRect[3]);
         // Both layers get the same texture, so one UV range fits both. glass.frag
         // samples only layer 1; if it ever read layer 0 separately, the layers
         // would need their own ranges.
@@ -70,12 +67,10 @@ export class GlassRenderer {
         this.uniforms.set('blur_tex_h', layerTex.get_height());
         compPipeline.set_layer_texture(0, layerTex);
         configureSamplerLayer(compPipeline, 0);
-        const layerUV = haveBlur ? [0, 0, 1, 1] : unblurredUV;
         compPipeline.set_layer_texture(1, layerTex);
         configureSamplerLayer(compPipeline, 1);
         // Uniforms set before the pipeline existed are written now.
         this.uniforms.flush();
-        return { layerUV, activeRect };
     }
 
     /**
@@ -89,7 +84,7 @@ export class GlassRenderer {
         const opacity = paintOpacity / 255;
         color.init_from_4f(opacity, opacity, opacity, opacity);
         this.pipelines.composite.set_color(color);
-        this.passes.composite(node, this.pipelines.composite, drawRect, drawUV, drawUV);
+        this.passes.composite(node, this.pipelines.composite, drawRect, drawUV);
     }
 
     // Rebuilds the pipelines on the next paint, for shader development. The

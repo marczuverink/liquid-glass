@@ -5,14 +5,14 @@
 #   1. このスクリプトを起動する:  tools/perf/glass-monitor.sh [保存先ファイル]（省略時は logs/ に作る）
 #   2. Looking Glass (Alt+F2 → lg) で  global._lgBench.run('all')
 #      （tools/perf/lg-bench@liquid-glass.test。B1〜B15 を順に再現し、記録の開始・停止も自動）
-#      新旧比較は run('all', {ab: true})、ガラスなしも含めるなら {modes: ['stage', 'capture', 'none']}
+#      ガラスなしとの比較は run('all', {ab: true})（= {modes: ['stage', 'none']}）
 #   3. 終わるまで（ログに "bench restored"）マウスとキーボードに触らない。終わったらこの端末で Ctrl-C。
 #      シナリオ・方式ごとの平均と、その間いちばん多かった状況（狙いどおりかの確認用）を表示する。
 #
 # ふだんの操作を測る:
 #   Looking Glass で  global._lgGlass.monitor(0)  、終わったら  global._lgGlass.monitorStop()  、この端末は Ctrl-C。
 #   状況（表示中のガラス・窓の数・動いている窓など）は拡張側が毎秒自動で判定して scene=<...> に書き、
-#   ここでは状況ごとに集計する。新旧比較は backdrop(false) のあと拡張機能を OFF→ON して記録し直す。
+#   ここでは状況ごとに集計する。
 #
 # 保存済みの記録を集計し直す:  tools/perf/glass-monitor.sh --summary <ファイル>
 # journal から拾い直す:  journalctl --user -o cat --since '<開始時刻>' _COMM=gnome-shell | grep -F '[monitor]' > 記録.log
@@ -22,10 +22,10 @@
 #   sclk   GPU のシェーダクロック、power  消費電力（APU ではチップ全体、CPU を含む）
 #   cpu    gnome-shell プロセスの CPU 使用率（全スレッド、1 コア = 100%）
 #   frames 描いたフレーム数、full  そのうち画面全体を描き直したフレーム数
-#   <ガラス> copies=背後をコピーした回数 paints=描いた回数（旧方式は (capture) paints=）
+#   <ガラス> copies=背後をコピーした回数 paints=描いた回数
 #
 # scene=<...> の読み方:
-#   stage / capture         UI のガラスの方式（新 / 旧）。mixed は混在
+#   stage / no-glass        ガラスがあるか（2026-10 以前の記録には旧方式の capture / mixed もある）
 #   dock calendar~ ...      表示中のガラス。~ はその秒に動いた・大きさが変わったもの、(2) は 2 枚
 #   3 win: firefox busy@dock  表示中の窓の数と、何かしている窓。busy は 1 秒に 10 回以上描き直し
 #                           （動画など）、moving は移動・リサイズ、anim は開閉などのアニメーション。

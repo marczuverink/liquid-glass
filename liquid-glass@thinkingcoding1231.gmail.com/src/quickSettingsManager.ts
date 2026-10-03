@@ -7,27 +7,20 @@ import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
-import { LiquidEffect } from './liquidEffect.js';
 import { BackdropGlass } from './rendering/backdropGlass.js';
 import { ToggleBackdropGlass } from './rendering/toggleGlass.js';
-import type { GlassSurface } from './rendering/glassSurface.js';
-import { backdropDefault } from './diagnostics/glass.js';
-import { createCaptureActors } from './actors/captureActors.js';
 import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
 import Gio from 'gi://Gio';
-import { LayoutOpaqueActor, UnpickableWidget } from './actors/unpickable.js';
-import { UILayerSampler } from './capture/uiLayerSampler.js';
-import { WindowCloneManager } from './capture/windowClones.js';
+import { LayoutOpaqueActor } from './actors/unpickable.js';
 import { ensureGlassAllocated } from './actors/allocation.js';
 import { isActorValid } from './actors/lifecycle.js';
 import { resolveMonitorGeometry, getAllocatedSize, getTransformedRect } from './actors/geometry.js';
 import { startSyncLoop, stopStageLoop } from './animation/frameLoops.js';
-import { excludeOtherGlass } from './capture/glassExclusions.js';
 import { placeScreenGlass, resolveGlassOrigin, applyGlassScale, GLASS_SHADOW_MAX_RADIUS } from './actors/glassBounds.js';
-import { syncGlassCaptureClip } from './capture/clip.js';
 import { setPositionIfChanged, setScaleIfChanged } from './actors/writes.js';
 import { resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb } from './animation/colors.js';
 
+import { MENU_NO_ANIMATION } from './shellVersion.js';
 import { Logger } from './logger.js';
 
 // Room around the glass rect for the shader's edge effects.
@@ -94,24 +87,15 @@ export class QuickSettingsManager {
   private menu: any;
   private animActor: St.Widget;
 
-  private bgActor: Clutter.Actor | null;
-  private liquidBox: Clutter.Actor | null = null;
-  private _cloneContainer: Clutter.Actor | null = null;
-  private effect: GlassSurface | null;
-  // Set when the glass reads the stage; it is then bgActor and effect too.
-  // In toggle mode it sits inside the menu, which is drawn through an
-  // offscreen, and reads the stage through a reader outside the menu.
-  private _backdrop: BackdropGlass | ToggleBackdropGlass | null = null;
+  // Monitor-sized. In toggle mode it sits inside the menu, which is drawn
+  // through an offscreen, and reads the stage through a reader outside the
+  // menu (see rendering/toggleGlass.ts).
+  private glass: BackdropGlass | ToggleBackdropGlass | null;
 
-  private _windowCloneManager: WindowCloneManager | null = null;
-  private _uiSampler: UILayerSampler | null = null;
-
-  // Toggle mode. The menu's ancestor that is a direct child of uiGroup, the
-  // widget that repaints the panel's own background inside the glass (see
-  // _ensurePanelContentClone()), and the zero-size host that puts the glass
-  // inside the menu box (see LayoutOpaqueActor).
+  // Toggle mode. The menu's ancestor that is a direct child of uiGroup, and
+  // the zero-size host that puts the glass inside the menu box (see
+  // LayoutOpaqueActor).
   private _menuRoot: Clutter.Actor | null = null;
-  private _panelContentClone: any = null;
   private _toggleGlassHost: any = null;
 
   private _lastScreenW: number | undefined;
@@ -208,8 +192,7 @@ export class QuickSettingsManager {
     // The menu's content box, which the animations and offsets move.
     this.animActor = Main.panel.statusArea.quickSettings.menu.box;
 
-    this.bgActor = null;
-    this.effect = null;
+    this.glass = null;
 
     this._signals = [];
     this._frameSyncId = 0;
@@ -304,28 +287,28 @@ export class QuickSettingsManager {
 
     connectSetting('quick-settings-tint-color', () => {
       this._tintColorArray = hexToColorArray(this._settings.get_string('quick-settings-tint-color'));
-      if (this.effect) {
-        this.effect.setTintColor(...this._tintColorArray);
+      if (this.glass) {
+        this.glass.setTintColor(...this._tintColorArray);
       }
     });
 
     connectSetting('quick-settings-tint-strength', () => {
-      if (this.effect) {
-        this.effect.setTintStrength(this._settings.get_double('quick-settings-tint-strength'));
+      if (this.glass) {
+        this.glass.setTintStrength(this._settings.get_double('quick-settings-tint-strength'));
       }
     });
 
     connectSetting('quick-settings-blur-radius', () => {
-      if (this.effect) {
-        this.effect.setBlurRadius(this._settings.get_int('quick-settings-blur-radius'));
+      if (this.glass) {
+        this.glass.setBlurRadius(this._settings.get_int('quick-settings-blur-radius'));
       }
     });
 
     connectSetting('quick-settings-corner-radius', () => {
       this._cornerRadius = this._settings.get_double('quick-settings-corner-radius');
       // Toggle mode uses quick-settings-toggle-corner-radius instead.
-      if (this.effect && this._activeMode === 'background') {
-        this.effect.setCornerRadius(this._cornerRadius);
+      if (this.glass && this._activeMode === 'background') {
+        this.glass.setCornerRadius(this._cornerRadius);
       }
     });
 
@@ -347,13 +330,13 @@ export class QuickSettingsManager {
 
     connectSetting('quick-settings-toggle-corner-radius', () => {
       this._toggleCornerRadius = this._settings.get_double('quick-settings-toggle-corner-radius');
-      if (this.effect && this._activeMode === 'toggles') {
-        this.effect.setCornerRadius(this._toggleCornerRadius);
+      if (this.glass && this._activeMode === 'toggles') {
+        this.glass.setCornerRadius(this._toggleCornerRadius);
       }
     });
 
     connectSetting('quick-settings-glass-expand', () => {
-      if (this.effect) {
+      if (this.glass) {
         this._glassExpand = this._settings.get_int('quick-settings-glass-expand');
       }
     });
@@ -386,20 +369,20 @@ export class QuickSettingsManager {
     });
 
     connectSetting('quick-settings-brightness', () => {
-      if (this.effect) {
-        this.effect.setBrightness(this._settings.get_double('quick-settings-brightness'));
+      if (this.glass) {
+        this.glass.setBrightness(this._settings.get_double('quick-settings-brightness'));
       }
     });
 
     connectSetting('quick-settings-saturation', () => {
-      if (this.effect) {
-        this.effect.setSaturation(this._settings.get_double('quick-settings-saturation'));
+      if (this.glass) {
+        this.glass.setSaturation(this._settings.get_double('quick-settings-saturation'));
       }
     });
 
     connectSetting('quick-settings-contrast', () => {
-      if (this.effect) {
-        this.effect.setContrast(this._settings.get_double('quick-settings-contrast'));
+      if (this.glass) {
+        this.glass.setContrast(this._settings.get_double('quick-settings-contrast'));
       }
     });
   }
@@ -446,7 +429,7 @@ export class QuickSettingsManager {
         this._settings.get_string('quick-settings-adaptive-text-preference')),
     };
 
-    this._createGlassActors(backdropDefault, false);
+    const glass = this._createGlass(false);
 
     // The menu scales from its top centre; the glass follows it by geometry.
     this.animActor.set_pivot_point(0.5, 0.0);
@@ -458,12 +441,11 @@ export class QuickSettingsManager {
       menuRoot = p;
     }
 
-    // Below the menu, so the glass does not clone itself or the menu, and a
-    // BackdropGlass reads the stage before the menu is drawn.
+    // Below the menu, so the glass reads the stage before the menu is drawn.
     if (menuRoot.get_parent() === Main.layoutManager.uiGroup)
-      Main.layoutManager.uiGroup.insert_child_below(this.bgActor!, menuRoot);
+      Main.layoutManager.uiGroup.insert_child_below(glass, menuRoot);
     else
-      Main.layoutManager.uiGroup.add_child(this.bgActor!);
+      Main.layoutManager.uiGroup.add_child(glass);
 
     let blurRadius = this._settings.get_int('quick-settings-blur-radius');
     let tintColorStr = this._settings.get_string('quick-settings-tint-color');
@@ -473,33 +455,17 @@ export class QuickSettingsManager {
     let saturation = this._settings.get_double('quick-settings-saturation');
     let contrast = this._settings.get_double('quick-settings-contrast');
 
-    const effect: GlassSurface = this._backdrop ?? new LiquidEffect({
-      extensionPath: this.extensionPath, settings: this._settings, owner: 'quick-settings',
-    } as any);
-    this.effect = effect;
-    effect.setPadding(SHADER_PADDING);
-    effect.setTintColor(...hexToColorArray(tintColorStr));
-    effect.setTintStrength(tintStrength);
-    effect.setCornerRadius(this._cornerRadius);
-    effect.setIsDock(false);
-    effect.setBrightness(brightness);
-    effect.setSaturation(saturation);
-    effect.setContrast(contrast);
-    effect.setBlurRadius(blurRadius);
+    glass.setPadding(SHADER_PADDING);
+    glass.setTintColor(...hexToColorArray(tintColorStr));
+    glass.setTintStrength(tintStrength);
+    glass.setCornerRadius(this._cornerRadius);
+    glass.setIsDock(false);
+    glass.setBrightness(brightness);
+    glass.setSaturation(saturation);
+    glass.setContrast(contrast);
+    glass.setBlurRadius(blurRadius);
 
-    if (effect instanceof LiquidEffect) {
-      this.liquidBox!.add_effect(effect);
-      this._windowCloneManager = new WindowCloneManager(this.liquidBox!, this._cloneContainer!, 'lg-qs');
-      this._uiSampler = new UILayerSampler(
-        this.bgActor!,
-        this.liquidBox!,
-        [menuRoot, global.windowGroup, global.window_group],
-        this._cloneContainer!,
-        'quick-settings'
-      );
-    }
-
-    this.bgActor!.hide();
+    glass.hide();
 
     const startFrameSync = () => this._startFrameSync(() => this._syncGeometry(), 'QuickSettingsManager', true);
     const stopFrameSync = () => this._stopFrameSync();
@@ -537,9 +503,9 @@ export class QuickSettingsManager {
         if (!this.menu.actor.mapped) {
           stopFrameSync();
 
-          if (this.bgActor) {
-            this.bgActor.hide();
-            this.bgActor.opacity = 0;
+          if (this.glass) {
+            this.glass.hide();
+            this.glass.opacity = 0;
           }
           if (this.animActor) {
             this.animActor.opacity = 0;
@@ -554,24 +520,21 @@ export class QuickSettingsManager {
     }
   }
 
-  // bgActor starts at 1x1: a 0x0 actor with a shader crashes Cogl.
-  private _createGlassActors(backdrop: boolean, toggles: boolean): void {
-    if (backdrop) {
-      const params = {
-        extensionPath: this.extensionPath, settings: this._settings, logger: this._logger,
-        owner: toggles ? 'quick-settings-toggles' : 'quick-settings',
-      };
-      this._backdrop = toggles ? new ToggleBackdropGlass(params as any) : new BackdropGlass(params as any);
-      this.bgActor = this._backdrop;
-      this.bgActor.set_size(1.0, 1.0);
-    } else {
-      ({ bgActor: this.bgActor, liquidBox: this.liquidBox, cloneContainer: this._cloneContainer } = createCaptureActors());
-    }
-    this.bgActor.set_pivot_point(0.0, 0.0);
+  // The glass starts at 1x1: a 0x0 actor with a shader crashes Cogl.
+  private _createGlass(toggles: boolean): BackdropGlass | ToggleBackdropGlass {
+    const params = {
+      extensionPath: this.extensionPath, settings: this._settings, logger: this._logger,
+      owner: toggles ? 'quick-settings-toggles' : 'quick-settings',
+    };
+    const glass = toggles ? new ToggleBackdropGlass(params as any) : new BackdropGlass(params as any);
+    this.glass = glass;
+    glass.set_size(1.0, 1.0);
+    glass.set_pivot_point(0.0, 0.0);
+    return glass;
   }
 
   // Toggle mode: a piece of glass behind each toggle, drawn as regions of one
-  // monitor-sized effect so the blur and clones are computed once per frame.
+  // monitor-sized glass so the copy and the blur are done once per frame.
   // The menu keeps its own look and animation.
   _applyToggleEffect() {
     if (!this.targetActor) return;
@@ -593,7 +556,7 @@ export class QuickSettingsManager {
         this._settings.get_string('quick-settings-adaptive-text-preference')),
     };
 
-    this._createGlassActors(backdropDefault, true);
+    const glass = this._createGlass(true) as ToggleBackdropGlass;
 
     let menuRoot: Clutter.Actor = this.menu.actor;
     while (menuRoot.get_parent() && menuRoot.get_parent() !== Main.layoutManager.uiGroup) {
@@ -606,26 +569,21 @@ export class QuickSettingsManager {
     // The glass goes into the menu box itself, below its children, so every
     // toggle's label and icon paint over it. A zero-size host keeps the box
     // from growing to the glass's monitor size (see LayoutOpaqueActor), and
-    // _placeToggleHost() counters the box's transform every frame so bgActor
-    // stays in monitor coordinates.
+    // _placeToggleHost() counters the box's transform every frame so the
+    // glass stays in monitor coordinates.
     if (!this._toggleGlassHost) {
       this._toggleGlassHost = new LayoutOpaqueActor();
       this._toggleGlassHost.set_name('liquid-glass-toggle-host');
     }
-    this._toggleGlassHost.add_child(this.bgActor!);
-
-    // bgActor is now inside _menuRoot, so nothing in the capture may paint
-    // _menuRoot; see _ensurePanelContentClone().
+    this._toggleGlassHost.add_child(glass);
     this.animActor.insert_child_at_index(this._toggleGlassHost, 0);
 
-    // The stage-reading glass reads what is behind the menu through a reader
-    // painted just before it.
-    if (this._backdrop instanceof ToggleBackdropGlass) {
-      if (menuRoot.get_parent() === Main.layoutManager.uiGroup)
-        Main.layoutManager.uiGroup.insert_child_below(this._backdrop.reader, menuRoot);
-      else
-        Main.layoutManager.uiGroup.add_child(this._backdrop.reader);
-    }
+    // The glass reads what is behind the menu through a reader painted just
+    // before the menu.
+    if (menuRoot.get_parent() === Main.layoutManager.uiGroup)
+      Main.layoutManager.uiGroup.insert_child_below(glass.reader, menuRoot);
+    else
+      Main.layoutManager.uiGroup.add_child(glass.reader);
 
     let blurRadius = this._settings.get_int('quick-settings-blur-radius');
     let tintStrength = this._settings.get_double('quick-settings-tint-strength');
@@ -633,35 +591,19 @@ export class QuickSettingsManager {
     let saturation = this._settings.get_double('quick-settings-saturation');
     let contrast = this._settings.get_double('quick-settings-contrast');
 
-    const effect: GlassSurface = this._backdrop ?? new LiquidEffect({
-      extensionPath: this.extensionPath, settings: this._settings, owner: 'quick-settings-toggles',
-    } as any);
-    this.effect = effect;
-    effect.setPadding(SHADER_PADDING);
+    glass.setPadding(SHADER_PADDING);
     this._tintColorArray = hexToColorArray(this._settings.get_string('quick-settings-tint-color'));
-    effect.setTintColor(...this._tintColorArray);
-    effect.setTintStrength(tintStrength);
-    effect.setCornerRadius(this._toggleCornerRadius);
-    effect.setIsDock(false);
-    effect.setBrightness(brightness);
-    effect.setSaturation(saturation);
-    effect.setContrast(contrast);
-    effect.setBlurRadius(blurRadius);
-    effect.setMultiRegionMode(true);
+    glass.setTintColor(...this._tintColorArray);
+    glass.setTintStrength(tintStrength);
+    glass.setCornerRadius(this._toggleCornerRadius);
+    glass.setIsDock(false);
+    glass.setBrightness(brightness);
+    glass.setSaturation(saturation);
+    glass.setContrast(contrast);
+    glass.setBlurRadius(blurRadius);
+    glass.setMultiRegionMode(true);
 
-    if (effect instanceof LiquidEffect) {
-      this.liquidBox!.add_effect(effect);
-      this._windowCloneManager = new WindowCloneManager(this.liquidBox!, this._cloneContainer!, 'lg-qs-toggles');
-      this._uiSampler = new UILayerSampler(
-        this.bgActor!,
-        this.liquidBox!,
-        [menuRoot, global.windowGroup, global.window_group],
-        this._cloneContainer!,
-        'quick-settings-toggles'
-      );
-    }
-
-    this.bgActor!.hide();
+    glass.hide();
 
     const startFrameSync = () => this._startFrameSync(() => this._syncToggleRegions(), 'QuickSettingsManager(toggles)', false);
     const stopFrameSync = () => this._stopFrameSync();
@@ -688,9 +630,9 @@ export class QuickSettingsManager {
       id: this.menu.actor.connect('notify::mapped', () => {
         if (!this.menu.actor.mapped) {
           stopFrameSync();
-          if (this.bgActor) {
-            this.bgActor.hide();
-            this.bgActor.opacity = 0;
+          if (this.glass) {
+            this.glass.hide();
+            this.glass.opacity = 0;
           }
         }
       })
@@ -702,25 +644,16 @@ export class QuickSettingsManager {
     }
   }
 
-  private _buildClones(): void {
-    if (!this.bgActor) return;
-    excludeOtherGlass(this._uiSampler, this.bgActor);
-    this._windowCloneManager?.rebuildClones();
-    this._uiSampler?.rebindSelf();
-    this._uiSampler?.refresh();
-  }
-
-  // Follows the stage's frames while the menu is shown, with fresh clones.
+  // Follows the stage's frames while the menu is shown.
   private _startFrameSync(sync: () => void, errorTag: string, honourFreeze: boolean): void {
     if (this._frameSignalId !== 0) return;
-    this._buildClones();
     startSyncLoop(this._frameSignalSlot, this._frameSlot, {
-      alive: () => !!this.bgActor && this.targetActor.mapped,
+      alive: () => !!this.glass && this.targetActor.mapped,
       honourFreeze,
       errorTag,
       step: () => {
         // Checked before this frame's sync dirties anything.
-        ensureGlassAllocated(this.bgActor);
+        ensureGlassAllocated(this.glass);
         sync();
       },
     });
@@ -728,98 +661,6 @@ export class QuickSettingsManager {
 
   private _stopFrameSync(): void {
     stopStageLoop(this._frameSignalSlot, this._frameSlot);
-  }
-
-  // In toggle mode the glass sits between the panel's background and its
-  // contents, so inside each toggle it must show the panel's material (its
-  // background colour, gradient or border image) over what lies behind the
-  // panel. The desktop comes from the samplers; the material is painted by a
-  // bare widget with the panel's style class. Cloning the panel instead would
-  // recurse (the glass is inside it), and snapshotting it would capture its
-  // contents a second time.
-  private _panelActorWarned: boolean = false;
-
-  // The first of the panel's actors with a usable geometry; any of them
-  // gives the same rect, but not all are allocated at all times.
-  _resolvePanelActor(): Clutter.Actor | null {
-    const candidates: (Clutter.Actor | null)[] = [this._menuRoot, this.targetActor, this.animActor];
-    for (const actor of candidates) {
-      if (!actor || !isActorValid(actor)) continue;
-      let [w, h] = actor.get_size();
-      let [x, y] = actor.get_transformed_position();
-      if (Number.isFinite(x) && Number.isFinite(y) && w > 0 && h > 0) return actor;
-    }
-    if (!this._panelActorWarned) {
-      this._panelActorWarned = true;
-      const describe = (a: Clutter.Actor | null) => {
-        if (!a) return 'null';
-        return `${a.get_name() ?? '?'}/${a.constructor.name} ` +
-          `size=${a.get_size()} pos=${a.get_transformed_position()} ` +
-          `mapped=${a.mapped} parent=${a.get_parent()?.get_name() ?? '?'}`;
-      };
-      this._logger.error(
-        '[Liquid Glass][qs-panel-clone] no usable panel actor: ' +
-        `menuRoot=[${describe(this._menuRoot)}] ` +
-        `targetActor=[${describe(this.targetActor)}] ` +
-        `animActor=[${describe(this.animActor)}]`
-      );
-    }
-    return null;
-  }
-
-  // Stage-space [x, y, w, h] of the panel.
-  _resolvePanelRect(): [number, number, number, number] | null {
-    const actor = this._resolvePanelActor();
-    if (!actor) return null;
-    let [x, y] = actor.get_transformed_position();
-    let [w, h] = actor.get_size();
-    return [x, y, w, h];
-  }
-
-  _ensurePanelContentClone(monitorX: number, monitorY: number): void {
-    const panelActor = this._resolvePanelActor();
-    if (!panelActor) return;
-    if (!this._cloneContainer) return;
-
-    if (!isActorValid(this._panelContentClone) || !this._panelContentClone.get_stage()) {
-      if (isActorValid(this._panelContentClone))
-        this._panelContentClone.destroy();
-      let material = new UnpickableWidget();
-      material.set_name('liquid-glass-panel-material');
-      material.set_reactive(false);
-      this._panelContentClone = material;
-      this._panelContentClone.connect('destroy', () => { this._panelContentClone = null; });
-      this._cloneContainer.add_child(this._panelContentClone);
-    }
-
-    // Follows the panel's style class through theme and state changes.
-    let cls = this.animActor.get_style_class_name() || '';
-    if (this._panelContentClone.get_style_class_name() !== cls) {
-      this._panelContentClone.set_style_class_name(cls);
-    }
-
-    // It is placed at the panel's allocation, and St insets the background by
-    // the theme's own margin, just as for the real panel.
-
-    // Above the window clones, which rebuildClones() re-adds.
-    this._cloneContainer.set_child_above_sibling(this._panelContentClone, null);
-
-    let rect = this._resolvePanelRect();
-    if (rect) {
-      // Placed by translation, like the clones (see
-      // WindowCloneManager._syncWindowClone()).
-      if (this._panelContentClone.x !== 0 || this._panelContentClone.y !== 0)
-        this._panelContentClone.set_position(0, 0);
-      this._panelContentClone.translation_x = rect[0] - monitorX;
-      this._panelContentClone.translation_y = rect[1] - monitorY;
-      this._panelContentClone.set_size(rect[2], rect[3]);
-    }
-  }
-
-  _destroyPanelContentClone(): void {
-    if (isActorValid(this._panelContentClone))
-      this._panelContentClone.destroy();
-    this._panelContentClone = null;
   }
 
   // The product of the scales of `actor` and all its ancestors;
@@ -857,8 +698,8 @@ export class QuickSettingsManager {
 
   // Every frame in toggle mode. The menu's own actors are left alone.
   _syncToggleRegions() {
-    if (!this.bgActor || !this.targetActor || !this.targetActor.mapped) {
-      if (this.bgActor && this.bgActor.visible) this.bgActor.hide();
+    if (!this.glass || !this.targetActor || !this.targetActor.mapped) {
+      if (this.glass && this.glass.visible) this.glass.hide();
       this._lastGoodRegions = null;
       this._regionGraceFrames = 0;
       return;
@@ -871,45 +712,44 @@ export class QuickSettingsManager {
     let screenW = Math.max(1, monitor?.width ?? 1);
     let screenH = Math.max(1, monitor?.height ?? 1);
 
-    const [bgPosX, bgPosY] = this._placeToggleHost(this.bgActor, monitorX, monitorY);
-    setPositionIfChanged(this.bgActor, bgPosX, bgPosY);
+    const [bgPosX, bgPosY] = this._placeToggleHost(this.glass, monitorX, monitorY);
+    setPositionIfChanged(this.glass, bgPosX, bgPosY);
 
     const toggles = this._toggleStyles.sync(this.menu?.actor);
 
-    this._ensurePanelContentClone(monitorX, monitorY);
-
     if (toggles.length === 0 && !this._canReuseLastRegions()) {
-      this.bgActor.hide();
+      this.glass.hide();
       return;
     }
 
     const layout = this._resolveToggleRegions(this._collectToggleRegions(toggles, monitorX, monitorY));
     if (!layout) {
-      this.bgActor.hide();
+      this.glass.hide();
       return;
     }
 
-    if (!this.bgActor.visible) this.bgActor.show();
+    if (!this.glass.visible) this.glass.show();
     // Fade with the menu, which the shell animates on menu.actor's first child.
-    this.bgActor.opacity = this.targetActor.get_first_child()?.opacity ?? 255;
+    this.glass.opacity = this.targetActor.get_first_child()?.opacity ?? 255;
 
-    this.effect?.setGlassRegions(layout.regions);
+    this.glass.setGlassRegions(layout.regions);
 
-    this._applyToggleBounds(this.bgActor, layout.minX, layout.minY, layout.maxX - layout.minX, layout.maxY - layout.minY,
+    this._applyToggleBounds(this.glass, layout.minX, layout.minY, layout.maxX - layout.minX, layout.maxY - layout.minY,
       bgPosX, bgPosY, screenW, screenH);
-    this._syncCaptureLayers(monitorX, monitorY, screenW, screenH);
+    // After the geometry setters, so the relays cover this frame's rect.
+    this.glass.syncSources();
   }
 
   /**
    * Keeps the glass host at the bottom of the menu box (the shell reorders
    * the box's children when toggles come and go), and returns the position
-   * that puts bgActor's origin on the monitor origin despite the box's own
-   * position and inherited scale, which is also undone on bgActor.
+   * that puts the glass's origin on the monitor origin despite the box's own
+   * position and inherited scale, which is also undone on the glass.
    */
   // Every write here is made only on change: Clutter queues a redraw even
   // for the same value, and the sync runs in before-update, so each write
   // would ask for another frame.
-  private _placeToggleHost(bgActor: Clutter.Actor, monitorX: number, monitorY: number): [number, number] {
+  private _placeToggleHost(glass: Clutter.Actor, monitorX: number, monitorY: number): [number, number] {
     if (this.animActor.get_first_child() !== this._toggleGlassHost)
       this.animActor.set_child_below_sibling(this._toggleGlassHost, null);
 
@@ -918,7 +758,7 @@ export class QuickSettingsManager {
 
     if (!Number.isFinite(hostAbsX) || !Number.isFinite(hostAbsY)) return [monitorX, monitorY];
     // The pivot is (0, 0), so the scale does not move the origin.
-    setScaleIfChanged(bgActor, 1.0 / accScaleX, 1.0 / accScaleY);
+    setScaleIfChanged(glass, 1.0 / accScaleX, 1.0 / accScaleY);
     return [(monitorX - hostAbsX) / accScaleX, (monitorY - hostAbsY) / accScaleY];
   }
 
@@ -973,15 +813,15 @@ export class QuickSettingsManager {
     return this._takeLastRegions();
   }
 
-  private _applyToggleBounds(bgActor: Clutter.Actor, localBgX: number, localBgY: number, bgW: number, bgH: number,
+  private _applyToggleBounds(glass: BackdropGlass | ToggleBackdropGlass, localBgX: number, localBgY: number, bgW: number, bgH: number,
     bgPosX: number, bgPosY: number, screenW: number, screenH: number) {
     if (this._lastBoundsSpace === 'toggles' && this._lastBgW === bgW && this._lastBgH === bgH &&
       this._lastBgX === localBgX && this._lastBgY === localBgY &&
       this._lastHostX === bgPosX && this._lastHostY === bgPosY &&
       this._lastScreenW === screenW && this._lastScreenH === screenH) return;
-    placeScreenGlass(bgActor, this.liquidBox, bgPosX, bgPosY, screenW, screenH,
-      { x: localBgX, y: localBgY, w: bgW, h: bgH }, true);
-    this.effect?.setResolution(screenW, screenH);
+    placeScreenGlass(glass, bgPosX, bgPosY, screenW, screenH,
+      { x: localBgX, y: localBgY, w: bgW, h: bgH });
+    glass.setResolution(screenW, screenH);
 
     this._lastBoundsSpace = 'toggles';
     this._lastHostX = bgPosX; this._lastHostY = bgPosY;
@@ -990,36 +830,16 @@ export class QuickSettingsManager {
     this._lastScreenW = screenW; this._lastScreenH = screenH;
   }
 
-  private _syncCaptureLayers(monitorX: number, monitorY: number, screenW: number, screenH: number) {
-    if (this._backdrop) {
-      this._backdrop.syncSources();
-      return;
-    }
-    this._windowCloneManager?.setOffset(-monitorX, -monitorY);
-    // After the geometry uniforms and before the samplers sync (see capture/clip.ts).
-    syncGlassCaptureClip({
-      cloneContainer: this._cloneContainer,
-      effect: this.effect,
-      originX: monitorX,
-      originY: monitorY,
-      uiSampler: this._uiSampler,
-      windowCloneManager: this._windowCloneManager,
-    });
-    this._uiSampler?.refresh();
-    this._uiSampler?.sync(monitorX, monitorY, screenW, screenH);
-    this._windowCloneManager?.sync();
-  }
-
   // Every frame in background mode.
   _syncGeometry() {
-    if (!this.bgActor || !this.targetActor || !this.targetActor.mapped) {
-      if (this.bgActor && this.bgActor.visible) this.bgActor.hide();
+    if (!this.glass || !this.targetActor || !this.targetActor.mapped) {
+      if (this.glass && this.glass.visible) this.glass.hide();
       return;
     }
-    if (!this.bgActor.visible) this.bgActor.show();
+    if (!this.glass.visible) this.glass.show();
 
     if (!this._enableAnimation)
-      this.bgActor.opacity = this.targetActor.get_first_child()?.opacity ?? 255;
+      this.glass.opacity = this.targetActor.get_first_child()?.opacity ?? 255;
 
     const { w, h, scaleX, scaleY } = this._measurePanel();
     const [animAbsX, animAbsY] = this._resolvePanelOrigin(w);
@@ -1036,8 +856,9 @@ export class QuickSettingsManager {
       let screenW = Math.max(1, monitor?.width ?? 1);
       let screenH = Math.max(1, monitor?.height ?? 1);
 
-      this._applyPanelBounds(this.bgActor, bgX, bgY, bgW, bgH, monitorX, monitorY, screenW, screenH);
-      this._syncCaptureLayers(monitorX, monitorY, screenW, screenH);
+      this._applyPanelBounds(this.glass, bgX, bgY, bgW, bgH, monitorX, monitorY, screenW, screenH);
+      // After the geometry setters, so the relays cover this frame's rect.
+      this.glass.syncSources();
     }
 
     this._applyGlassScale(scaleX, scaleY);
@@ -1107,7 +928,7 @@ export class QuickSettingsManager {
     });
   }
 
-  private _applyPanelBounds(bgActor: Clutter.Actor, bgX: number, bgY: number, bgW: number, bgH: number,
+  private _applyPanelBounds(glass: BackdropGlass | ToggleBackdropGlass, bgX: number, bgY: number, bgW: number, bgH: number,
     monitorX: number, monitorY: number, screenW: number, screenH: number) {
     if (this._lastBoundsSpace === 'panel' && this._lastBgW === bgW && this._lastBgH === bgH &&
       this._lastBgX === bgX && this._lastBgY === bgY &&
@@ -1116,12 +937,12 @@ export class QuickSettingsManager {
     // Monitor-local, as the shader uses them.
     let localBgX = bgX - monitorX;
     let localBgY = bgY - monitorY;
-    placeScreenGlass(bgActor, this.liquidBox, monitorX, monitorY, screenW, screenH,
-      { x: localBgX, y: localBgY, w: bgW, h: bgH }, true);
+    placeScreenGlass(glass, monitorX, monitorY, screenW, screenH,
+      { x: localBgX, y: localBgY, w: bgW, h: bgH });
 
-    this.effect?.setShadowMaxRadius(GLASS_SHADOW_MAX_RADIUS);
-    this.effect?.setResolution(screenW, screenH);
-    this.effect?.setGlassGeometry(localBgX, localBgY, bgW, bgH);
+    glass.setShadowMaxRadius(GLASS_SHADOW_MAX_RADIUS);
+    glass.setResolution(screenW, screenH);
+    glass.setGlassGeometry(localBgX, localBgY, bgW, bgH);
 
     this._lastBoundsSpace = 'panel';
     this._lastBgW = bgW; this._lastBgH = bgH;
@@ -1130,14 +951,14 @@ export class QuickSettingsManager {
   }
 
   private _applyGlassScale(scaleX: number, scaleY: number) {
-    applyGlassScale(this.effect, this._cornerRadius, scaleX, scaleY);
+    applyGlassScale(this.glass, this._cornerRadius, scaleX, scaleY);
   }
 
   _updateResolution() {
-    if (!this.bgActor || !this.effect) return;
-    let [width, height] = this.bgActor.get_size();
+    if (!this.glass) return;
+    let [width, height] = this.glass.get_size();
     if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
-      this.effect.setResolution(width, height);
+      this.glass.setResolution(width, height);
     }
   }
 
@@ -1321,7 +1142,7 @@ export class QuickSettingsManager {
       .chooseColorsForActors(targets, this._adaptiveConfig, this.menu?.actor,
         // In toggle mode the text is not drawn over the glass, so the glass's
         // paint count says nothing about the sampled pixels.
-        () => this._activeMode === 'background' ? this.effect?.paintCount ?? NaN : NaN)
+        () => this._activeMode === 'background' ? this.glass?.paintCount ?? NaN : NaN)
       .then(colorMap => {
         if (generation !== this._adaptiveGeneration || !this._adaptiveConfig.enabled) return;
         this._applyAdaptiveColorMap(colorMap, skipAnimations);
@@ -1535,12 +1356,12 @@ export class QuickSettingsManager {
     }
 
     if (!this._enableAnimation) {
-      showMenuAtRest(this.bgActor, this.animActor);
+      showMenuAtRest(this.glass, this.animActor);
       return;
     }
 
     if (this.animActor) this.animActor.remove_all_transitions();
-    if (this.bgActor) this.bgActor.remove_all_transitions();
+    if (this.glass) this.glass.remove_all_transitions();
 
     this._springScale.target = targetValue;
 
@@ -1548,7 +1369,7 @@ export class QuickSettingsManager {
       let lastTime = GLib.get_monotonic_time();
 
       this._tickId = addFrameTicker(() => {
-        if (!this.bgActor || !this.targetActor) {
+        if (!this.glass || !this.targetActor) {
           this._tickId = 0;
           return GLib.SOURCE_REMOVE;
         }
@@ -1559,7 +1380,7 @@ export class QuickSettingsManager {
 
         const frame = stepMenuSpring(this._springScale, elapsedMs);
         if (frame.stopped) this._tickId = 0;
-        applyMenuFrame(frame, this.animActor, this.bgActor, this.menu.actor, () => this._syncGeometry());
+        applyMenuFrame(frame, this.animActor, this.glass, this.menu.actor, () => this._syncGeometry());
         return frame.stopped ? GLib.SOURCE_REMOVE : GLib.SOURCE_CONTINUE;
       }, normalizeAnimationIntervalMs(this._animationInterval));
     }
@@ -1643,34 +1464,23 @@ export class QuickSettingsManager {
     this._clearButtonStyles();
     this._clearSubmenuFix();
     this._toggleStyles.clear();
-    this._destroyPanelContentClone();
 
     this._disconnectEffectSignals();
     this._restoreMenuActors();
 
-    // The effect is cleaned up before its actor is destroyed.
-    if (this.effect) {
-      this.effect.cleanup();
-      this.effect = null;
+    const glass = this.glass;
+    this.glass = null;
+    if (glass) {
+      glass.cleanup();
+      // At shell shutdown the stage may have destroyed it already.
+      if (isActorValid(glass)) glass.destroy();
     }
-    this._backdrop = null;
-
-    // At shell shutdown the stage may have destroyed it already.
-    if (isActorValid(this.bgActor)) this.bgActor!.destroy();
-    this.bgActor = null;
-    // The toggle-mode host is bgActor's parent, not destroyed with it.
+    // The toggle-mode host is the glass's parent, not destroyed with it.
     if (this._toggleGlassHost) {
       if (isActorValid(this._toggleGlassHost))
         this._toggleGlassHost.destroy();
       this._toggleGlassHost = null;
     }
-    this.liquidBox = null;
-    this._cloneContainer = null;
-
-    this._uiSampler?.destroy();
-    this._uiSampler = null;
-    this._windowCloneManager?.destroy();
-    this._windowCloneManager = null;
 
     this._stableBaseW = undefined;
     this._stableBaseH = undefined;
@@ -1723,7 +1533,7 @@ export class QuickSettingsManager {
       this.menu.actor.opacity = 255;
       this.menu.actor.translation_x = 0;
       this.menu.actor.translation_y = 0;
-      if (this.menu.isOpen) this.menu.close(false);
+      if (this.menu.isOpen) this.menu.close(MENU_NO_ANIMATION);
     }
   }
 

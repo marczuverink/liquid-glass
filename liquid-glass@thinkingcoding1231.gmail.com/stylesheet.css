@@ -10,11 +10,6 @@
     transition-duration: 0ms !important;
 }
 
-/* The actor that carries the glass effect. */
-.liquid-glass-bg-actor {
-    background-color: transparent !important;
-}
-
 /* Dash to Dock's own background, only while it has glass. */
 #dashtodockDashContainer.liquid-glass-transparent,
 .liquid-glass-transparent #dashtodockContainer,

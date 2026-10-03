@@ -1,7 +1,7 @@
 # Liquid Glass for GNOME Shell
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
-![GNOME Shell](https://img.shields.io/badge/GNOME-50-green.svg)
+![GNOME Shell](https://img.shields.io/badge/GNOME-50%20%7C%2051-green.svg)
 
 A GNOME Shell Extension that replicates the "Liquid Glass" UI concept using shaders on your desktop.
 

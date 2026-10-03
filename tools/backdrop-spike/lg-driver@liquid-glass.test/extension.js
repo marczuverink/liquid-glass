@@ -5,14 +5,15 @@
 // Scenarios ($LG_DRV_SCENARIO):
 //   dock       the dock over windows, a changing background and UI actors
 //   ui         the calendar menu, Quick Settings, a notification and the OSD
-//   toggles    Quick Settings in toggle mode, and an A/B with the clone capture
+//   toggles    Quick Settings in toggle mode
 //   fullstage  how many frames redraw the whole stage while the calendar opens
-//   monitor    global._lgGlass.monitor() while windows move and a menu opens;
-//              LG_DRV_CAPTURE=1 runs it with the clone-capturing glass
+//   monitor    global._lgGlass.monitor() while windows move and a menu opens
 //   lifecycle  disables and enables Liquid Glass with every glass shown once
+//   window     application glass on a foot window: drag, a busy window behind,
+//              a change in front, minimise, resize and close
 //   bench      global._lgBench.run() (run-glass.sh with LG_BENCH=1); LG_DRV_BENCH
 //              picks scenarios (comma separated, default all), LG_DRV_BENCH_SECONDS
-//              the seconds per scenario (default 3), LG_DRV_BENCH_AB=1 runs both modes
+//              the seconds per scenario (default 3), LG_DRV_BENCH_AB=1 adds a run without UI glass
 //
 // Screenshots are off-stage paints, where a stage-reading glass draws with
 // its last on-screen copy. The camera shows what was really on screen: while
@@ -49,7 +50,7 @@ function sleep(ms) {
 }
 
 function coglContext() {
-  return Clutter.get_default_backend().get_cogl_context();
+  return global.stage.context.get_backend().get_cogl_context();
 }
 
 function shot(name, [x, y, w, h]) {
@@ -232,6 +233,8 @@ export default class LgDriver extends Extension {
       await this._monitorScenario();
     else if (SCENARIO === 'lifecycle')
       await this._lifecycleScenario();
+    else if (SCENARIO === 'window')
+      await this._windowScenario();
     else if (SCENARIO === 'bench')
       await this._benchScenario();
     log(`dump\n${lg().dump()}`);
@@ -255,9 +258,8 @@ export default class LgDriver extends Extension {
     return Extension.lookupByUUID(LG_UUID).getSettings();
   }
 
-  // Rebuilds one surface's glass with the backdrop switch set as given.
-  async _rebuild(key, backdrop) {
-    lg().backdrop(backdrop);
+  // Rebuilds one surface's glass by switching it off and on.
+  async _rebuild(key) {
     const settings = this._lgSettings();
     settings.set_boolean(key, false);
     await sleep(300);
@@ -336,7 +338,7 @@ export default class LgDriver extends Extension {
   // the backdrop changing behind the glass, that frame must take a new copy.
   // With `expectCopy` false (a change in front of the glass), it must not.
   async _audit(tag, owner, steps, intervalMs, step, expectCopy = true) {
-    const glass = this._glass(owner);
+    const glass = typeof owner === 'string' ? this._glass(owner) : owner;
     if (!glass) {
       log(`${tag} audit: no stage-reading ${owner} glass`);
       return;
@@ -461,10 +463,8 @@ export default class LgDriver extends Extension {
       await sleep(800);
     }
     await this._shots('d6 backdrop', region, 'dock');
-    await this._rebuild('enable-dock-glass', false);
-    await this._shots('d7 capture', region, 'dock');
-    await this._rebuild('enable-dock-glass', true);
-    await this._shots('d8 backdrop-again', region, 'dock');
+    await this._rebuild('enable-dock-glass');
+    await this._shots('d7 rebuilt', region, 'dock');
   }
 
   // Opens, checks and closes one menu-like surface.
@@ -527,11 +527,7 @@ export default class LgDriver extends Extension {
     const showOsd = () => Main.osdWindowManager.showAll(Gio.ThemedIcon.new('audio-volume-high-symbolic'), 'Volume', 0.6, 1);
     await this._surface('o1 osd', 'osd', showOsd, () => Main.osdWindowManager.hideAll(), showOsd);
 
-    // The calendar again through the clone capture, for an A/B of the image.
-    await this._menuShot('m2 calendar-backdrop', dateMenu, 'menu');
-    await this._rebuild('enable-menu-glass', false);
-    await this._menuShot('m3 calendar-capture', dateMenu, 'menu');
-    lg().backdrop(true);
+    await this._menuShot('m2 calendar-again', dateMenu, 'menu');
   }
 
   async _togglesScenario() {
@@ -547,10 +543,7 @@ export default class LgDriver extends Extension {
     qs.close(true);
     await sleep(1000);
     await this._surface('t1 toggles', 'quick-settings-toggles', () => qs.open(true), () => qs.close(true));
-    await this._menuShot('t2 toggles-backdrop', qs, 'quick-settings-toggles');
-    await this._rebuild('enable-quick-settings-glass', false);
-    await this._menuShot('t3 toggles-capture', qs, 'quick-settings-toggles');
-    lg().backdrop(true);
+    await this._menuShot('t2 toggles-again', qs, 'quick-settings-toggles');
   }
 
   async _menuShot(tag, menu, owner) {
@@ -586,10 +579,6 @@ export default class LgDriver extends Extension {
   }
 
   async _monitorScenario() {
-    if (GLib.getenv('LG_DRV_CAPTURE') === '1') {
-      await this._rebuild('enable-dock-glass', false);
-      await this._rebuild('enable-menu-glass', false);
-    }
     lg().monitor(0);
     await sleep(2200);
     const region = this._region('dock');
@@ -636,6 +625,99 @@ export default class LgDriver extends Extension {
     };
     walk(global.stage);
     return names;
+  }
+
+  // The glass inside a window actor.
+  _windowGlass(actor) {
+    return lg()?.glassObjects().find(g => g.get_parent() === actor) ?? null;
+  }
+
+  _windowRegion(win, margin = 90) {
+    const r = win.get_frame_rect();
+    const m = Main.layoutManager.primaryMonitor;
+    const x = Math.max(0, r.x - margin), y = Math.max(0, r.y - margin);
+    return [x, y, Math.min(m.width - x, r.width + margin * 2), Math.min(m.height - y, r.height + margin * 2)];
+  }
+
+  async _windowScenario() {
+    // A white desktop, where a drop shadow's banding shows most.
+    const bg = new Gio.Settings({schema_id: 'org.gnome.desktop.background'});
+    bg.set_string('picture-uri', '');
+    bg.set_string('picture-uri-dark', '');
+    bg.set_string('picture-options', 'none');
+    bg.set_string('color-shading-type', 'solid');
+    bg.set_string('primary-color', '#ffffff');
+    const settings = this._lgSettings();
+    settings.set_strv('application-window-whitelist', ['foot']);
+    settings.set_boolean('enable-application-glass', true);
+    await sleep(500);
+    const b = await this._spawn(['foot', '-o', 'colors.background=20a040', '-o', 'cursor.blink=no', '-T', 'lgdrv-b'], 'lgdrv-b');
+    const a = await this._spawn(['foot', '-o', 'colors.background=d02020', '-o', 'cursor.blink=no', '-T', 'lgdrv-a'], 'lgdrv-a');
+    if (!a || !b) {
+      log('window: no windows');
+      return;
+    }
+    b.win.move_resize_frame(true, 300, 200, 500, 400);
+    a.win.move_resize_frame(true, 600, 300, 500, 400);
+    a.win.activate(global.get_current_time());
+    await sleep(1500);
+    const glass = this._windowGlass(a.actor);
+    log(`w0 glass=${glass ? JSON.stringify(glass.describe()) : 'none'} wmclass=${a.win.get_wm_class()}`);
+    if (!glass)
+      return;
+    await this._shots('w0 window', this._windowRegion(a.win), 'application');
+    await this._idle('w0', 'application', 2000);
+
+    // The window behind moves under the glass.
+    await this._audit('w1 behind-move', glass, 15, 80, i => b.win.move_frame(true, 300 + (i + 1) * 10, 200));
+    // The glass's own window is dragged.
+    await this._audit('w2 window-drag', glass, 20, 50, i => a.win.move_frame(true, 600 + (i + 1) * 12, 300));
+    await sleep(300);
+    await this._shots('w2 moved', this._windowRegion(a.win), 'application');
+
+    // A window behind that redraws every frame.
+    const g = await this._spawn(['glxgears'], 'glxgears');
+    if (g) {
+      const r = a.win.get_frame_rect();
+      g.win.move_frame(true, r.x - 150, r.y + 100);
+      a.win.activate(global.get_current_time());
+      await sleep(1000);
+      await this._audit('w3 gears-behind', glass, 30, 40, () => {});
+      await this._shots('w3 gears', this._windowRegion(a.win), 'application');
+      g.proc.force_exit();
+      await sleep(800);
+    }
+
+    // A change in front of the window is not behind its glass.
+    const r = a.win.get_frame_rect();
+    const front = this._add(new St.Widget({name: 'drv-front', reactive: false, style: 'background-color: rgb(0,255,255);'}));
+    front.set_position(r.x + 100, r.y + 100);
+    front.set_size(60, 60);
+    await sleep(500);
+    await this._audit('w4 front-colour', glass, 10, 120, i => front.set_style(`background-color: ${COLORS[i % 2]};`), false);
+    this._drop(front);
+
+    // Resize, then minimise and restore.
+    a.win.move_resize_frame(true, r.x, r.y, 640, 460);
+    await sleep(1200);
+    log(`w5 resized glass=${JSON.stringify({size: glass.get_size(), pos: [glass.x, glass.y]})}`);
+    await this._shots('w5 resized', this._windowRegion(a.win), 'application');
+    a.win.minimize();
+    await sleep(1200);
+    a.win.unminimize();
+    a.win.activate(global.get_current_time());
+    await sleep(1500);
+    log(`w6 restored mapped=${glass.mapped} alloc=${glass.has_allocation()} stats=${JSON.stringify(glass.stats)}`);
+    await this._shots('w6 restored', this._windowRegion(a.win), 'application');
+
+    // Closing the window takes its glass along.
+    a.proc.force_exit();
+    await sleep(1500);
+    log(`w7 closed glasses=${lg().glassObjects().filter(x => x._owner === 'application').length}`);
+    settings.set_boolean('enable-application-glass', false);
+    await sleep(800);
+    log(`w8 disabled glasses=${lg().glassObjects().filter(x => x._owner === 'application').length} ` +
+      `windowActorChildren=${b.actor.get_n_children()}`);
   }
 
   async _lifecycleScenario() {

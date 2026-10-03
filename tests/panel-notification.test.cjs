@@ -114,7 +114,6 @@ function notificationFixture() {
     resolveMonitorGeometry: () => monitor,
     // Perf helpers from the render branch; stubbed to their plain behaviour.
     setClipIfChanged: (actor, ...clip) => actor.set_clip(...clip),
-    syncGlassCaptureClip: () => {},
     isFrameSyncFrozen: () => false,
   });
   const manager = new C('', new Settings(), { error() {} });
@@ -123,28 +122,28 @@ function notificationFixture() {
 function actorStub() {
   return { visible: false, opacity: 0, show() { this.visible = true; }, hide() { this.visible = false; },
     set_position(...v) { this.position = v; }, set_size(...v) { this.size = v; },
-    set_clip() {}, remove_clip() {}, remove_transition() {} };
+    set_clip() {}, remove_clip() {}, remove_transition() {},
+    setShadowMaxRadius() {}, setResolution() {}, setGlassGeometry(...v) { this.geometry = v; }, syncSources() {} };
 }
 test('notification glass follows transformed dimensions and inherited opacity on offset monitor', () => {
   const { manager: m } = notificationFixture();
   m.currentBanner = { rect: [2100, 250, 360, 90], mapped: true, get_paint_opacity: () => 80 };
-  m.bgActor = actorStub(); m.liquidBox = actorStub();
-  m.effect = { setShadowMaxRadius() {}, setResolution() {}, setGlassGeometry(...v) { this.geometry = v; } };
+  m.glass = actorStub();
   m._syncGeometry();
-  assert.deepEqual(m.bgActor.position, [1920, 200]);
-  assert.deepEqual(m.effect.geometry, [148, 18, 424, 154]);
-  assert.equal(m.bgActor.opacity, 80);
+  assert.deepEqual(m.glass.position, [1920, 200]);
+  assert.deepEqual(m.glass.geometry, [148, 18, 424, 154]);
+  assert.equal(m.glass.opacity, 80);
   m.currentBanner.rect = [2100, 240, 400, 100]; m._syncGeometry();
-  assert.deepEqual(m.effect.geometry, [148, 8, 464, 164]);
+  assert.deepEqual(m.glass.geometry, [148, 8, 464, 164]);
 });
 
 test('notification glass hides when ancestor is hidden or fully faded', () => {
   const { manager: m, tray } = notificationFixture();
   m.currentBanner = { rect: [2100, 250, 360, 90], mapped: true, get_paint_opacity: () => 0 };
-  m.bgActor = actorStub(); m.bgActor.visible = true; m._syncGeometry();
-  assert.equal(m.bgActor.visible, false);
+  m.glass = actorStub(); m.glass.visible = true; m._syncGeometry();
+  assert.equal(m.glass.visible, false);
   m.currentBanner.get_paint_opacity = () => 255; tray.visible = false;
-  m.bgActor.visible = true; m._syncGeometry(); assert.equal(m.bgActor.visible, false);
+  m.glass.visible = true; m._syncGeometry(); assert.equal(m.glass.visible, false);
 });
 
 test('removing a banner before deferred setup cancels its glass', () => {

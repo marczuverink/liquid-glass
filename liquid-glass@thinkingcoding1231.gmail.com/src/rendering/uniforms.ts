@@ -42,8 +42,8 @@ export class UniformState {
 
   private _appliedUniformArrays: Map<string, number[]> = new Map();
 
-  // Set when a value actually changed; LiquidEffect repaints only then.
-  // Changes behind the glass arrive as damage through the clones, not here.
+  // Set when a value actually changed; the glass repaints only then.
+  // Changes behind the glass arrive through the relays, not here.
   private _uniformsDirty: boolean = false;
 
   // Reused for scalar uploads; Cogl copies the values during the call.

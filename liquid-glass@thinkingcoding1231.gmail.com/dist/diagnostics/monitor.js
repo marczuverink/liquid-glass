@@ -7,6 +7,7 @@
 // the lines. tools/perf/glass-monitor.sh averages them per scene or label.
 import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import Mtk from 'gi://Mtk';
@@ -20,7 +21,6 @@ const BUSY_DAMAGE = 10;
 const MAX_ACTIVE_WINDOWS = 4;
 // /proc reports CPU time in USER_HZ, which is 100 on every Linux architecture.
 const USER_HZ = 100;
-const APP_PROFILES = new Set(['application', 'desktop-menu']);
 // Paints nothing; notes whether a frame redrew its whole monitor. Registered
 // on first use, so the type exists only once someone monitors. Offscreen
 // paints (clones, screenshots) have no redraw clip and are not counted.
@@ -104,8 +104,13 @@ class GlassMonitor {
     _busy = new Gauge();
     _clock = new Gauge();
     _power = new Gauge();
+    // The shell's CPU ticks at the last report, and as last read.
     _cpuTicks = null;
     _cpuTime = 0;
+    _latestTicks = null;
+    _latestTicksAt = 0;
+    // Cancels the file reads still in flight when the record stops.
+    _cancellable = new Gio.Cancellable();
     _label = null;
     _labelChanged = false;
     _probes = [];
@@ -126,11 +131,9 @@ class GlassMonitor {
 
     start() {
         this._sensors = findGpuSensors();
-        this._cpuTicks = readProcessTicks();
-        this._cpuTime = GLib.get_monotonic_time();
         for (const m of Main.layoutManager.monitors) {
             const probe = createProbe([m.x, m.y, m.width, m.height]);
-            // Outside uiGroup, which the capturing glass clones.
+            // Painted last, after everything that can redraw.
             global.stage.add_child(probe);
             this._probes.push(probe);
         }
@@ -166,6 +169,7 @@ class GlassMonitor {
     }
 
     stop() {
+        this._cancellable.cancel();
         if (this._sampleId)
             GLib.Source.remove(this._sampleId);
         this._sampleId = 0;
@@ -200,17 +204,34 @@ class GlassMonitor {
     }
 
     _sample() {
-        this._busy.add(readMax(this._sensors.busy));
-        const hz = readMax(this._sensors.clock);
-        this._clock.add(hz === null ? null : hz / 1e6);
-        const microwatts = readSum(this._sensors.power);
-        this._power.add(microwatts === null ? null : microwatts / 1e6);
+        this._readCounters();
         this._sampleWindows();
         this._sampleGlass();
         this._overview ||= Main.overview.visible;
         this._locked ||= Main.sessionMode.isLocked;
         for (let i = 0; i < global.display.get_n_monitors(); i++)
             this._fullscreen ||= global.display.get_monitor_in_fullscreen(i);
+    }
+
+    // The GPU sensors and the shell's CPU time, read without blocking the
+    // compositor.
+    async _readCounters() {
+        const cancellable = this._cancellable;
+        const [busy, hz, microwatts, ticks] = await Promise.all([
+            readMax(this._sensors.busy, cancellable),
+            readMax(this._sensors.clock, cancellable),
+            readSum(this._sensors.power, cancellable),
+            readProcessTicks(cancellable),
+        ]);
+        if (cancellable.is_cancelled())
+            return;
+        this._busy.add(busy);
+        this._clock.add(hz === null ? null : hz / 1e6);
+        this._power.add(microwatts === null ? null : microwatts / 1e6);
+        if (ticks !== null) {
+            this._latestTicks = ticks;
+            this._latestTicksAt = GLib.get_monotonic_time();
+        }
     }
 
     _sampleWindows() {
@@ -241,36 +262,22 @@ class GlassMonitor {
         }
     }
 
-    *_glassViews() {
-        for (const glass of this._sources.glasses()) {
-            yield { key: glass, owner: glass._owner, stage: true, actor: glass, values: glass.uniformValues,
-                painting: glass.mapped && glass.get_paint_opacity() > 0 };
-        }
-        for (const fx of this._sources.effects()) {
-            const actor = fx.get_actor();
-            if (!actor)
-                continue;
-            yield { key: fx, owner: fx._owner, stage: false, actor, values: fx._uniforms.values,
-                painting: fx.get_enabled() && actor.mapped && actor.get_paint_opacity() > 0 };
-        }
-    }
-
     _sampleGlass() {
         const stage = [0, 0, global.stage.width, global.stage.height];
         const seen = new Set();
-        for (const view of this._glassViews()) {
-            seen.add(view.key);
-            const rect = view.painting ? glassStageRect(view.actor, view.values) : null;
-            const shown = view.painting && (rect === null || overlaps(rect, stage));
-            let track = this._glass.get(view.key);
+        for (const glass of this._sources()) {
+            seen.add(glass);
+            const painting = glass.mapped && glass.get_paint_opacity() > 0;
+            const rect = painting ? glassStageRect(glass, glass.uniformValues) : null;
+            const shown = painting && (rect === null || overlaps(rect, stage));
+            let track = this._glass.get(glass);
             if (!track) {
-                track = { owner: view.owner, name: displayName(view.owner), stage: view.stage, actor: view.actor, rect, shown: false, moved: false };
-                this._glass.set(view.key, track);
+                track = { owner: glass._owner, name: displayName(glass._owner), actor: glass, rect, shown: false, moved: false };
+                this._glass.set(glass, track);
             }
             else if (shown && rect && track.rect && rect.join() !== track.rect.join()) {
                 track.moved = true;
             }
-            track.actor = view.actor;
             if (rect)
                 track.rect = rect;
             track.shown ||= shown;
@@ -287,28 +294,14 @@ class GlassMonitor {
     }
 
     _snapshotCounters() {
-        for (const glass of this._sources.glasses())
+        for (const glass of this._sources())
             this._last.set(glass, this._counters(glass));
-        for (const fx of this._sources.effects())
-            this._last.set(fx, { paints: fx._diagPaintCount ?? 0, blurs: fx._blurRuns ?? 0 });
     }
 
-    // stage or capture by how the live UI glass is built; the window glass
-    // always captures.
+    // Kept as the scene's first field, which tools/perf/glass-monitor.sh groups
+    // the summary by.
     _mode() {
-        let stage = false;
-        let capture = false;
-        for (const track of this._glass.values()) {
-            if (track.stage)
-                stage = true;
-            else if (!APP_PROFILES.has(track.owner))
-                capture = true;
-        }
-        if (stage && capture)
-            return 'mixed';
-        if (stage)
-            return 'stage';
-        return capture ? 'capture' : 'no-ui-glass';
+        return this._glass.size > 0 ? 'stage' : 'no-glass';
     }
 
     _glassScene() {
@@ -370,7 +363,7 @@ class GlassMonitor {
         return `${shown} win${listed.length ? `: ${listed.join(', ')}` : ''}`;
     }
 
-    // How the UI glass is built; the glass on screen (~ when it moved); the
+    // Whether there is glass at all; the glass on screen (~ when it moved); the
     // windows shown and the busy (damaged BUSY_DAMAGE times), moving or
     // animating ones, with @ for each glass they overlap; then overview,
     // ws-switch, fullscreen and locked.
@@ -407,7 +400,7 @@ class GlassMonitor {
         this._totals.cpu += cpu ?? 0;
         this._totals.frames += this._frames;
         this._totals.full += full;
-        for (const glass of this._sources.glasses()) {
+        for (const glass of this._sources()) {
             const now = this._counters(glass);
             const last = this._last.get(glass) ?? now;
             this._last.set(glass, now);
@@ -417,15 +410,6 @@ class GlassMonitor {
             const relays = glass.describe().relays?.length ?? 0;
             parts.push(`${displayName(glass._owner)} copies=${d('copies')} reuses=${d('reuses')} paints=${d('paints')} ` +
                 `blurs=${d('blurs')} relays=${relays}${glass.mapped ? '' : ' (hidden)'}`);
-        }
-        for (const fx of this._sources.effects()) {
-            const now = { paints: fx._diagPaintCount ?? 0, blurs: fx._blurRuns ?? 0 };
-            const last = this._last.get(fx) ?? now;
-            this._last.set(fx, now);
-            const paints = now.paints - last.paints;
-            if (paints === 0)
-                continue;
-            parts.push(`${displayName(fx._owner)}(capture) paints=${paints} blurs=${now.blurs - last.blurs}`);
         }
         diagnosticLog(`[Liquid Glass][monitor] ${parts.join(' | ')}`);
         this._frames = 0;
@@ -449,14 +433,14 @@ class GlassMonitor {
         this._workspaceSwitched = false;
     }
 
-    // The shell's CPU time since the last call, as a percentage of one core.
+    // The shell's CPU time since the last report, as a percentage of one core.
     _cpuPercent() {
-        const ticks = readProcessTicks();
-        const now = GLib.get_monotonic_time();
+        const ticks = this._latestTicks;
+        const at = this._latestTicksAt;
         const last = this._cpuTicks;
-        const seconds = (now - this._cpuTime) / 1e6;
+        const seconds = (at - this._cpuTime) / 1e6;
         this._cpuTicks = ticks;
-        this._cpuTime = now;
+        this._cpuTime = at;
         if (ticks === null || last === null || !(seconds > 0))
             return null;
         return (ticks - last) / USER_HZ / seconds * 100;
@@ -526,40 +510,45 @@ function findGpuSensors() {
     return sensors;
 }
 
-function readMax(files) {
+async function readMax(files, cancellable) {
     let result = null;
-    for (const file of files) {
-        const value = readNumber(file);
+    for (const value of await Promise.all(files.map(file => readNumber(file, cancellable)))) {
         if (value !== null && (result === null || value > result))
             result = value;
     }
     return result;
 }
 
-function readSum(files) {
+async function readSum(files, cancellable) {
     let result = null;
-    for (const file of files) {
-        const value = readNumber(file);
+    for (const value of await Promise.all(files.map(file => readNumber(file, cancellable)))) {
         if (value !== null)
             result = (result ?? 0) + value;
     }
     return result;
 }
 
-function readText(file) {
-    try {
-        const [ok, bytes] = GLib.file_get_contents(file);
-        return ok ? new TextDecoder().decode(bytes) : null;
-    }
-    catch {
-        return null;
-    }
+// load_contents_finish() throws a GError when the file cannot be read or the
+// read was cancelled.
+function readText(path, cancellable) {
+    return new Promise(resolve => {
+        const file = Gio.File.new_for_path(path);
+        file.load_contents_async(cancellable, (_source, result) => {
+            try {
+                const [, bytes] = file.load_contents_finish(result);
+                resolve(new TextDecoder().decode(bytes));
+            }
+            catch {
+                resolve(null);
+            }
+        });
+    });
 }
 
 // utime + stime of the whole process; the command name before them is in
 // parentheses and may contain spaces.
-function readProcessTicks() {
-    const stat = readText('/proc/self/stat');
+async function readProcessTicks(cancellable) {
+    const stat = await readText('/proc/self/stat', cancellable);
     if (!stat)
         return null;
     const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
@@ -567,8 +556,8 @@ function readProcessTicks() {
     return Number.isFinite(ticks) ? ticks : null;
 }
 
-function readNumber(file) {
-    const text = readText(file);
+async function readNumber(file, cancellable) {
+    const text = await readText(file, cancellable);
     if (text === null)
         return null;
     const value = parseInt(text, 10);
