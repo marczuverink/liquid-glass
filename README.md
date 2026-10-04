@@ -123,7 +123,8 @@ The **Rendering** page controls the shader itself. These settings are global and
 - **Edge smoothing** - Feathering width of the glass silhouette, used as geometry anti-aliasing.
 - **Surface curvature** - The superellipse exponent describing the cross-section of the glass. Low values give a soft, dome-like surface; high values give a flat top with a sharp roll-off at the edge.
 - **Index of refraction** - Optical density of the material. Real glass is roughly 1.5 to 2.4.
-- **Colour separation** - Amount of RGB separation (chromatic aberration) in the refracted image. `0` by default: macOS's glass shows none.
+- **Colour separation** - RGB separation (chromatic aberration) in the refracted image, as a fraction of the refraction: the colours part only where the glass bends the background, and most where it bends it most. `0` by default: macOS's glass shows none.
+- **Corner smoothing** - Continuous (squircle-like) corners, as on macOS and iOS. `0` gives circular arcs; higher values start the curve earlier, up to (1 + value) times the corner radius from the corner, so it meets the straight edges without a visible crease. The corner's midpoint stays where the circular one would be, so the corner radius keeps its meaning. Corners with no room to grow, such as pill-shaped buttons, stay circular, and application windows always keep circular corners to match the window. `0.6` by default.
 
 The lens acts over a fixed band (22 px) along the edge, whatever the corner radius or the size of the element, as measured on macOS; the settings above shape the lens inside that band. An element thinner than the band gets the same lens scaled down.
 
@@ -135,6 +136,7 @@ The lens acts over a fixed band (22 px) along the edge, whatever the corner radi
 - **Edge colour strength** - Multiplier for the edge light color.
 - **Sheen** - A broad sheen spread across the surface, sampled from the background. `0` by default.
 - **Light angle** - Direction of the virtual light source, in degrees.
+- **Colour from backdrop** - The edge light, highlights and sheen take the colour of what is behind the glass instead of plain white, at the same brightness. On by default.
 
 ### Shadows
 The drop shadow anchors the glass on light backgrounds (a white wallpaper, for example) so it does not visually disappear.
@@ -200,6 +202,7 @@ A significant part of this codebase was written with the help of AI coding assis
 - [x] Match the lens and edge to macOS 27
 - [x] Improve performance (blur reuse, region-limited blur, reading the backdrop from the stage)
 - [x] Support GNOME 51
+- [x] Continuous corners, refraction-proportional colour separation and backdrop-coloured highlights
 
 ### Next
 - [ ] Publish to extensions.gnome.org (not approved yet)

@@ -41,7 +41,8 @@ function materialFixture(settings) {
   const { MaterialSettings } = loadModule(path.join(dist, 'rendering/material.js'));
   const state = new UniformState(), events = [];
   const blur = { setDownscale: n => events.push(['downscale', n]), setBlurMethod: n => events.push(['method', n]) };
-  const material = new MaterialSettings(settings, state, blur, enabled => events.push(['diagnostics', enabled]));
+  const material = new MaterialSettings(settings, state, blur, enabled => events.push(['diagnostics', enabled]),
+    () => events.push(['repaint']));
   material.initialize();
   return { state, material, events };
 }
@@ -51,7 +52,8 @@ test('material fallback uses the macOS 27 optical defaults without settings', ()
   for (const [name, value] of Object.entries({ resolution_x: 0, corner_radius: 60,
     padding: 20, shadow_max_radius: 180, surface_light_enabled: 1, multi_region_mode: 0,
     early_exit_enabled: 1, edge_taps_enabled: 1, blur_tex_w: 0, displacement_scale: 10.5, max_z: 88,
-    ior: 2.4, shadow_radius: 50, ao_radius: 1 }))
+    ior: 2.4, shadow_radius: 50, ao_radius: 1, corner_smoothing: 0.6, corner_smoothing_enabled: 1,
+    highlight_backdrop_color: 1 }))
     assert.equal(state.values.get(name), value, name);
   assert.equal(material.setAnimationScale(0.5), false);
   material.clear();
@@ -60,7 +62,8 @@ test('material fallback uses the macOS 27 optical defaults without settings', ()
 test('material settings initialize downscale before method and disconnect every subscription', () => {
   const handlers = new Map(); let next = 1;
   const values = { 'glass-blur-downscale': 4, 'blur-method': 0, 'glass-debug-diagnostics': true,
-    'glass-displacement-scale': 80, 'glass-max-z': 20, 'glass-chroma-strength': 0.01 };
+    'glass-displacement-scale': 80, 'glass-max-z': 20, 'glass-chroma-strength': 0.2,
+    'glass-corner-smoothing': 0.6, 'glass-backdrop-highlights': true };
   const settings = {
     get_double: key => values[key] ?? 1,
     get_int: key => values[key] ?? 0,
@@ -74,7 +77,12 @@ test('material settings initialize downscale before method and disconnect every 
   assert.equal(material.setAnimationScale(0.5), true);
   assert.equal(state.values.get('displacement_scale'), 40);
   assert.equal(state.values.get('max_z'), 10);
-  assert.equal(state.values.get('chroma_strength'), 0.005);
+  assert.equal(state.values.get('chroma_strength'), 0.2, 'the separation follows the scaled displacement on its own');
+  assert.equal(state.values.get('corner_smoothing'), 0.6);
+  assert.equal(state.values.get('highlight_backdrop_color'), 1);
+  values['glass-backdrop-highlights'] = false;
+  for (const h of handlers.values()) if (h.name === 'changed::glass-backdrop-highlights') h.callback();
+  assert.equal(state.values.get('highlight_backdrop_color'), 0);
   values['glass-displacement-scale'] = 60;
   for (const h of handlers.values()) if (h.name === 'changed::glass-displacement-scale') h.callback();
   assert.equal(state.values.get('displacement_scale'), 60);

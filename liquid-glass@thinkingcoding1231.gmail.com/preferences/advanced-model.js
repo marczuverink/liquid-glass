@@ -47,7 +47,8 @@ export const OPTICS = [
   ['glass-edge-smoothing', 'Edge smoothing', 0, 10, 0.1],
   ['glass-profile-shape-n', 'Surface curvature', 1, 20, 0.1],
   ['glass-ior', 'Index of refraction', 1, 4, 0.01],
-  ['glass-chroma-strength', 'Colour separation', 0, 5, 0.1],
+  ['glass-chroma-strength', 'Colour separation', 0, 1, 0.01],
+  ['glass-corner-smoothing', 'Corner smoothing', 0, 1, 0.01],
 ];
 
 export const LIGHTING = [

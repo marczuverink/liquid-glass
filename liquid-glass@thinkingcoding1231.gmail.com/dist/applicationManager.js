@@ -355,6 +355,8 @@ export class ApplicationManager {
         // No rim, specular or sheen: around a window with translucent content
         // they read as a bright frame. Only this window's glass is affected.
         glass.setSurfaceLightEnabled(false);
+        // Windows draw their own circular corners, which the glass has to match.
+        glass.setCornerSmoothingEnabled(false);
         glass.setShadowMaxRadius(Math.max(0, this._glassMargin - SHADOW_MARGIN_HEADROOM));
         windowActor.insert_child_below(glass, surfaceActor);
         const state = {

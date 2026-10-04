@@ -27,6 +27,8 @@ export class MaterialSettings {
     // Rim, specular and sheen highlights. Application windows turn them off
     // and keep only the drop shadow and the inner AO.
     this._uniforms.set('surface_light_enabled', 1.0);
+    // Application windows turn continuous corners off to match the window.
+    this._uniforms.set('corner_smoothing_enabled', 1.0);
 
     // Where the glass sits inside the actor, which for the UI glass covers
     // the monitor.
@@ -64,6 +66,8 @@ export class MaterialSettings {
       this._uniforms.set('profile_shape_n', 3.6);
       this._uniforms.set('ior', 2.40);
       this._uniforms.set('chroma_strength', 0.0);
+      this._uniforms.set('corner_smoothing', 0.6);
+      this._uniforms.set('highlight_backdrop_color', 1.0);
       this._uniforms.set('specular_intensity', 0.0);
       this._uniforms.set('shininess', 42.0);
       this._uniforms.set('rim_width', 2.3);
@@ -110,6 +114,7 @@ export class MaterialSettings {
       { key: 'shadow-intensity', uniform: 'shadow_intensity' },
       { key: 'glass-ao-intensity', uniform: 'ao_intensity' },
       { key: 'glass-ao-radius', uniform: 'ao_radius' },
+      { key: 'glass-corner-smoothing', uniform: 'corner_smoothing' },
     ];
 
     const settings = this._settings;
@@ -125,6 +130,16 @@ export class MaterialSettings {
       });
       this._settingsIds.push(id);
     });
+
+    const applyBackdropHighlights = () => {
+      this._uniforms.set('highlight_backdrop_color', settings.get_boolean('glass-backdrop-highlights') ? 1.0 : 0.0);
+    };
+    applyBackdropHighlights();
+    const highlightsId = settings.connect('changed::glass-backdrop-highlights', () => {
+      applyBackdropHighlights();
+      this._repaintIfDirty();
+    });
+    this._settingsIds.push(highlightsId);
 
     // 2 = half resolution, 4 = quarter. Read before blur-method, since the
     // Gaussian kernel is expressed in texels of that level.
@@ -161,8 +176,8 @@ export class MaterialSettings {
       settings.get_double('glass-displacement-scale') * scale);
     this._uniforms.set('max_z',
       settings.get_double('glass-max-z') * scale);
-    this._uniforms.set('chroma_strength',
-      settings.get_double('glass-chroma-strength') * scale);
+    // The colour separation is a fraction of the displacement, so it already
+    // scales with it.
     return true;
   }
 }

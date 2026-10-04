@@ -72,8 +72,10 @@ test('refraction margins cover the shader sampling reach on both axes and nothin
   const base = margins({});
   assert.ok(base.blurX >= reach && base.blurY >= reach, `blur margin ${base.blurX}x${base.blurY} covers ${reach}`);
   assert.deepEqual(margins({ ior: 1.2, displacement_scale: 200 }), base, 'refraction settings cannot grow the margin past the shader clamp');
-  const chroma = margins({ chroma_strength: 8 });
-  assert.ok(chroma.blurX + chroma.blurW >= base.blurX + base.blurW + 8 - 1, 'chroma offset is covered');
+  const chroma = margins({ chroma_strength: 0.25 });
+  const chromaPx = GlassGeometry.EDGE_LENS_REACH * 0.25;
+  assert.ok(chroma.blurX >= base.blurX + chromaPx - 1, 'chroma offset is covered');
+  assert.deepEqual(margins({ chroma_strength: 5 }), margins({ chroma_strength: 1 }), 'the separation is capped at the whole displacement');
 });
 
 test('the lens reach constant matches the shader clamp', () => {
