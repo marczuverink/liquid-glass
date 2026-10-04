@@ -26,6 +26,13 @@ uniform float shininess;
 // On/off for the rim, specular and sheen. Application windows turn it off and
 // keep only the drop shadow and the inner AO.
 uniform float surface_light_enabled;
+// 1 = the highlights keep the backdrop's hue instead of washing out to white.
+uniform float highlight_backdrop_color;
+// Continuous corners, 0 = circular arcs. The curve starts up to (1 + s) times
+// the corner radius from the corner, like Figma's corner smoothing.
+uniform float corner_smoothing;
+// 0 forces circular arcs, for glass that has to match a window's own corners.
+uniform float corner_smoothing_enabled;
 // Inner edge darkening, independent of the rim and of the drop shadow.
 uniform float ao_intensity; // 0 = none, 1 = fully black at the edge
 uniform float ao_radius;    // px inward over which the band fades out
@@ -107,16 +114,58 @@ uniform float region_tint_b[MAX_GLASS_REGIONS];
 // two tints stay independent. 0 when the colour could not be resolved.
 uniform float region_base_strength[MAX_GLASS_REGIONS];
 
-// Signed distance to a rounded rectangle: negative inside, 0 on the edge.
-float sdRoundRect(vec2 p, vec2 b, float r) {
+// Signed distance to a circular-cornered rounded rectangle.
+float sdCircleRoundRect(vec2 p, vec2 b, float r) {
     vec2 d = abs(p) - b + vec2(r);
     return min(max(d.x, d.y), 0.0) + length(max(d, 0.0)) - r;
 }
 
+// The corner of a box with half-extents b and corner radius r, as
+// (radius, exponent) of a superellipse. Above 2 the corner meets the sides
+// with zero curvature, so the rim and the refraction do not crease there.
+// The radius grows with the exponent so the corner's midpoint stays where the
+// circular one's is. A corner that has no room to grow, such as a pill's end,
+// gets a smaller exponent, down to a plain circle.
+vec2 cornerShape(vec2 b, float r) {
+    float s = clamp(corner_smoothing, 0.0, 1.0) * corner_smoothing_enabled;
+    float k = min(1.0 + s, max(min(b.x, b.y) / max(r, 1.0e-3), 1.0));
+    // From the midpoint condition sqrt(2) * k * (1 - 2^(-1/n)) = sqrt(2) - 1.
+    float n = -1.0 / log2(1.0 - 0.29289322 / k);
+    return vec2(r * k, n);
+}
+
+// Superellipse norm (|x|^n + |y|^n)^(1/n) of q >= 0, scaled to stay in range.
+float superLength(vec2 q, float n) {
+    float m = max(q.x, q.y);
+    if (m <= 0.0)
+        return 0.0;
+    vec2 u = q / m;
+    return m * pow(pow(u.x, n) + pow(u.y, n), 1.0 / n);
+}
+
+// Signed distance to a rounded rectangle whose corners are superellipses
+// (corner = cornerShape()): negative inside, 0 on the edge. The superellipse
+// norm is not a distance, so it is divided by its gradient's length, which
+// keeps the rim, the bevel and the antialiasing the same width all round.
+// The division fades in from the corner's centre, where the gradient is
+// undefined, so the field stays continuous inside.
+float sdRoundRect(vec2 p, vec2 b, vec2 corner) {
+    float r = corner.x;
+    float n = corner.y;
+    vec2 d = abs(p) - b + vec2(r);
+    vec2 q = max(d, 0.0);
+    float len = superLength(q, n);
+    if (len <= 0.0)
+        return max(d.x, d.y) - r;
+    vec2 g = pow(q / len, vec2(n - 1.0));
+    float gradLen = mix(1.0, length(g), clamp(len / max(r, 1.0e-3), 0.0, 1.0));
+    return (len - r) / max(gradLen, 0.5);
+}
+
 // The region this pixel is most inside of, with its local frame and colours.
-// Far outside every region the distance stays large, which main() already
-// treats as transparent.
-float findActiveRegion(vec2 pixel_coord, float pad, out vec2 outLocalPos, out vec2 outBoxSize, out vec3 outTint, out float outBaseStrength) {
+// Far outside every region the local position stays large, which main()
+// already treats as transparent.
+void findActiveRegion(vec2 pixel_coord, float pad, out vec2 outLocalPos, out vec2 outBoxSize, out vec3 outTint, out float outBaseStrength) {
     float bestD = 1.0e6;
     outLocalPos = vec2(1.0e6);
     outBoxSize = vec2(1.0);
@@ -136,7 +185,9 @@ float findActiveRegion(vec2 pixel_coord, float pad, out vec2 outLocalPos, out ve
         vec2 actual_size = rSize - vec2(pad * 2.0);
         vec2 rBox = max(actual_size * 0.5, vec2(1.0));
 
-        float d = sdRoundRect(rLocal, rBox, corner_radius);
+        // Picking the region needs no continuous corners; main() measures the
+        // chosen one with them.
+        float d = sdCircleRoundRect(rLocal, rBox, corner_radius);
         if (d < bestD) {
             bestD = d;
             outLocalPos = rLocal;
@@ -145,8 +196,6 @@ float findActiveRegion(vec2 pixel_coord, float pad, out vec2 outLocalPos, out ve
             outBaseStrength = region_base_strength[i];
         }
     }
-
-    return bestD;
 }
 
 // Depth into the bevel, 0 at the edge to 1 at its inner end. `r` is the band
@@ -167,10 +216,10 @@ float profileHeight(float t, float zScale) {
     return h * zScale;
 }
 
-// Surface height at p. `r` is the outline's corner radius and `band` the width
-// the height builds up over (see lensBandFor()).
-float getHeight(vec2 p, vec2 b, float r, float band, float zScale) {
-    float d = sdRoundRect(p, b, r);
+// Surface height at p. `corner` is the outline's corner (cornerShape()) and
+// `band` the width the height builds up over (see lensBandFor()).
+float getHeight(vec2 p, vec2 b, vec2 corner, float band, float zScale) {
+    float d = sdRoundRect(p, b, corner);
 
     // Fades out over +-edge_smoothing px instead of stepping to 0 at the edge.
     // A step makes heightGradient()'s finite difference spike across it, which
@@ -207,28 +256,29 @@ float gradientStep(vec2 resolution) {
 
 // Unit gradient of sdRoundRect() at p, i.e. straight out of the shape, in
 // closed form. Along a straight side it is that side's axis; in a corner it
-// points away from the corner circle's centre.
-vec2 sdRoundRectDir(vec2 p, vec2 b, float r) {
-    vec2 q = abs(p) - b + vec2(r);
+// is the superellipse's normal, which for a circle points away from its centre.
+vec2 sdRoundRectDir(vec2 p, vec2 b, vec2 corner) {
+    vec2 q = abs(p) - b + vec2(corner.x);
     if (max(q.x, q.y) < 0.0) {
         return (q.x > q.y) ? vec2(sign(p.x), 0.0) : vec2(0.0, sign(p.y));
     }
-    return sign(p) * normalize(max(q, 0.0) + vec2(1e-6));
+    vec2 u = max(q, 0.0) / max(max(q.x, q.y), 1.0e-6);
+    return sign(p) * normalize(pow(u, vec2(corner.y - 1.0)) + vec2(1e-6));
 }
 
 // Height gradient of the glass surface at p. The height depends on the signed
-// distance alone, so grad(H) = H'(d) * grad(d): grad(d) is exact, and H'(d)
+// distance alone, so grad(H) = H'(d) * grad(d): grad(d) is closed-form, and H'(d)
 // takes one central difference along it. Differencing along x and y instead
 // tilts the normal on rounded corners.
 //
 // H'(d) is not taken in closed form: the superellipse is vertical at the
 // edge, and the finite difference keeps that slope bounded.
-vec2 heightGradient(vec2 p, vec2 b, float r, float band, float zScale, vec2 resolution) {
-    vec2 dir = sdRoundRectDir(p, b, r);
+vec2 heightGradient(vec2 p, vec2 b, vec2 corner, float band, float zScale, vec2 resolution) {
+    vec2 dir = sdRoundRectDir(p, b, corner);
     float e = gradientStep(resolution);
 
-    float hOut = getHeight(p + dir * e, b, r, band, zScale);
-    float hIn  = getHeight(p - dir * e, b, r, band, zScale);
+    float hOut = getHeight(p + dir * e, b, corner, band, zScale);
+    float hIn  = getHeight(p - dir * e, b, corner, band, zScale);
 
     return dir * ((hOut - hIn) / (2.0 * e));
 }
@@ -356,6 +406,68 @@ float erfcPositive(float x) {
     return 1.0 / (p2 * p2);
 }
 
+// How much more saturated than the backdrop a highlight is drawn.
+#define HIGHLIGHT_CHROMA_GAIN 1.25
+
+// sRGB-encoded colour to Oklab. A 2.2 gamma stands in for the sRGB curve,
+// which is close enough for tinting a highlight.
+vec3 toOklab(vec3 c) {
+    vec3 lin = pow(max(c, 0.0), vec3(2.2));
+    vec3 lms = vec3(
+        dot(lin, vec3(0.4122214708, 0.5363325363, 0.0514459929)),
+        dot(lin, vec3(0.2119034982, 0.6806995451, 0.1073969566)),
+        dot(lin, vec3(0.0883024619, 0.2817188376, 0.6299787005)));
+    lms = pow(max(lms, 0.0), vec3(1.0 / 3.0));
+    return vec3(
+        dot(lms, vec3(0.2104542553, 0.7936177850, -0.0040720468)),
+        dot(lms, vec3(1.9779984951, -2.4285922050, 0.4505937099)),
+        dot(lms, vec3(0.0259040371, 0.7827717662, -0.8086757660)));
+}
+
+// Oklab to linear RGB, unclamped.
+vec3 oklabToLinear(vec3 lab) {
+    vec3 lms = vec3(
+        dot(lab, vec3(1.0, 0.3963377774, 0.2158037573)),
+        dot(lab, vec3(1.0, -0.1055613458, -0.0638541728)),
+        dot(lab, vec3(1.0, -0.0894841775, -1.2914855480)));
+    lms = lms * lms * lms;
+    return vec3(
+        dot(lms, vec3(4.0767416621, -3.3077115913, 0.2309699292)),
+        dot(lms, vec3(-1.2684380046, 2.6097574011, -0.3413193965)),
+        dot(lms, vec3(-0.0041960863, -0.7034186147, 1.7076147010)));
+}
+
+// How far from `from` a step of `delta` can go, as a fraction of it, before
+// leaving [0, 1].
+float gamutRoom(float from, float delta) {
+    if (delta > 1.0e-6)
+        return (1.0 - from) / delta;
+    if (delta < -1.0e-6)
+        return -from / delta;
+    return 1.0;
+}
+
+// `lit` (base screen-blended with `light` of white) with the backdrop's hue
+// put back. Blending with white washes a highlight out to grey; real glass
+// lights up in the colour of what is behind it. The lightness stays as it
+// was, so only the colour changes. The hue fades in over the first quarter
+// of the light, so unlit glass keeps its colour.
+//
+// A bright saturated colour is often out of gamut. Scaling it back down would
+// dim the highlight, so the colour is pulled towards the plain one instead,
+// along a line of nearly constant luminance.
+vec3 backdropHighlight(vec3 base, vec3 lit, float light) {
+    vec3 litLab = toOklab(lit);
+    vec2 baseChroma = toOklab(base).yz * HIGHLIGHT_CHROMA_GAIN;
+    litLab.yz = mix(litLab.yz, baseChroma, clamp(light * 4.0, 0.0, 1.0));
+
+    vec3 from = pow(max(lit, 0.0), vec3(2.2));
+    vec3 delta = oklabToLinear(litLab) - from;
+    float t = min(min(gamutRoom(from.r, delta.r), gamutRoom(from.g, delta.g)),
+                  min(gamutRoom(from.b, delta.b), 1.0));
+    return pow(clamp(from + delta * max(t, 0.0), 0.0, 1.0), vec3(1.0 / 2.2));
+}
+
 // Brightness, contrast around mid grey, and saturation with Rec. 601 luma.
 vec3 applySCB(vec3 color, float b, float c, float s) {
     color *= b;
@@ -382,10 +494,9 @@ void main() {
     vec3 activeTint;
     // The element's own colour strength; 0 outside multi-region mode.
     float activeBaseStrength = 0.0;
-    float d;
 
     if (multi_region_mode > 0.5) {
-        d = findActiveRegion(pixel_coord, padding, local_pos, box_size, activeTint, activeBaseStrength);
+        findActiveRegion(pixel_coord, padding, local_pos, box_size, activeTint, activeBaseStrength);
     } else {
         // The actor can be much larger than the glass (a monitor-sized
         // capture), so the shape comes from dock_*, not from the resolution.
@@ -401,9 +512,11 @@ void main() {
             box_size = max(actual_size * 0.5, vec2(1.0));
         }
 
-        d = sdRoundRect(local_pos, box_size, corner_radius);
         activeTint = vec3(tint_r, tint_g, tint_b);
     }
+
+    vec2 corner = cornerShape(box_size, corner_radius);
+    float d = sdRoundRect(local_pos, box_size, corner);
 
     float lensBand = lensBandFor(min(box_size.x, box_size.y));
     float lensScale = lensScaleFor(lensBand);
@@ -457,14 +570,16 @@ void main() {
         float facing = max(lightDirFlat.z, 0.0);
         float specFlat = pow(facing, max(shininess, 1.0)) * specular_intensity * 0.65;
         float sheenFlat = pow(facing, 1.65) * sheen_intensity;
-        vec3 addedFlat = vec3(specFlat + sheenFlat) * surface_light_enabled;
+        float lightFlat = (specFlat + sheenFlat) * surface_light_enabled;
 
-        vec3 litFlat = flatRgb + addedFlat - (flatRgb * addedFlat);
+        vec3 litFlat = flatRgb + lightFlat - (flatRgb * lightFlat);
         float maxChannelFlat = max(litFlat.r, max(litFlat.g, litFlat.b));
         if (maxChannelFlat > 1.0) {
             litFlat /= maxChannelFlat;
         }
         litFlat = max(litFlat, 0.0);
+        if (highlight_backdrop_color > 0.5 && lightFlat > 0.0)
+            litFlat = backdropHighlight(flatRgb, litFlat, lightFlat);
 
         litFlat = max(litFlat + ditherLSB(pixel_coord), 0.0);
 
@@ -539,7 +654,7 @@ void main() {
 
     vec3 shadowColor = vec3(0.03, 0.04, 0.08);
 
-    vec2 gradH = heightGradient(local_pos, box_size, corner_radius, lensBand, max_z * lensScale, resolution);
+    vec2 gradH = heightGradient(local_pos, box_size, corner, lensBand, max_z * lensScale, resolution);
     vec3 normal = getNormal(gradH);
 
     vec2 disp = getDisplacement(d, normal, resolution);
@@ -577,10 +692,10 @@ void main() {
 
     vec2 refractedUv = stabilizedUV(uv + disp, uv);
 
-    vec2 chromaDir = length(disp) > 0.00001 ? normalize(disp) : vec2(0.0);
-
-    // Chromatic aberration, chroma_strength px along the refraction.
-    vec2 chromaVec = chromaDir * (chroma_strength / resolution) * lensShape;
+    // Chromatic aberration as dispersion: blue bends more than red, by a
+    // fraction of the refraction, so the colours part only where the glass
+    // bends the backdrop and most where it bends it most.
+    vec2 chromaVec = disp * clamp(chroma_strength, 0.0, 1.0);
     vec2 uvG = refractedUv;
 
     // Below a hundredth of a pixel the three channels sample the same texels,
@@ -595,8 +710,8 @@ void main() {
 
     vec3 refractedRgb;
     if (chromaActive) {
-        vec2 uvR = stabilizedUV(refractedUv + chromaVec, refractedUv);
-        vec2 uvB = stabilizedUV(refractedUv - chromaVec, refractedUv);
+        vec2 uvR = stabilizedUV(refractedUv - chromaVec, refractedUv);
+        vec2 uvB = stabilizedUV(refractedUv + chromaVec, refractedUv);
 
         refractedRgb = vec3(
             sampleBackdrop(uvR, footprintExt, texel, resolution).r,
@@ -657,11 +772,11 @@ void main() {
     float sheenFacing = max(dot(normal, lightDir), 0.0);
     float surfaceSheen = pow(sheenFacing, 1.65);
     surfaceSheen *= mix(1.0, 0.55, edgeBand);
-    vec3 sheenColor = vec3(1.0) * surfaceSheen * sheen_intensity;
+    float sheenLight = surfaceSheen * sheen_intensity;
 
     float alpha = insideMask;
 
-    vec3 addedLight = (vec3(specularLight + finalRimLight + idleRim) + sheenColor) * surface_light_enabled;
+    float addedLight = (specularLight + finalRimLight + idleRim + sheenLight) * surface_light_enabled;
 
     // Screen blend, which cannot blow out a white background the way adding
     // does.
@@ -674,6 +789,10 @@ void main() {
         litColor /= maxChannel;
     }
     litColor = max(litColor, 0.0);
+
+    // Pixels outside the glass are not drawn, so they skip the conversion.
+    if (highlight_backdrop_color > 0.5 && addedLight > 0.0 && alpha > 0.0)
+        litColor = backdropHighlight(baseColor, litColor, addedLight);
 
     // Glass over shadow in premultiplied alpha. Cogl adds src.rgb regardless
     // of src.a, so a colour emitted at zero coverage would tint the whole

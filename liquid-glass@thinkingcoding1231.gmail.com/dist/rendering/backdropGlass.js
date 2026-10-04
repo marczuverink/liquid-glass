@@ -284,6 +284,8 @@ export const GlassActor = GObject.registerClass(class GlassActor extends Clutter
 
     setSurfaceLightEnabled(enabled) { this._renderer.setSurfaceLightEnabled(enabled); }
 
+    setCornerSmoothingEnabled(enabled) { this._renderer.setCornerSmoothingEnabled(enabled); }
+
     setPadding(pad) { this._renderer.setPadding(pad); }
 
     setShadowMaxRadius(radius) { this._renderer.setShadowMaxRadius(radius); }

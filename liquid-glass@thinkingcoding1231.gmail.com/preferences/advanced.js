@@ -76,6 +76,10 @@ function addRendering(page, controls) {
   for (const [title, specs] of [['Optics', OPTICS], ['Lighting', LIGHTING], ['Shadows', SHADOWS]]) {
     const group = controls.group(page, title);
     addNumbers(group, controls, specs);
+    if (specs === LIGHTING) {
+      controls.toggle(group, 'Colour from backdrop', 'glass-backdrop-highlights',
+        'Light takes the colour of what is behind the glass instead of white');
+    }
     groups.push(group);
   }
   return groups;

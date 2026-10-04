@@ -652,9 +652,23 @@
     </key>
 
     <key name="glass-chroma-strength" type="d">
+      <range min="0.0" max="1.0"/>
       <default>0.0</default>
       <summary>Chromatic aberration strength</summary>
-      <description>Controls the RGB color separation effect caused by refraction, in pixels. Previously this value was a fraction of the screen size, which capped the visible effect at well under one pixel; existing values carried over from that scale will need re-tuning.</description>
+      <description>RGB color separation caused by refraction, as a fraction of the refraction's displacement: blue is shifted that much further than green, and red that much less.</description>
+    </key>
+
+    <key name="glass-corner-smoothing" type="d">
+      <range min="0.0" max="1.0"/>
+      <default>0.6</default>
+      <summary>Corner smoothing</summary>
+      <description>0 gives circular corners. Higher values give continuous corners whose curve starts up to (1 + value) times the corner radius from the corner, keeping the corner's midpoint in place. Application windows always keep circular corners.</description>
+    </key>
+
+    <key name="glass-backdrop-highlights" type="b">
+      <default>true</default>
+      <summary>Backdrop-colored highlights</summary>
+      <description>Tints the edge light, highlights and sheen with the color behind the glass instead of plain white.</description>
     </key>
 
     <key name="glass-specular-intensity" type="d">

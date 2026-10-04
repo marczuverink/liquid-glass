@@ -301,6 +301,7 @@ export const GlassActor = GObject.registerClass(
     setDebugView(mode: number): void { this._renderer.setDebugView(mode); }
     setIsDock(isDock: boolean): void { this._renderer.setIsDock(isDock); }
     setSurfaceLightEnabled(enabled: boolean): void { this._renderer.setSurfaceLightEnabled(enabled); }
+    setCornerSmoothingEnabled(enabled: boolean): void { this._renderer.setCornerSmoothingEnabled(enabled); }
     setPadding(pad: number): void { this._renderer.setPadding(pad); }
     setShadowMaxRadius(radius: number): void { this._renderer.setShadowMaxRadius(radius); }
     setBlurMethod(method: BlurMethod): void { this._renderer.setBlurMethod(method); }

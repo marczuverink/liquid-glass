@@ -116,19 +116,21 @@ export class GlassGeometry {
     }
 
     _samplingReachPx(resW, resH) {
-        const chroma = Math.max(this._uniforms.get('chroma_strength') ?? 0, 0);
+        // The colour separation moves blue further along the refraction, by up
+        // to this fraction of it.
+        const chroma = Math.min(Math.max(this._uniforms.get('chroma_strength') ?? 0, 0), 1);
         const minRes = Math.max(Math.min(resW, resH), 1);
-        return Math.min(0.30 * minRes, GlassGeometry.EDGE_LENS_REACH + GlassGeometry.EDGE_FOOTPRINT_SPREAD + chroma);
+        return Math.min(0.30 * minRes, GlassGeometry.EDGE_LENS_REACH * (1 + chroma) + GlassGeometry.EDGE_FOOTPRINT_SPREAD);
     }
 
     /**
      * The part of the actor that has to be blurred, [x, y, w, h] in shader
      * space, or null for all of it. The margin is how far a visible pixel's
      * sample can travel from the glass (_samplingReachPx()): the refraction
-     * (EDGE_LENS_REACH), the edge footprint taps (EDGE_FOOTPRINT_SPREAD) and the
-     * chromatic aberration, capped at 0.30 of the shorter side, plus the RGSS
-     * spread, the feather and BLUR_RECT_MIN_MARGIN. The drop shadow does not
-     * sample the blur.
+     * (EDGE_LENS_REACH), stretched by the chromatic aberration, and the edge
+     * footprint taps (EDGE_FOOTPRINT_SPREAD), capped at 0.30 of the shorter
+     * side, plus the RGSS spread, the feather and BLUR_RECT_MIN_MARGIN. The
+     * drop shadow does not sample the blur.
      */
     blurRect() {
         if (!this.blurEnabled)

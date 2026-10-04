@@ -101,7 +101,8 @@ function windowFixture() {
     destroy() { this.destroyed = true; }
   }
   for (const name of ['setPadding', 'setTintColor', 'setTintStrength', 'setCornerRadius', 'setBlurRadius',
-    'setBrightness', 'setContrast', 'setSaturation', 'setIsDock', 'setSurfaceLightEnabled', 'setShadowMaxRadius'])
+    'setBrightness', 'setContrast', 'setSaturation', 'setIsDock', 'setSurfaceLightEnabled',
+    'setCornerSmoothingEnabled', 'setShadowMaxRadius'])
     Glass.prototype[name] = function () {};
   const workspace = {};
   const frame = { x: 130, y: 90, width: 800, height: 600 };

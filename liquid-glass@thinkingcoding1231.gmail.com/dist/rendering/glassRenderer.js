@@ -153,6 +153,11 @@ export class GlassRenderer {
         this._repaintIfDirty();
     }
 
+    setCornerSmoothingEnabled(enabled) {
+        this.uniforms.set('corner_smoothing_enabled', enabled ? 1.0 : 0.0);
+        this._repaintIfDirty();
+    }
+
     setPadding(pad) {
         this.uniforms.set('padding', pad);
     }
