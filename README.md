@@ -14,39 +14,53 @@ I love the look of Apple's Liquid Glass, but since I don't own any Apple product
 
 ## Demo
 
+> Unless noted otherwise, the screenshots below use the [MacTahoe GTK theme](https://github.com/vinceliuice/MacTahoe-gtk-theme) (Dark) by vinceliuice. The theme is not bundled with this extension and has to be installed separately.
+>
+> If you like the macOS-ish look, give MacTahoe a try. It pairs really nicely with the glass, and it's what I use every day.
+
+![Liquid Glass Overview Screenshot](assets/whole.png)
+
 Dash to Dock:
 
-![Dash to Dock Screenshot](assets/demo2.png)
+![Dash to Dock Screenshot](assets/dock.png)
 
 Notifications:
 
-![Notifications Screenshot](assets/demo3.png)
+![Notifications Screenshot](assets/notification.png)
 
 Panel Menus:
 
-![Panel Menu Screenshot](assets/demo4.png)
+![Panel Menu Screenshot](assets/calendar.png)
 
-Quick Settings (Background mode):
+Top Bar Menu:
 
-![Quick Settings Screenshot](assets/demo5.png)
+![Top Bar Menu Screenshot](assets/topbarmenu-kiwimenu.png)
+
+> The menu in this screenshot comes from the [Kiwi Menu](https://github.com/kem-a/kiwi-menu) extension by kem-a. Liquid Glass only provides the glass.
+
+Desktop Menu:
+
+![Desktop Menu Screenshot](assets/desktopmenu.png)
+
+Quick Settings (Background mode, Adwaita theme):
+
+![Quick Settings Background Mode with Adwaita Screenshot](assets/qs-adwaita-whole.png)
 
 Quick Settings (Toggle mode, Adwaita theme):
 
-![Quick Settings Toggle Mode with Adwaita Screenshot](assets/toggle-adwaita.png)
+![Quick Settings Toggle Mode with Adwaita Screenshot](assets/qs-adwaita-toggles.png)
 
 Quick Settings (Toggle mode, MacTahoe theme):
 
-![Quick Settings Toggle Mode with MacTahoe Screenshot](assets/toggle-mactahoe.png)
-
-> The screenshot above uses the [MacTahoe GTK theme](https://github.com/vinceliuice/MacTahoe-gtk-theme) by vinceliuice. The theme is not bundled with this extension and has to be installed separately.
+![Quick Settings Toggle Mode with MacTahoe Screenshot](assets/quicksettings-mactahoe.png)
 
 Application Windows:
 
-![Application Window Screenshot](assets/window.png)
+![Application Window Screenshot](assets/windows.png)
 
 OSD:
 
-![OSD Screenshot](assets/demo6.png)
+![OSD Screenshot](assets/osd.png)
 
 
 ## Installation (GNOME Extension)
