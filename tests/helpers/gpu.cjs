@@ -17,6 +17,7 @@ function gpuFixture() {
     set_layer_texture(layer, value) { this.layers.set(layer, value); }
     get_uniform_location(name) { return name; }
     set_uniform_float(name, size, count, values) { this.uniforms.set(name, [...values]); this.writes.push([name, size, count, [...values]]); }
+    set_uniform_1f(name, value) { this.set_uniform_float(name, 1, 1, [value]); }
     add_snippet(snippet) { this.snippets.push(snippet); }
     set_color(color) { this.color = color.values; }
   }

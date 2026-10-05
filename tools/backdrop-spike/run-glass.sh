@@ -11,6 +11,7 @@
 #                        enable (e.g. blur-my-shell@aunetx), space separated
 #   LG_BENCH=1        also enable tools/perf/lg-bench@liquid-glass.test
 #   LG_SHELL_TIMEOUT  seconds before the shell is killed (default: 180)
+#   LG_X11=1          run an X11 session on Xvfb instead (GNOME 48 and older)
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -58,6 +59,23 @@ export XDG_CURRENT_DESKTOP=GNOME
 export XDG_SESSION_DESKTOP=gnome
 unset WAYLAND_DISPLAY DISPLAY
 
+shell_args="--headless --wayland"
+# Inside a distrobox (tools/gnome-versions): the system bus is the host's,
+# under /run/host, and Xwayland fails to find its systemd unit.
+if [ -f /run/.containerenv ]; then
+  export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/host/run/dbus/system_bus_socket
+  shell_args="$shell_args --no-x11"
+fi
+xvfb=""
+# LG_X11=1: an X11 session on Xvfb instead (GNOME 48 and older have one).
+if [ "${LG_X11:-}" = 1 ]; then
+  Xvfb :77 -screen 0 "${mode}x24" -nolisten tcp >/dev/null 2>&1 &
+  xvfb=$!
+  sleep 1
+  export DISPLAY=:77
+  shell_args="--x11"
+fi
+
 socket="lg-glass-$$"
 dtd_schemas="$ext/$dtd_uuid/schemas"
 
@@ -68,8 +86,12 @@ dbus-run-session -- bash -c "
   gsettings --schemadir '$dtd_schemas' set org.gnome.shell.extensions.dash-to-dock dock-fixed true
   gsettings --schemadir '$dtd_schemas' set org.gnome.shell.extensions.dash-to-dock intellihide false
   gsettings --schemadir '$dtd_schemas' set org.gnome.shell.extensions.dash-to-dock dock-position 'BOTTOM'
-  exec timeout ${LG_SHELL_TIMEOUT:-180} gnome-shell --headless --wayland --virtual-monitor '$mode' --wayland-display '$socket'
+  if [ \"$shell_args\" = --x11 ]; then
+    exec timeout ${LG_SHELL_TIMEOUT:-180} gnome-shell --x11
+  fi
+  exec timeout ${LG_SHELL_TIMEOUT:-180} gnome-shell $shell_args --virtual-monitor '$mode' --wayland-display '$socket'
 " >"$out/shell.log" 2>&1 || true
+[ -n "$xvfb" ] && kill "$xvfb" 2>/dev/null
 # The session's document portal mounts itself there.
 fusermount3 -u "$XDG_RUNTIME_DIR/doc" 2>/dev/null || true
 rm -rf "$XDG_RUNTIME_DIR" 2>/dev/null || true

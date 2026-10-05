@@ -1,4 +1,5 @@
 import Clutter from 'gi://Clutter';
+import { setUniformVector } from '../shellVersion.js';
 
 export class RenderPasses {
     // Per-pass pipeline copies; see pipeline().
@@ -56,11 +57,9 @@ export class RenderPasses {
 
 // Cogl caches uniform locations, so these are cheap to call every frame.
 export function setPipelineVec2(pipeline, name, x, y) {
-    const loc = pipeline.get_uniform_location(name);
-    pipeline.set_uniform_float(loc, 2, 1, [x, y]);
+    setUniformVector(pipeline, name, [x, y]);
 }
 
 export function setPipelineFloat(pipeline, name, value) {
-    const loc = pipeline.get_uniform_location(name);
-    pipeline.set_uniform_float(loc, 1, 1, [value]);
+    pipeline.set_uniform_1f(pipeline.get_uniform_location(name), value);
 }

@@ -103,8 +103,9 @@ test('the composite is queued as a node over the destination with one UV range',
 test('uniform helpers preserve scalar and vec2 dimensions', () => {
   const { setPipelineFloat, setPipelineVec2 } = passesFixture();
   const writes = [];
-  const pipeline = { get_uniform_location: name => name, set_uniform_float: (...args) => writes.push(args) };
+  const pipeline = { get_uniform_location: name => name, set_uniform_float: (...args) => writes.push(args),
+    set_uniform_1f: (...args) => writes.push(args) };
   setPipelineFloat(pipeline, 'radius', 4);
   setPipelineVec2(pipeline, 'inv_size', 0.01, 0.02);
-  assert.deepEqual(writes, [['radius', 1, 1, [4]], ['inv_size', 2, 1, [0.01, 0.02]]]);
+  assert.deepEqual(writes, [['radius', 4], ['inv_size', 2, 1, [0.01, 0.02]]]);
 });

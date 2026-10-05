@@ -1,5 +1,7 @@
 import type Cogl from 'gi://Cogl';
 
+import { setUniformArray } from '../shellVersion.js';
+
 export class UniformState {
   private _pipeline: Cogl.Pipeline | null = null;
 
@@ -46,9 +48,6 @@ export class UniformState {
   // Changes behind the glass arrive through the relays, not here.
   private _uniformsDirty: boolean = false;
 
-  // Reused for scalar uploads; Cogl copies the values during the call.
-  private _uniformScratch: number[] = [0];
-
   // Sets a float uniform, buffered until attach() provides a pipeline.
   set(name: string, value: number): void {
     if (this._pendingUniforms.get(name) === value) return;
@@ -70,8 +69,7 @@ export class UniformState {
       loc = this._pipeline.get_uniform_location(name);
       this._compUniforms.set(name, loc);
     }
-    this._uniformScratch[0] = value;
-    this._pipeline.set_uniform_float(loc, 1, 1, this._uniformScratch);
+    this._pipeline.set_uniform_1f(loc, value);
     this._appliedUniforms.set(name, value);
   }
 
@@ -120,7 +118,7 @@ export class UniformState {
       loc = this._pipeline.get_uniform_location(name);
       this._compUniformArrays.set(name, loc);
     }
-    this._pipeline.set_uniform_float(loc, 1, values.length, values);
+    setUniformArray(this._pipeline, loc, name, values);
     this._appliedUniformArrays.set(name, values.slice());
   }
 }

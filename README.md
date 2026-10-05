@@ -1,7 +1,7 @@
 # Liquid Glass for GNOME Shell
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
-![GNOME Shell](https://img.shields.io/badge/GNOME-50%20%7C%2051-green.svg)
+![GNOME Shell](https://img.shields.io/badge/GNOME-46%20%E2%80%93%2051-green.svg)
 
 A GNOME Shell Extension that replicates the "Liquid Glass" UI concept using shaders on your desktop.
 
@@ -64,6 +64,8 @@ OSD:
 
 
 ## Installation (GNOME Extension)
+
+Liquid Glass supports **GNOME Shell 46 to 51** (for example Ubuntu 24.04 LTS, Debian 13 and current Fedora releases). It is developed and used daily on GNOME 50; the other versions are tested in containers.
 
 > [!IMPORTANT]
 > This extension is **not yet available on [extensions.gnome.org](https://extensions.gnome.org)**. It has been submitted, but is still unreviewed, so for now it has to be installed manually using one of the methods below.
@@ -216,6 +218,7 @@ A significant part of this codebase was written with the help of AI coding assis
 - [x] Match the lens and edge to macOS 27
 - [x] Improve performance (blur reuse, region-limited blur, reading the backdrop from the stage)
 - [x] Support GNOME 51
+- [x] Support GNOME 46, 47, 48 and 49
 - [x] Continuous corners, refraction-proportional colour separation and backdrop-coloured highlights
 
 ### Next

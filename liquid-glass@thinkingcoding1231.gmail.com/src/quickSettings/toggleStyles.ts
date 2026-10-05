@@ -2,6 +2,7 @@ import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import GLib from 'gi://GLib';
 import type { Logger } from '../logger.js';
+import { QS_MENU_TOGGLE_CLASS } from '../shellVersion.js';
 
 // Quick Settings' toggle-button mode: every toggle pod gets its own piece of
 // glass. This finds the pods, samples each pod's own colour (it changes with
@@ -73,8 +74,9 @@ export class ToggleStyles {
   private _debugToggleColorLogFrames: number = 15;
 
   // Finds the pods under `actor`, without descending into a pod:
-  //  - a `.quick-toggle-has-menu` wrapper (Wi-Fi, Bluetooth): the main button,
-  //    the separator and the arrow button together form one shape;
+  //  - a `.quick-toggle-has-menu` wrapper (`.quick-menu-toggle` before GNOME
+  //    48; Wi-Fi, Bluetooth): the main button, the separator and the arrow
+  //    button together form one shape;
   //  - a standalone `.quick-toggle` (Night Light, Do Not Disturb, ...);
   //  - an `.icon-button` inside `.quick-settings-system-item` (screenshot,
   //    settings, lock, power), which themes also draw as pills. Elsewhere
@@ -107,7 +109,7 @@ export class ToggleStyles {
 
   private _toggleLeafKind(actor: Clutter.Actor, inSystemItem: boolean): 'toggle' | 'slider' | null {
     if (!(actor instanceof St.Widget)) return null;
-    if (actor.has_style_class_name('quick-toggle-has-menu')) return 'toggle';
+    if (actor.has_style_class_name(QS_MENU_TOGGLE_CLASS)) return 'toggle';
     if (actor.has_style_class_name('quick-toggle')) return 'toggle';
     // Screenshot, settings, lock and power.
     if (inSystemItem && actor.has_style_class_name('icon-button')) return 'toggle';
@@ -141,7 +143,7 @@ export class ToggleStyles {
   // The actor whose colour represents the pod: for a has-menu pod, its main
   // `.quick-toggle` button, which may sit more than one level down.
   private _getPrimaryToggleButton(pod: Clutter.Actor): Clutter.Actor {
-    if (pod instanceof St.Widget && pod.has_style_class_name('quick-toggle-has-menu')) {
+    if (pod instanceof St.Widget && pod.has_style_class_name(QS_MENU_TOGGLE_CLASS)) {
       let found: Clutter.Actor | null = null;
       const search = (actor: Clutter.Actor) => {
         if (found) return;
@@ -241,7 +243,7 @@ export class ToggleStyles {
   // (ties go to the earlier one), and the result is composited over what is
   // behind it. `a` only tells the caller whether any real paint was found.
   private _samplePodColor(pod: Clutter.Actor, primary: Clutter.Actor): { r: number; g: number; b: number; a: number } {
-    let isHasMenu = pod instanceof St.Widget && pod.has_style_class_name('quick-toggle-has-menu');
+    let isHasMenu = pod instanceof St.Widget && pod.has_style_class_name(QS_MENU_TOGGLE_CLASS);
 
     let candidates: Clutter.Actor[] = [primary];
     if (isHasMenu && pod !== primary) candidates.push(pod);
@@ -372,7 +374,7 @@ export class ToggleStyles {
   }
 
   private _logPodColor(pod: Clutter.Actor, primary: St.Widget, entry: ToggleEntry, sampled: { a: number }) {
-    let isHasMenu = pod instanceof St.Widget && pod.has_style_class_name('quick-toggle-has-menu');
+    let isHasMenu = pod instanceof St.Widget && pod.has_style_class_name(QS_MENU_TOGGLE_CLASS);
     let podCls = pod instanceof St.Widget ? (pod.get_style_class_name() || '') : '';
     let primaryCls = primary.get_style_class_name() || '';
     let checked = primary.has_style_pseudo_class('checked');

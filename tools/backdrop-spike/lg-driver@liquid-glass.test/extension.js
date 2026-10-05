@@ -28,6 +28,7 @@ import Mtk from 'gi://Mtk';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 
+import * as Config from 'resource:///org/gnome/shell/misc/config.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
@@ -49,8 +50,36 @@ function sleep(ms) {
   });
 }
 
+const SHELL_MAJOR = parseInt(Config.PACKAGE_VERSION, 10);
+
+// The same version split as the extension's shellVersion.ts.
 function coglContext() {
-  return global.stage.context.get_backend().get_cogl_context();
+  const backend = SHELL_MAJOR >= 48 ? global.stage.context.get_backend() : Clutter.get_default_backend();
+  return backend.get_cogl_context();
+}
+
+// GNOME 46 calls paint_node without the paint context; see paintNodeWithContext()
+// in the extension's shellVersion.ts.
+function paintNodeWithContext(klass) {
+  if (SHELL_MAJOR >= 47)
+    return klass;
+  const proto = klass.prototype;
+  const paintNode = proto.vfunc_paint_node;
+  delete proto.vfunc_paint_node;
+  const parentPaint = Object.getPrototypeOf(proto).vfunc_paint;
+  proto.vfunc_paint = function (paintContext) {
+    const root = Clutter.ClipNode.new();
+    paintNode.call(this, root, paintContext);
+    root.paint(paintContext);
+    parentPaint.call(this, paintContext);
+  };
+  return klass;
+}
+
+function newRootNode(framebuffer, colorState) {
+  if (SHELL_MAJOR >= 48)
+    return Clutter.RootNode.new(framebuffer, colorState, new Cogl.Color(), 0);
+  return Clutter.RootNode.new(framebuffer, SHELL_MAJOR >= 47 ? new Cogl.Color() : new Clutter.Color(), 0);
 }
 
 function shot(name, [x, y, w, h]) {
@@ -69,7 +98,7 @@ function shot(name, [x, y, w, h]) {
   });
 }
 
-const Camera = GObject.registerClass(
+const Camera = GObject.registerClass(paintNodeWithContext(
 class Camera extends Clutter.Actor {
   _init(rect) {
     super._init({name: 'drv-camera', reactive: false});
@@ -98,7 +127,7 @@ class Camera extends Clutter.Actor {
         this.off = Cogl.Offscreen.new_with_texture(this.tex);
         this.off.allocate();
       }
-      const target = Clutter.RootNode.new(this.off, view.color_state, new Cogl.Color(), 0);
+      const target = newRootNode(this.off, view.color_state);
       root.add_child(target);
       const blit = Clutter.BlitNode.new(fb);
       blit.add_blit_rectangle(fx, fy, 0, 0, fw, fh);
@@ -113,10 +142,10 @@ class Camera extends Clutter.Actor {
     node.add_texture_rectangle(new Clutter.ActorBox({x1: 0, y1: 0, x2: w, y2: h}), 0, 0, 1, 1);
     root.add_child(node);
   }
-});
+}));
 
 // Paints nothing; records whether each frame redrew the whole stage.
-const ClipProbe = GObject.registerClass(
+const ClipProbe = GObject.registerClass(paintNodeWithContext(
 class ClipProbe extends Clutter.Actor {
   _init(rect) {
     super._init({name: 'drv-clip-probe', reactive: false});
@@ -136,7 +165,7 @@ class ClipProbe extends Clutter.Actor {
       ? ['OUT', 'IN', 'PART'][clip.contains_rectangle(new Mtk.Rectangle({x, y, width, height}))]
       : 'NOCLIP';
   }
-});
+}));
 
 function lg() {
   return global._lgGlass;
@@ -315,6 +344,15 @@ export default class LgDriver extends Extension {
     log(`${tag} frames=${this._frames} ${JSON.stringify(picked)} relays=${JSON.stringify(row.relays ?? null)}`);
   }
 
+  // A window that redraws every frame. glxgears needs an X server, which the
+  // shell in a distrobox runs without; there a terminal printing without
+  // pause stands in.
+  _spawnGears() {
+    if (GLib.getenv('DISPLAY') && GLib.find_program_in_path('glxgears'))
+      return this._spawn(['glxgears'], 'gears');
+    return this._spawn(['foot', '-T', 'lgdrv-gears', 'sh', '-c', 'while :; do echo $RANDOM$RANDOM$RANDOM; done'], 'gears');
+  }
+
   async _spawn(argv, title) {
     let proc;
     try {
@@ -439,7 +477,7 @@ export default class LgDriver extends Extension {
       await this._shots('d2 moved', region, 'dock');
     }
 
-    const g = await this._spawn(['glxgears'], 'glxgears');
+    const g = await this._spawnGears();
     if (g) {
       g.win.move_frame(true, rx + rw - 350, ry - 150);
       await sleep(800);
@@ -524,7 +562,11 @@ export default class LgDriver extends Extension {
         for (const source of Main.messageTray.getSources())
           source.destroy();
       });
-    const showOsd = () => Main.osdWindowManager.showAll(Gio.ThemedIcon.new('audio-volume-high-symbolic'), 'Volume', 0.6, 1);
+    const icon = Gio.ThemedIcon.new('audio-volume-high-symbolic');
+    // showAll() is GNOME 49's; before, show() with no monitor index.
+    const showOsd = () => SHELL_MAJOR >= 49
+      ? Main.osdWindowManager.showAll(icon, 'Volume', 0.6, 1)
+      : Main.osdWindowManager.show(-1, icon, 'Volume', 0.6, 1);
     await this._surface('o1 osd', 'osd', showOsd, () => Main.osdWindowManager.hideAll(), showOsd);
 
     await this._menuShot('m2 calendar-again', dateMenu, 'menu');
@@ -583,7 +625,7 @@ export default class LgDriver extends Extension {
     await sleep(2200);
     const region = this._region('dock');
     const a = await this._spawn(['foot', '-o', 'colors.background=d02020', '-T', 'lgdrv-a'], 'lgdrv-a');
-    const g = await this._spawn(['glxgears'], 'glxgears');
+    const g = await this._spawnGears();
     if (a && region) {
       a.win.move_frame(true, region[0] + 80, region[1] - 300);
       g?.win.move_frame(true, region[0] + region[2] - 350, region[1] - 150);
@@ -676,7 +718,7 @@ export default class LgDriver extends Extension {
     await this._shots('w2 moved', this._windowRegion(a.win), 'application');
 
     // A window behind that redraws every frame.
-    const g = await this._spawn(['glxgears'], 'glxgears');
+    const g = await this._spawnGears();
     if (g) {
       const r = a.win.get_frame_rect();
       g.win.move_frame(true, r.x - 150, r.y + 100);

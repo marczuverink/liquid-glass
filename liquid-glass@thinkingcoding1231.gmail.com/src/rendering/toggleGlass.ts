@@ -26,6 +26,7 @@ import { RelaySet, localToStage } from './relays.js';
 import { configureSamplerLayer } from './pipelines.js';
 import { setTranslationIfChanged, setScaleIfChanged } from '../actors/writes.js';
 import { isActorValid } from '../actors/lifecycle.js';
+import { offscreenFormat, paintNodeWithContext, setUniformVector, uniformDeclarations } from '../shellVersion.js';
 
 // The reader's fixed size; it is fitted to its rect by translation and scale
 // for the same reason as the sample area (relays.ts).
@@ -33,7 +34,7 @@ const READER_BASE = 256;
 
 type Target = { texture: Cogl.Texture2D, framebuffer: Cogl.Offscreen, width: number, height: number };
 
-export const BackdropReader = GObject.registerClass(
+export const BackdropReader = GObject.registerClass(paintNodeWithContext(
   class BackdropReader extends Clutter.Actor {
     declare copier: StageCopier;
     declare private _rect: number[] | null;
@@ -68,7 +69,7 @@ export const BackdropReader = GObject.registerClass(
       if (this._rect) this.copier.take(this, root, paintContext, this._rect);
     }
   }
-);
+));
 
 export type BackdropReader = InstanceType<typeof BackdropReader>;
 
@@ -81,7 +82,7 @@ const COMPOSE_BODY =
   'vec4 m = texture2D(cogl_sampler1, mix(m_rect.xy, m_rect.zw, uv));\n' +
   'cogl_color_out = m + d * (1.0 - m.a);\n';
 
-export const ToggleBackdropGlass = GObject.registerClass(
+export const ToggleBackdropGlass = GObject.registerClass(paintNodeWithContext(
   class ToggleBackdropGlass extends GlassActor {
     declare reader: BackdropReader;
     declare private _relays: RelaySet;
@@ -220,11 +221,11 @@ export const ToggleBackdropGlass = GObject.registerClass(
       if (!(w >= 1) || !(h >= 1)) return;
 
       if (!this._material || this._material.width !== w || this._material.height !== h) {
-        const target = createTarget(w, h, fb.get_texture().get_format(), this._logger);
+        const target = createTarget(w, h, offscreenFormat(fb), this._logger);
         this._material = target ? { ...target, width: w, height: h } : null;
         if (!this._material) return;
       }
-      addBlit(root, fb, this._material.framebuffer, this.get_color_state(), [fx0, fy0, w, h]);
+      addBlit(root, fb, this._material.framebuffer, this.color_state, [fx0, fy0, w, h]);
       this._materialUV = [(sx0 - fx0) / w, (sy0 - fy0) / h, (sx1 - fx0) / w, (sy1 - fy0) / h];
       this._materialCopies++;
     }
@@ -246,7 +247,7 @@ export const ToggleBackdropGlass = GObject.registerClass(
         this._composeBase = Cogl.Pipeline.new(ctx);
         configureSamplerLayer(this._composeBase, 0);
         configureSamplerLayer(this._composeBase, 1);
-        const snippet = Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, COMPOSE_DECL, null);
+        const snippet = Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, uniformDeclarations(COMPOSE_DECL), null);
         snippet.set_replace(COMPOSE_BODY);
         this._composeBase.add_snippet(snippet);
       }
@@ -258,11 +259,11 @@ export const ToggleBackdropGlass = GObject.registerClass(
       const st = localToStage(this, local[0], local[1], local[2], local[3]);
       const dw = desktopRect[2] - desktopRect[0];
       const dh = desktopRect[3] - desktopRect[1];
-      pipeline.set_uniform_float(pipeline.get_uniform_location('d_rect'), 4, 1, [
+      setUniformVector(pipeline, 'd_rect', [
         (st[0] - desktopRect[0]) / dw, (st[1] - desktopRect[1]) / dh,
         (st[2] - desktopRect[0]) / dw, (st[3] - desktopRect[1]) / dh,
       ]);
-      pipeline.set_uniform_float(pipeline.get_uniform_location('m_rect'), 4, 1, this._materialUV!);
+      setUniformVector(pipeline, 'm_rect', this._materialUV!);
 
       this._renderer.passes.add(root, this._composed.framebuffer, pipeline, w, h, [0, 0, 1, 1]);
       this._composeSerial++;
@@ -301,6 +302,6 @@ export const ToggleBackdropGlass = GObject.registerClass(
       this._composeBase = null;
     }
   }
-);
+));
 
 export type ToggleBackdropGlass = InstanceType<typeof ToggleBackdropGlass>;
