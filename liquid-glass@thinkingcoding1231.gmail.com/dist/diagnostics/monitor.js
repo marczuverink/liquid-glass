@@ -15,6 +15,7 @@ import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { diagnosticLog } from './logging.js';
 import { isActorValid } from '../actors/lifecycle.js';
+import { paintNodeWithContext } from '../shellVersion.js';
 const SAMPLE_MS = 100;
 const REPORT_MS = 1000;
 const BUSY_DAMAGE = 10;
@@ -27,7 +28,7 @@ const USER_HZ = 100;
 let _probeClass = null;
 
 function createProbe(rect) {
-    _probeClass ??= GObject.registerClass(class FullRedrawProbe extends Clutter.Actor {
+    _probeClass ??= GObject.registerClass(paintNodeWithContext(class FullRedrawProbe extends Clutter.Actor {
         _init(r) {
             super._init({ name: 'liquid-glass-monitor-probe', reactive: false, x: r[0], y: r[1], width: r[2], height: r[3] });
             Shell.util_set_hidden_from_pick(this, true);
@@ -44,7 +45,7 @@ function createProbe(rect) {
             if (clip && clip.contains_rectangle(new Mtk.Rectangle({ x, y, width, height })) === Mtk.RegionOverlap.IN)
                 this.full++;
         }
-    });
+    }));
     return new _probeClass(rect);
 }
 

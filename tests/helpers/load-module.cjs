@@ -5,7 +5,10 @@ const ts = require('../../liquid-glass@thinkingcoding1231.gmail.com/node_modules
 // Execute the built module graph with explicit GNOME adapters. Relative imports
 // use real implementations; bindings replace only dependencies supplied by a test.
 // Each fixture gets a fresh cache, so module-owned settings never leak between tests.
+// shellVersion.ts reads the shell version when it loads; tests get GNOME 50
+// unless they bind their own Config.
 function createModuleLoader(bindings = {}) {
+  bindings = { Config: { PACKAGE_VERSION: '50.0' }, ...bindings };
   const cache = new Map();
   function load(file) {
     file = path.resolve(file);

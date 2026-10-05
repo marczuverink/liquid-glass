@@ -16,6 +16,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import { diagnosticLog } from './logging.js';
 import { isActorValid } from '../actors/lifecycle.js';
+import { paintNodeWithContext } from '../shellVersion.js';
 
 const SAMPLE_MS = 100;
 const REPORT_MS = 1000;
@@ -34,7 +35,7 @@ type FullRedrawProbe = Clutter.Actor & { rect: number[], full: number };
 // paints (clones, screenshots) have no redraw clip and are not counted.
 let _probeClass: any = null;
 function createProbe(rect: number[]): FullRedrawProbe {
-  _probeClass ??= GObject.registerClass(
+  _probeClass ??= GObject.registerClass(paintNodeWithContext(
     class FullRedrawProbe extends Clutter.Actor {
       declare rect: number[];
       declare full: number;
@@ -56,7 +57,7 @@ function createProbe(rect: number[]): FullRedrawProbe {
           this.full++;
       }
     }
-  );
+  ));
   return new _probeClass(rect);
 }
 

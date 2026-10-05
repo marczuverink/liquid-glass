@@ -9,7 +9,8 @@ test('uniform state buffers before compilation and skips unchanged scalar and ar
   const state = new UniformState();
   const writes = [], locations = [];
   const pipeline = { get_uniform_location: name => { locations.push(name); return name; },
-    set_uniform_float: (...args) => writes.push(structuredClone(args)) };
+    set_uniform_float: (...args) => writes.push(structuredClone(args)),
+    set_uniform_1f: (loc, value) => writes.push([loc, 1, 1, [value]]) };
   state.set('radius', 5);
   const regions = [10, 20];
   state.setArray('regions', regions);

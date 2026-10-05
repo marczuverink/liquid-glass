@@ -17,7 +17,7 @@ import { startSyncLoop, stopStageLoop } from './animation/frameLoops.js';
 import { placeScreenGlass, resolveGlassOrigin, applyGlassScale, GLASS_SHADOW_MAX_RADIUS } from './actors/glassBounds.js';
 import { resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb, rgbToHex } from './animation/colors.js';
 
-import { MENU_NO_ANIMATION } from './shellVersion.js';
+import { MENU_NO_ANIMATION, accentColors } from './shellVersion.js';
 import { Logger } from './logger.js';
 
 // Room around the glass rect for the shader's edge effects.
@@ -226,13 +226,14 @@ export class UIManager {
    * The accent colour and its foreground as [background, foreground] hex.
    * Asked of St rather than read off a themed dummy widget, because themes
    * such as MacTahoe only paint today's date in the accent while selected.
-   * The dummy (marked :selected) remains the fallback when St has no accent.
+   * The dummy (marked :selected) remains the fallback when St has no accent
+   * (GNOME 46).
    */
   private _resolveAccentColors(): [string, string] {
-    const [accent, accentFg] = St.ThemeContext.get_for_stage(global.stage).get_accent_color();
-    if (accent && accentFg)
-      return [rgbToHex(accent.red, accent.green, accent.blue),
-        rgbToHex(accentFg.red, accentFg.green, accentFg.blue)];
+    const accent = accentColors();
+    if (accent)
+      return [rgbToHex(accent[0].red, accent[0].green, accent[0].blue),
+        rgbToHex(accent[1].red, accent[1].green, accent[1].blue)];
 
     // The theme's selectors need the calendar ancestry.
     const parent = new UnpickableWidget({ style_class: 'calendar' });

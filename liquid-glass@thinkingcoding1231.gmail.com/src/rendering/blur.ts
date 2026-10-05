@@ -2,6 +2,7 @@ import Cogl from 'gi://Cogl';
 import { ShaderPipelines, configureSamplerLayer } from './pipelines.js';
 import { RenderPasses, setPipelineFloat, setPipelineVec2 } from './passes.js';
 import { computeGaussianKernel, buildGaussianSnippet, type GaussianKernel } from './shaderSource.js';
+import { uniformDeclarations } from '../shellVersion.js';
 
 // 0: separable Gaussian (shader generated from the kernel), 1: Dual Kawase.
 export type BlurMethod = 0 | 1;
@@ -165,14 +166,14 @@ export class BlurRenderer {
     this._gaussianHPipeline = Cogl.Pipeline.new(ctx);
     configureSamplerLayer(this._gaussianHPipeline, 0);
     const hSnippet = buildGaussianSnippet(kernel, 'h');
-    const hSnip = Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, hSnippet.decl, null);
+    const hSnip = Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, uniformDeclarations(hSnippet.decl), null);
     hSnip.set_replace(hSnippet.body);
     this._gaussianHPipeline.add_snippet(hSnip);
 
     this._gaussianVPipeline = Cogl.Pipeline.new(ctx);
     configureSamplerLayer(this._gaussianVPipeline, 0);
     const vSnippet = buildGaussianSnippet(kernel, 'v');
-    const vSnip = Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, vSnippet.decl, null);
+    const vSnip = Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, uniformDeclarations(vSnippet.decl), null);
     vSnip.set_replace(vSnippet.body);
     this._gaussianVPipeline.add_snippet(vSnip);
 

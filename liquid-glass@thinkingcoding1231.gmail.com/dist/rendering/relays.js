@@ -10,6 +10,7 @@ import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import { UnpickableActor } from '../actors/unpickable.js';
 import { setTranslationIfChanged, setScaleIfChanged } from '../actors/writes.js';
+import { undoCloneScale } from '../shellVersion.js';
 // Room around the sample rect, so the rect can shift a little at paint time
 // (the live geometry hook) and still be inside the redrawn area.
 export const SAMPLE_MARGIN = 32;
@@ -57,7 +58,10 @@ const BackdropRelay = GObject.registerClass(class BackdropRelay extends Clutter.
     }
 
     vfunc_get_paint_volume(volume) {
-        return volume.set_from_allocation(this);
+        if (!volume.set_from_allocation(this))
+            return false;
+        undoCloneScale(this, volume);
+        return true;
     }
 });
 

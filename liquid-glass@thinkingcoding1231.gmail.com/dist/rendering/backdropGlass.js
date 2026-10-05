@@ -8,7 +8,8 @@ import GLib from 'gi://GLib';
 import Shell from 'gi://Shell';
 import Gio from 'gi://Gio';
 import { GlassRenderer } from './glassRenderer.js';
-import { StageCopier, coglContext } from './stageCopy.js';
+import { StageCopier } from './stageCopy.js';
+import { coglContext, paintNodeWithContext } from '../shellVersion.js';
 import { RelaySet, SAMPLE_MARGIN, localToStage } from './relays.js';
 import { registerGlass, unregisterGlass } from '../diagnostics/glass.js';
 
@@ -325,7 +326,7 @@ export const GlassActor = GObject.registerClass(class GlassActor extends Clutter
  * Quick Settings' background mode): it copies its own backdrop from the
  * stage view it is painted on.
  */
-export const BackdropGlass = GObject.registerClass(class BackdropGlass extends GlassActor {
+export const BackdropGlass = GObject.registerClass(paintNodeWithContext(class BackdropGlass extends GlassActor {
     _init(params = {}) {
         super._init(params);
         this._relays = new RelaySet(this);
@@ -422,4 +423,4 @@ export const BackdropGlass = GObject.registerClass(class BackdropGlass extends G
         this._relays.clear();
         this._copier.clear();
     }
-});
+}));

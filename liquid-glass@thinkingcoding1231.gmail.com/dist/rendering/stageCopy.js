@@ -6,11 +6,7 @@
 import Clutter from 'gi://Clutter';
 import Cogl from 'gi://Cogl';
 import Mtk from 'gi://Mtk';
-
-// Through the stage's context, since GNOME 51 has no Clutter.get_default_backend().
-export function coglContext() {
-    return global.stage.context.get_backend().get_cogl_context();
-}
+import { coglContext, newRootNode, offscreenFormat } from '../shellVersion.js';
 
 // An offscreen texture to render or blit into. A blit needs both sides fixed
 // point or both floating point, so `format` follows the source when that is
@@ -35,7 +31,7 @@ export function createTarget(width, height, format = null, logger) {
 // A RootNode makes the target the blit's destination and, with no clear
 // flags, leaves it alone otherwise. Its colour state must be the source's.
 export function addBlit(root, source, target, colorState, rect) {
-    const node = Clutter.RootNode.new(target, colorState, new Cogl.Color(), 0);
+    const node = newRootNode(target, colorState);
     root.add_child(node);
     const blit = Clutter.BlitNode.new(source);
     blit.add_blit_rectangle(rect[0], rect[1], 0, 0, rect[2], rect[3]);
@@ -114,7 +110,7 @@ export class StageCopier {
             this.missCount++;
             return { copy: null, missed: true };
         }
-        const format = fb instanceof Cogl.Offscreen ? fb.get_texture().get_format() : null;
+        const format = fb instanceof Cogl.Offscreen ? offscreenFormat(fb) : null;
         copy = this._target(view, copy, fx1 - fx0, fy1 - fy0, format);
         if (!copy)
             return { copy: null, missed: false };

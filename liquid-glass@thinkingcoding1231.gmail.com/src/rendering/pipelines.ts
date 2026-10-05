@@ -2,6 +2,7 @@ import Cogl from 'gi://Cogl';
 import Gio from 'gi://Gio';
 import type { Logger } from '../logger.js';
 import { splitShader } from './shaderSource.js';
+import { uniformDeclarations } from '../shellVersion.js';
 
 export class ShaderPipelines {
   constructor(private _logger?: Logger) { }
@@ -70,7 +71,7 @@ export class ShaderPipelines {
 
     if (this._downsampleSource) {
       const downSnippet = splitShader(this._downsampleSource, message => this._logger?.warn(message));
-      const s = Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, downSnippet.decl, null);
+      const s = Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, uniformDeclarations(downSnippet.decl), null);
       s.set_replace(downSnippet.body);
       this.downsample.add_snippet(s);
     }
@@ -80,7 +81,7 @@ export class ShaderPipelines {
 
     if (this._upsampleSource) {
       const upSnippet = splitShader(this._upsampleSource, message => this._logger?.warn(message));
-      const s = Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, upSnippet.decl, null);
+      const s = Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, uniformDeclarations(upSnippet.decl), null);
       s.set_replace(upSnippet.body);
       this.upsample.add_snippet(s);
     }
@@ -96,7 +97,7 @@ export class ShaderPipelines {
     configureSamplerLayer(this.boxDown, 0);
     {
       const boxSnip = Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT,
-        'uniform vec2 inv_size;\n', null);
+        uniformDeclarations('uniform vec2 inv_size;\n'), null);
       boxSnip.set_replace(
         'vec2 uv = cogl_tex_coord_in[0].st;\n' +
         'vec4 c  = texture2D(cogl_sampler0, uv + vec2( 1.0,  1.0) * inv_size);\n' +
@@ -134,7 +135,7 @@ export class ShaderPipelines {
     decl = decl.replace(/uniform\s+sampler2D\s+cogl_sampler\d*\s*;[^\n]*/g, '');
     body = body.replace(/\bcogl_sampler\b/g, 'cogl_sampler0');
 
-    const snippet = Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, decl, null);
+    const snippet = Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, uniformDeclarations(decl), null);
     snippet.set_replace(body);
     this.composite.add_snippet(snippet);
   }

@@ -1,5 +1,8 @@
 import Clutter from 'gi://Clutter';
 import Cogl from 'gi://Cogl';
+
+import { setUniformVector } from '../shellVersion.js';
+
 export class RenderPasses {
   // Per-pass pipeline copies; see pipeline().
   private _passPipelines = new Map<string, { base: Cogl.Pipeline; copy: Cogl.Pipeline }>();
@@ -69,13 +72,11 @@ export class RenderPasses {
 export function setPipelineVec2(
   pipeline: Cogl.Pipeline, name: string, x: number, y: number
 ): void {
-  const loc = pipeline.get_uniform_location(name);
-  pipeline.set_uniform_float(loc, 2, 1, [x, y]);
+  setUniformVector(pipeline, name, [x, y]);
 }
 
 export function setPipelineFloat(
   pipeline: Cogl.Pipeline, name: string, value: number
 ): void {
-  const loc = pipeline.get_uniform_location(name);
-  pipeline.set_uniform_float(loc, 1, 1, [value]);
+  pipeline.set_uniform_1f(pipeline.get_uniform_location(name), value);
 }
