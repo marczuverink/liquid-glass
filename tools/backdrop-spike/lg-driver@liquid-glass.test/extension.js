@@ -11,6 +11,12 @@
 //   lifecycle  disables and enables Liquid Glass with every glass shown once
 //   window     application glass on a foot window: drag, a busy window behind,
 //              a change in front, minimise, resize and close
+//   arcmenu    ArcMenu's menu in several layouts and locations, its context
+//              menu, and ArcMenu disabled and enabled again (run-glass.sh with
+//              LG_EXTRA_EXTENSIONS=arcmenu@arcmenu.com)
+//   adaptive   adaptive text colour: the backdrop read against a bare screen,
+//              the colours while a menu opens, hovered rows, and the OSD while
+//              its level changes
 //   bench      global._lgBench.run() (run-glass.sh with LG_BENCH=1); LG_DRV_BENCH
 //              picks scenarios (comma separated, default all), LG_DRV_BENCH_SECONDS
 //              the seconds per scenario (default 3), LG_DRV_BENCH_AB=1 adds a run without UI glass
@@ -30,11 +36,14 @@ import St from 'gi://St';
 
 import * as Config from 'resource:///org/gnome/shell/misc/config.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const OUT_DIR = GLib.getenv('LG_SPIKE_OUT') ?? GLib.get_tmp_dir();
 const SCENARIO = GLib.getenv('LG_DRV_SCENARIO') ?? 'dock';
 const LG_UUID = 'liquid-glass@thinkingcoding1231.gmail.com';
+const ARCMENU_UUID = 'arcmenu@arcmenu.com';
 const COLORS = ['rgb(255,0,255)', 'rgb(255,255,0)'];
 
 function log(msg) {
@@ -200,6 +209,7 @@ export default class LgDriver extends Extension {
     this._signals = [];
     this._frames = 0;
     this._camera = null;
+    this._cameraAway = false;
     this._signals.push([global.stage, global.stage.connect('after-paint', () => this._frames++)]);
     this._signals.push([global.stage, global.stage.connect('before-update', () => {
       if (this._camera?.armed)
@@ -266,6 +276,10 @@ export default class LgDriver extends Extension {
       await this._windowScenario();
     else if (SCENARIO === 'bench')
       await this._benchScenario();
+    else if (SCENARIO === 'arcmenu')
+      await this._arcMenuScenario();
+    else if (SCENARIO === 'adaptive')
+      await this._adaptiveScenario();
     log(`dump\n${lg().dump()}`);
   }
 
@@ -323,6 +337,11 @@ export default class LgDriver extends Extension {
   }
 
   async _shots(tag, rect, owner) {
+    // Menus at the top left would cover the camera's usual place.
+    if (this._cameraAway) {
+      const m = Main.layoutManager.primaryMonitor;
+      this._camera.set_position(rect[0] + rect[2] / 2 < m.width / 2 ? m.width - rect[2] : 0, 60);
+    }
     this._camera.rect = rect;
     this._camera.set_size(rect[2], rect[3]);
     this._camera.armed = true;
@@ -618,6 +637,383 @@ export default class LgDriver extends Extension {
     log(`calendar without glass: ${await this._countFullStage(open)}`);
     dateMenu.close(true);
     await sleep(1000);
+  }
+
+  async _arcMenuButton() {
+    for (let i = 0; i < 40; i++) {
+      const button = Main.panel.statusArea.ArcMenu;
+      if (button?.arcMenu && button._menuLayout)
+        return button;
+      await sleep(250);
+    }
+    return null;
+  }
+
+  _arcMenuGlasses() {
+    return lg().glassObjects().filter(g => g._owner.startsWith('menu:ArcMenu')).map(g => g._owner);
+  }
+
+  async _arcMenuScenario() {
+    this._cameraAway = true;
+    let button = await this._arcMenuButton();
+    if (!button) {
+      log('a0 no ArcMenu button');
+      return;
+    }
+    const detected = this._lgSettings().get_strv('detected-extra-menus');
+    log(`a0 detected=${JSON.stringify(detected)} glasses=${JSON.stringify(this._arcMenuGlasses())}`);
+    const arcSettings = Extension.lookupByUUID(ARCMENU_UUID).getSettings();
+    const toggle = () => button.toggleMenu();
+
+    await this._surface('a1 arcmenu', 'menu:ArcMenu', toggle, toggle);
+    for (const layout of ['11', 'raven', 'runner', 'plasma']) {
+      arcSettings.set_string('menu-layout', layout);
+      await sleep(2000);
+      await this._menuShotWith(`a2 layout-${layout}`, toggle, toggle, 'menu:ArcMenu');
+    }
+    arcSettings.set_string('menu-layout', 'arcmenu');
+    await sleep(2000);
+
+    arcSettings.set_string('force-menu-location', 'BottomCentered');
+    await sleep(1000);
+    await this._menuShotWith('a3 bottom-centered', toggle, toggle, 'menu:ArcMenu');
+    arcSettings.reset('force-menu-location');
+    await sleep(1000);
+
+    const context = button.arcMenuContextMenu;
+    await this._surface('a4 context', 'menu:ArcMenuContextMenu', () => context.open(true), () => context.close(true));
+
+    // Moving the button recreates it, and with it both menus.
+    arcSettings.set_string('position-in-panel', 'Right');
+    await sleep(2500);
+    button = await this._arcMenuButton();
+    log(`a5 moved glasses=${JSON.stringify(this._arcMenuGlasses())} leftovers=${this._leftovers().length}`);
+    if (button)
+      await this._menuShotWith('a5 moved', () => button.toggleMenu(), () => button.toggleMenu(), 'menu:ArcMenu');
+    arcSettings.reset('position-in-panel');
+    await sleep(2500);
+
+    Main.extensionManager.disableExtension(ARCMENU_UUID);
+    await sleep(1500);
+    log(`a6 arcmenu disabled glasses=${JSON.stringify(this._arcMenuGlasses())} ` +
+      `detected=${JSON.stringify(this._lgSettings().get_strv('detected-extra-menus'))}`);
+    Main.extensionManager.enableExtension(ARCMENU_UUID);
+    button = await this._arcMenuButton();
+    await sleep(1500);
+    log(`a7 arcmenu enabled glasses=${JSON.stringify(this._arcMenuGlasses())}`);
+    if (button)
+      await this._surface('a7 arcmenu-again', 'menu:ArcMenu', () => button.toggleMenu(), () => button.toggleMenu());
+
+    this._lgSettings().set_strv('disabled-extra-menus', ['ArcMenu']);
+    await sleep(1000);
+    log(`a8 switched off glasses=${JSON.stringify(this._arcMenuGlasses())}`);
+    this._lgSettings().reset('disabled-extra-menus');
+    await sleep(1000);
+    log(`a9 switched on glasses=${JSON.stringify(this._arcMenuGlasses())}`);
+  }
+
+  async _menuShotWith(tag, open, close, owner) {
+    open();
+    await sleep(1200);
+    const region = this._region(owner);
+    if (region)
+      await this._shots(tag, region, owner);
+    else
+      log(`${tag}: no region`);
+    close();
+    await sleep(800);
+  }
+
+  async _setBackground(color) {
+    const bg = new Gio.Settings({schema_id: 'org.gnome.desktop.background'});
+    bg.set_string('picture-uri', '');
+    bg.set_string('picture-uri-dark', '');
+    bg.set_string('picture-options', 'none');
+    bg.set_string('color-shading-type', 'solid');
+    bg.set_string('primary-color', color);
+    await sleep(1500);
+  }
+
+  // Counts the sampler's measurements by path: the glass's backdrop, the
+  // screen before the glass is drawn (with the glass tone), or the screen.
+  _countPaths(sampler) {
+    const counts = {backdrop: 0, bare: 0, screen: 0};
+    const screen = sampler.sampleLuminance.bind(sampler);
+    const backdrop = sampler.sampleBackdropLuminance.bind(sampler);
+    sampler.sampleLuminance = (rect, tone) => {
+      counts[tone ? 'bare' : 'screen']++;
+      return screen(rect, tone);
+    };
+    sampler.sampleBackdropLuminance = (...args) => {
+      counts.backdrop++;
+      return backdrop(...args);
+    };
+    return counts;
+  }
+
+  _fg(actor) {
+    const c = actor.get_theme_node().get_foreground_color();
+    return `#${[c.red, c.green, c.blue].map(v => v.toString(16).padStart(2, '0')).join('')}`;
+  }
+
+  _stageRect(actor) {
+    const [x, y] = actor.get_transformed_position();
+    const [w, h] = actor.get_transformed_size();
+    return {x: Math.round(x), y: Math.round(y), width: Math.round(w), height: Math.round(h)};
+  }
+
+  async _adaptiveScenario() {
+    const ext = Extension.lookupByUUID(LG_UUID);
+    const mod = await import(`file://${ext.path}/dist/contrastSampler.js`);
+    const ui = ext.stateObj?._uiManager ?? ext._uiManager;
+    const dateMenu = Main.panel.statusArea.dateMenu.menu;
+    const fresh = () => new mod.StageContrastSampler();
+    const f3 = v => v === null ? 'null' : v.toFixed(3);
+
+    // e1: the backdrop read through the glass's copy against a screenshot of
+    // the same rect with the menu closed, for plain colours and for a
+    // backdrop that is bright only in its top half.
+    for (const color of ['#f0f0f0', '#202020', '#7a7a7a', '#3060c0']) {
+      await this._setBackground(color);
+      dateMenu.open(true);
+      await sleep(1800);
+      const rect = this._stageRect(ui.menu.actor);
+      const copy = ui.glass.backdropCopy();
+      const tone = mod.glassToneOf(ui.glass.uniformValues);
+      const read = copy ? await fresh().sampleBackdropLuminance(copy, rect, tone) : null;
+      const onScreen = await fresh().sampleLuminance(rect);
+      dateMenu.close(true);
+      await sleep(1500);
+      const bare = await fresh().sampleLuminance(rect, tone);
+      const ok = read !== null && bare !== null && Math.abs(read - bare) < 0.02;
+      log(`e1 ${color} rect=${JSON.stringify(rect)} copy=${copy ? JSON.stringify(copy.rect.map(Math.round)) : null} ` +
+        `backdrop=${f3(read)} bare=${f3(bare)} screen-with-glass=${f3(onScreen)} ${ok ? 'OK' : 'NG'}`);
+    }
+    await this._setBackground('#202020');
+    dateMenu.open(true);
+    await sleep(1800);
+    const rect = this._stageRect(ui.menu.actor);
+    dateMenu.close(true);
+    await sleep(1200);
+    const top = {...rect, height: Math.round(rect.height / 2)};
+    const bottom = {...rect, y: rect.y + top.height, height: rect.height - top.height};
+    const bright = this._behind('menu', [rect.x - 60, rect.y - 60, 0, 0], rect.width, top.height);
+    bright.set_style('background-color: rgb(240,240,240);');
+    await sleep(500);
+    dateMenu.open(true);
+    await sleep(1800);
+    const tone = mod.glassToneOf(ui.glass.uniformValues);
+    const copy = ui.glass.backdropCopy();
+    const readTop = await fresh().sampleBackdropLuminance(copy, top, tone);
+    const readBottom = await fresh().sampleBackdropLuminance(copy, bottom, tone);
+    dateMenu.close(true);
+    await sleep(1500);
+    const bareTop = await fresh().sampleLuminance(top, tone);
+    const bareBottom = await fresh().sampleLuminance(bottom, tone);
+    const halvesOk = Math.abs(readTop - bareTop) < 0.03 && Math.abs(readBottom - bareBottom) < 0.03 && readTop > readBottom;
+    log(`e1 halves top backdrop=${f3(readTop)} bare=${f3(bareTop)} bottom backdrop=${f3(readBottom)} bare=${f3(bareBottom)} ` +
+      `${halvesOk ? 'OK' : 'NG'}`);
+    this._drop(bright);
+
+    // e2: the text colour from the moment a menu opens, after it last opened
+    // over the other background.
+    const timeline = async (tag, manager, open, close) => {
+      const counts = this._countPaths(manager._contrastSampler);
+      for (const color of ['#101010', '#f0f0f0', '#101010']) {
+        await this._setBackground(color);
+        for (const k of Object.keys(counts))
+          counts[k] = 0;
+        const t0 = GLib.get_monotonic_time();
+        const applied = [];
+        const apply = manager._applyAdaptiveColorMap;
+        manager._applyAdaptiveColorMap = function (map, skip) {
+          applied.push(`${Math.round((GLib.get_monotonic_time() - t0) / 1000)}ms:${map.size}${skip ? 's' : ''}` +
+            `${label && map.has(label) ? `:${map.get(label)}` : ''}`);
+          return apply.call(this, map, skip);
+        };
+        // A label on the glass itself, not on a card of its own. Picked again
+        // at every mark: some menus (Kiwi Menu) rebuild their items on open.
+        const pick = () => {
+          const onGlass = manager._collectAdaptiveTextTargets()
+            .filter(a => a instanceof St.Label && a.text && mod.backdropLuminance(a, manager.menu.actor) === null);
+          return onGlass.find(a => a.mapped) ?? onGlass[0];
+        };
+        let label = pick();
+        // Frames drawn with the label in another colour than the one it ends up with.
+        const painted = [];
+        const paintId = global.stage.connect('after-paint', () => {
+          const l = pick();
+          if (l?.mapped && GLib.get_monotonic_time() - t0 < 1500e3)
+            painted.push(this._fg(l));
+        });
+        open();
+        const marks = [];
+        for (const at of [0, 30, 60, 100, 200, 400, 700, 1000, 1400, 2000]) {
+          const wait = at - (GLib.get_monotonic_time() - t0) / 1000;
+          if (wait > 0)
+            await sleep(wait);
+          label = pick() ?? label;
+          marks.push(`${at}:${label ? this._fg(label) : '-'}`);
+        }
+        global.stage.disconnect(paintId);
+        const final = label ? this._fg(label) : null;
+        const wrongFrames = painted.filter(c => c !== final).length;
+        const settledAt = marks.findIndex(m => m.endsWith(final));
+        const steady = marks.slice(settledAt).every(m => m.endsWith(final));
+        const want = color === '#f0f0f0' ? '#1a1a1a' : '#f2f2f2';
+        // The first colours applied are the final ones, without a tween.
+        const first = applied.find(a => !/:0s?(:#[0-9a-f]+)?$/.test(a)) ?? '';
+        manager._applyAdaptiveColorMap = apply;
+        // From the 30 ms mark on, the label shows the final colour.
+        log(`e2 ${tag} ${color} ${marks.join(' ')} paths=${JSON.stringify(counts)} applied=${applied.join(',')} ` +
+          `first=${first.split(':')[0]} frames=${painted.length} wrong-frames=${wrongFrames} ` +
+          `${final === want && steady && settledAt <= 3 ? 'OK' : 'NG'}`);
+        close();
+        await sleep(1500);
+      }
+    };
+    await timeline('calendar', ui, () => dateMenu.open(true), () => dateMenu.close(true));
+
+    const button = new PanelMenu.Button(0.0, 'lgdrv-menu', false);
+    button.add_child(new St.Label({text: 'Drv', y_align: Clutter.ActorAlign.CENTER}));
+    const items = [];
+    for (let i = 0; i < 6; i++) {
+      const item = new PopupMenu.PopupMenuItem(`Row ${i}`);
+      button.menu.addMenuItem(item);
+      items.push(item);
+    }
+    Main.panel.addToStatusArea('lgdrvMenu', button);
+    let panelManager = null;
+    for (let i = 0; i < 20 && !panelManager; i++) {
+      await sleep(250);
+      const pmm = ext.stateObj?._panelMenuManager ?? ext._panelMenuManager;
+      panelManager = [...(pmm?._menus?.values() ?? [])].find(e => e.name === 'lgdrvMenu')?.manager ?? null;
+    }
+    if (!panelManager) {
+      log('e2 no glass for the driver menu');
+      button.destroy();
+      return;
+    }
+    await timeline('panel-menu', panelManager, () => button.menu.open(true), () => button.menu.close(true));
+
+    // e3: hovered rows take the highlight's colour, and the others keep theirs.
+    // A row can stay highlighted after it is left, through its key focus
+    // (GNOME 46).
+    const hoverCheck = async (tag, rows) => {
+      const labelsOf = row => {
+        const found = [];
+        const walk = a => {
+          if (a instanceof St.Label && a.mapped && a.text)
+            found.push(a);
+          a.get_children().forEach(walk);
+        };
+        walk(row);
+        return found;
+      };
+      const lit = row => row.get_theme_node().get_background_color().alpha >= 190;
+      const shared = this._fg(labelsOf(rows[rows.length - 1])[0]);
+      const check = () => {
+        const plain = [...new Set(rows.filter(r => !lit(r)).flatMap(r => labelsOf(r).map(l => this._fg(l))))];
+        const highlighted = rows.filter(lit).flatMap(r => labelsOf(r).map(l => this._fg(l)));
+        return {plain, highlighted, ok: plain.length === 1 && plain[0] === shared && highlighted.every(c => c !== shared)};
+      };
+      rows[0].active = true;
+      await sleep(60);
+      const hovered = check();
+      rows[0].active = false;
+      await sleep(60);
+      const left = check();
+      log(`e3 ${tag} hover shared=${shared} hovered=${JSON.stringify(hovered)} left=${JSON.stringify(left)} ` +
+        `${hovered.ok && left.ok ? 'OK' : 'NG'}`);
+      for (let round = 0; round < 3; round++) {
+        for (const row of rows) {
+          row.active = true;
+          await sleep(25);
+          row.active = false;
+        }
+      }
+      await sleep(60);
+      const swept = check();
+      log(`e3 ${tag} sweep ${JSON.stringify(swept)} ${swept.ok ? 'OK' : 'NG'}`);
+      await sleep(1000);
+      const later = check();
+      log(`e3 ${tag} sweep+1s ${JSON.stringify(later)} ${later.ok ? 'OK' : 'NG'}`);
+    };
+    await this._setBackground('#f0f0f0');
+    button.menu.open(true);
+    await sleep(1800);
+    await hoverCheck('panel-menu', items);
+    button.menu.close(true);
+    await sleep(1200);
+    button.destroy();
+    await sleep(500);
+
+    // ArcMenu, when the run enables it (LG_EXTRA_EXTENSIONS=arcmenu@arcmenu.com).
+    const arcButton = Main.panel.statusArea.ArcMenu;
+    const pmm = ext.stateObj?._panelMenuManager ?? ext._panelMenuManager;
+    const arcManager = [...(pmm?._menus?.values() ?? [])].find(e => e.name === 'ArcMenu')?.manager ?? null;
+    if (arcButton && arcManager) {
+      this._cameraAway = true;
+      await timeline('arcmenu', arcManager, () => arcButton.toggleMenu(), () => arcButton.toggleMenu());
+      await this._setBackground('#f0f0f0');
+      arcButton.toggleMenu();
+      await sleep(1800);
+      const rows = [];
+      const walk = a => {
+        if (typeof a._setSelectedStyle === 'function' && a.mapped && a.reactive)
+          rows.push(a);
+        a.get_children().forEach(walk);
+      };
+      walk(arcButton.arcMenu.box);
+      log(`e3 arcmenu rows=${rows.length}`);
+      if (rows.length > 1)
+        await hoverCheck('arcmenu', rows.slice(0, 8));
+      arcButton.toggleMenu();
+      await sleep(1500);
+    }
+
+    // Kiwi Menu, when the run enables it (LG_EXTRA_EXTENSIONS=kiwimenu@kemma). It
+    // rebuilds its items every time it opens.
+    const kiwiButton = Main.panel.statusArea.KiwiMenuButton;
+    const kiwiManager = [...(pmm?._menus?.values() ?? [])].find(e => e.name === 'KiwiMenuButton')?.manager ?? null;
+    if (kiwiButton && kiwiManager) {
+      this._cameraAway = true;
+      await timeline('kiwimenu', kiwiManager, () => kiwiButton.menu.open(true), () => kiwiButton.menu.close(true));
+    } else if (kiwiButton) {
+      log('e2 kiwimenu has no glass');
+    }
+
+    const qs = ext.stateObj?._quickSettingsManager ?? ext._quickSettingsManager;
+    if (qs) {
+      this._lgSettings().set_boolean('quick-settings-enable-adaptive-text-color', true);
+      await sleep(500);
+      const qsMenu = Main.panel.statusArea.quickSettings.menu;
+      await timeline('quick-settings', qs, () => qsMenu.open(true), () => qsMenu.close(true));
+    }
+
+    // e4: the OSD's text while its level bar moves.
+    const osd = ext.stateObj?._osdManager ?? ext._osdManager;
+    const icon = Gio.ThemedIcon.new('audio-volume-high-symbolic');
+    const showOsd = level => SHELL_MAJOR >= 49
+      ? Main.osdWindowManager.showAll(icon, 'Volume', level, 1)
+      : Main.osdWindowManager.show(-1, icon, 'Volume', level, 1);
+    for (const color of ['#f0f0f0', '#101010', '#8a8a8a']) {
+      await this._setBackground(color);
+      const counts = this._countPaths(osd._contrastSampler);
+      const seen = [];
+      for (let i = 0; i < 14; i++) {
+        showOsd(i % 2 ? 1.0 : 0.0);
+        await sleep(250);
+        const label = osd._collectAdaptiveTextTargets().find(a => a instanceof St.Label);
+        if (label && i > 1)
+          seen.push(this._fg(label));
+      }
+      const distinct = [...new Set(seen)];
+      log(`e4 osd ${color} colours=${JSON.stringify(distinct)} paths=${JSON.stringify(counts)} ` +
+        `${distinct.length === 1 && counts.screen === 0 ? 'OK' : 'NG'}`);
+      Main.osdWindowManager.hideAll();
+      await sleep(1500);
+    }
   }
 
   async _monitorScenario() {

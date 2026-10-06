@@ -125,8 +125,10 @@ float sdCircleRoundRect(vec2 p, vec2 b, float r) {
 // with zero curvature, so the rim and the refraction do not crease there.
 // The radius grows with the exponent so the corner's midpoint stays where the
 // circular one's is. A corner that has no room to grow, such as a pill's end,
-// gets a smaller exponent, down to a plain circle.
+// gets a smaller exponent, down to a plain circle. A radius past the shorter
+// half-extent would pinch the ends to a point, so it stops there.
 vec2 cornerShape(vec2 b, float r) {
+    r = min(r, min(b.x, b.y));
     float s = clamp(corner_smoothing, 0.0, 1.0) * corner_smoothing_enabled;
     float k = min(1.0 + s, max(min(b.x, b.y) / max(r, 1.0e-3), 1.0));
     // From the midpoint condition sqrt(2) * k * (1 - 2^(-1/n)) = sqrt(2) - 1.

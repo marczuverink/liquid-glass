@@ -27,6 +27,14 @@ export function newRootNode(framebuffer, colorState) {
     return Clutter.RootNode.new(framebuffer, clearColor, 0);
 }
 
+// A snapshot of the stage rect `rect` at `scale`, without the cursor. GNOME 50
+// added the colour state to paint in, which is the stage's when null.
+export function paintStageToContent(rect, scale) {
+    if (SHELL_MAJOR >= 50)
+        return global.stage.paint_to_content(rect, scale, null, Clutter.PaintFlag.NO_CURSORS);
+    return global.stage.paint_to_content(rect, scale, Clutter.PaintFlag.NO_CURSORS);
+}
+
 // The pixel format of an offscreen's texture, for a texture its pixels are
 // blitted into. GNOME 46 cannot report it, but every offscreen it draws the
 // stage or an effect into has the default format, which null stands for.

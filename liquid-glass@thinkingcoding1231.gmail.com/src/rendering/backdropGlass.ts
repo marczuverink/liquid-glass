@@ -336,19 +336,35 @@ export const BackdropGlass = GObject.registerClass(paintNodeWithContext(
     declare private _copier: StageCopier;
     // Whether the last sync saw the glass painted at all; see syncSources().
     declare private _wasPainted: boolean;
+    // The serial of the last copy taken before the glass was last mapped.
+    declare private _serialAtMap: number;
 
     _init(params: GlassActorParams = {}) {
       super._init(params);
       this._relays = new RelaySet(this);
       this._copier = new StageCopier(this._logger);
       this._wasPainted = false;
+      this._serialAtMap = 0;
     }
 
     // The relays are unmapped with the glass, so nothing behind it was
     // tracked while it was hidden.
     vfunc_map(): void {
       super.vfunc_map();
+      this._serialAtMap = this._copier.lastCopy?.serial ?? 0;
       this._relays.redrawArea();
+    }
+
+    /**
+     * What is behind the glass without the glass or anything above it: the
+     * last stage copy and the stage rect [x0, y0, x1, y1] it holds. Null until
+     * the glass has copied its backdrop since it was last shown, because an
+     * older copy can show what was there before.
+     */
+    backdropCopy(): { texture: Cogl.Texture, rect: number[] } | null {
+      const copy = this._copier.lastCopy;
+      if (!copy?.rect || copy.serial <= this._serialAtMap) return null;
+      return { texture: copy.texture, rect: copy.rect };
     }
 
     protected _onShadersLoaded(): void {

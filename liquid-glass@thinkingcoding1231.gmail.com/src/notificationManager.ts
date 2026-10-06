@@ -325,6 +325,7 @@ export class NotificationManager {
       },
     });
     this._isFirstAdaptiveRun = true;
+    this._contrastSampler.reset();
     this._startAdaptiveColorSampling();
   }
 
@@ -613,7 +614,7 @@ export class NotificationManager {
 
     this._contrastSampler
       .chooseColorsForActors(targets, this._adaptiveConfig, this.currentBanner,
-        () => this.glass?.paintCount ?? NaN)
+        () => this.glass?.paintCount ?? NaN, () => this.glass ? [this.glass] : [])
       .then(colorMap => {
         if (generation !== this._bannerGeneration || !this.currentBanner) return;
         this._applyAdaptiveColorMap(colorMap, this._isFirstAdaptiveRun);

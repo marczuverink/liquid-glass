@@ -8,8 +8,9 @@ function load(file, exports, bindings = {}) {
     .replace(/^import[\s\S]*?;\n/gm, '').replace(/export (class|const|function) /g, '$1 ');
   return new Function(...Object.keys(bindings), `${code}\nreturn {${exports}};`)(...Object.values(bindings));
 }
-const { StageContrastSampler: Sampler, AdaptiveContrastConfig: config, _getActorRect, backdropLuminance, luminanceSamples } = load(
-  'contrastSampler.js', 'StageContrastSampler, AdaptiveContrastConfig, _getActorRect, backdropLuminance, luminanceSamples', {
+const { StageContrastSampler: Sampler, AdaptiveContrastConfig: config, _getActorRect, backdropLuminance, luminanceSamples,
+  glassToneOf, tonedLuminance } = load(
+  'contrastSampler.js', 'StageContrastSampler, AdaptiveContrastConfig, _getActorRect, backdropLuminance, luminanceSamples, glassToneOf, tonedLuminance', {
     Shell: { Screenshot: class {} }, getTransformedRect: actor => actor.rect,
     GLib: { get_monotonic_time: () => 0 },
     global: { stage: { width: 3840, height: 2160 } },
@@ -189,6 +190,7 @@ function hoverFixture(rowCount = 1) {
   manager._pendingBackdropRoots = new Set();
   manager._backdropRefreshId = 0;
   manager._backdropColored = new Set();
+  manager._sampleColors = new Map();
   manager._adaptiveConfig = config;
   manager._isEffectActive = true;
   manager._actorDestroyed = false;
@@ -549,24 +551,32 @@ test('glyphs covering a large minority of the sample do not move the measured ba
   const width = 10, height = 10, channels = 3;
   const data = new Uint8Array(width * height * channels);
   for (let i = 0; i < width * height; i++) data.fill(i < 30 ? 242 : 20, i * channels, (i + 1) * channels);
+  const painted = [];
   const { StageContrastSampler: ShotSampler } = load('contrastSampler.js', 'StageContrastSampler', {
-    Shell: { Screenshot: class {
-      screenshot_area(_x, _y, _w, _h, _stream, cb) { cb(this, null); }
-      screenshot_area_finish() { return [true]; }
-    } },
-    Gio: {
-      MemoryOutputStream: { new_resizable: () => ({ close() {}, steal_as_bytes() { return null; } }) },
-      MemoryInputStream: { new_from_bytes: () => null },
+    Mtk: { Rectangle: class { constructor(r) { Object.assign(this, r); } } },
+    paintStageToContent: (rect, scale) => {
+      painted.push([rect, scale]);
+      return { get_texture: () => ({ get_width: () => width, get_height: () => height }) };
     },
-    GdkPixbuf: { Pixbuf: { new_from_stream: () => ({
-      get_width: () => width, get_height: () => height, get_rowstride: () => width * channels,
-      get_n_channels: () => channels, get_pixels: () => data,
-    }) } },
+    Shell: { Screenshot: {
+      composite_to_stream: (...args) => args[args.length - 1](null, null),
+      composite_to_stream_finish: () => ({
+        get_width: () => width, get_height: () => height, get_rowstride: () => width * channels,
+        get_n_channels: () => channels, get_pixels: () => data,
+      }),
+    } },
+    Gio: { MemoryOutputStream: { new_resizable: () => ({}) } },
+    Cogl: { Pipeline: { new: () => ({ set_layer_texture() {}, set_layer_filters() {} }) }, PipelineFilter: {}, BufferBit: {} },
+    coglContext: () => null,
+    createTarget: () => ({ texture: {}, framebuffer: { orthographic() {}, clear4f() {}, draw_textured_rectangle() {}, flush() {} } }),
     getTransformedRect: actor => actor.rect, GLib: { get_monotonic_time: () => 0 },
     global: { stage: { width: 3840, height: 2160 } },
   });
   const measured = await new ShotSampler().sampleLuminance({ x: 0, y: 0, width, height });
   assert.ok(Math.abs(measured - linear(20)) < 1e-9, `measured ${measured}, background ${linear(20)}`);
+  await new ShotSampler().sampleLuminance({ x: 10.5, y: 20, width: 960, height: 480 });
+  assert.deepEqual([{ ...painted[1][0] }, painted[1][1]], [{ x: 10, y: 20, width: 960, height: 480 }, 0.05],
+    'the stage is painted small rather than read at full size');
 });
 
 test('changing the preferred colour ends the settle hold at once', () => {
@@ -585,4 +595,180 @@ test('changing the preferred colour ends the settle hold at once', () => {
   assert.equal(sampler.decideTextColor(0.19, light), config.lightTextColor, 'not held by the flip 50 ms ago');
   now += 50e3;
   assert.equal(sampler.decideTextColor(0.2, light), config.lightTextColor);
+});
+
+const plainTone = glassToneOf(new Map());
+const toneWith = values => glassToneOf(new Map(Object.entries(values)));
+
+test('a glass with no colour adjustments predicts the backdrop unchanged', () => {
+  for (const grey of [0, 20, 128, 200, 255])
+    assert.ok(Math.abs(tonedLuminance(grey, grey, grey, plainTone) - linear(grey)) < 1e-9, `grey ${grey}`);
+});
+
+test('the glass tone predicts what the tint and the surface light do to a backdrop', () => {
+  const white = toneWith({ tint_r: 1, tint_g: 1, tint_b: 1, tint_strength: 0.5 });
+  assert.ok(tonedLuminance(10, 10, 10, white) > 0.2, 'a strong white tint lifts a dark backdrop');
+  assert.equal(tonedLuminance(10, 10, 10, toneWith({ tint_r: 1, tint_g: 1, tint_b: 1, tint_strength: 1 })), 1);
+  const dimmed = toneWith({ brightness: 0.5 });
+  assert.ok(tonedLuminance(200, 200, 200, dimmed) < linear(200) / 2);
+  const sheen = toneWith({ sheen_intensity: 0.5 });
+  assert.ok(tonedLuminance(10, 10, 10, sheen) > linear(10));
+  assert.equal(tonedLuminance(10, 10, 10, toneWith({ sheen_intensity: 0.5, surface_light_enabled: 0 })), tonedLuminance(10, 10, 10, plainTone));
+});
+
+function glassSource({ drawn = true, copyRect = [0, 0, 300, 400], values = {} } = {}) {
+  return {
+    mapped: drawn, uniformValues: new Map(Object.entries(values)),
+    get_paint_opacity: () => drawn ? 255 : 0,
+    backdropCopy: () => copyRect ? { texture: 'copy', rect: copyRect } : null,
+  };
+}
+
+function measuringSampler() {
+  const sampler = new Sampler();
+  const calls = [];
+  sampler.sampleLuminance = async (rect, tone) => { calls.push({ path: 'screen', tone }); return 0.9; };
+  sampler.sampleBackdropLuminance = async (copy, rect, tone) => { calls.push({ path: 'backdrop', copy, tone }); return 0.9; };
+  return { sampler, calls };
+}
+
+test('a drawn glass is measured from its backdrop copy, not from the screen', async () => {
+  const { sampler, calls } = measuringSampler();
+  const root = { mapped: true, rect: [0, 0, 300, 400] };
+  const rows = [{ mapped: true, rect: [10, 10, 100, 20] }];
+  await sampler.chooseColorsForActors(rows, config, root, undefined, () => [glassSource({ values: { tint_strength: 0.3 } })]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, 'backdrop');
+  assert.equal(calls[0].tone.tintStrength, 0.3);
+});
+
+test('before the glass is drawn the screen is measured with the glass tone applied', async () => {
+  const { sampler, calls } = measuringSampler();
+  const root = { mapped: true, rect: [0, 0, 300, 400] };
+  const rows = [{ mapped: true, rect: [10, 10, 100, 20] }];
+  await sampler.chooseColorsForActors(rows, config, root, undefined, () => [glassSource({ drawn: false, values: { tint_strength: 0.3 } })]);
+  assert.equal(calls[0].path, 'screen');
+  assert.equal(calls[0].tone.tintStrength, 0.3, 'the screen shows the bare backdrop');
+});
+
+test('a drawn glass without a fresh copy falls back to the screen as it is', async () => {
+  const { sampler, calls } = measuringSampler();
+  const root = { mapped: true, rect: [0, 0, 300, 400] };
+  const rows = [{ mapped: true, rect: [10, 10, 100, 20] }];
+  await sampler.chooseColorsForActors(rows, config, root, undefined, () => [glassSource({ copyRect: null })]);
+  assert.deepEqual(calls, [{ path: 'screen', tone: undefined }], 'the screen already shows the glass');
+  calls.length = 0;
+  sampler.invalidate();
+  await sampler.chooseColorsForActors(rows, config, root, undefined, () => [glassSource({ copyRect: [1000, 0, 1200, 100] })]);
+  assert.deepEqual(calls, [{ path: 'screen', tone: undefined }], 'a copy elsewhere on the screen is not used');
+});
+
+test('of several glasses, the one whose copy covers the text is measured', async () => {
+  const { sampler, calls } = measuringSampler();
+  const rows = [{ mapped: true, rect: [1950, 10, 100, 20] }];
+  const left = glassSource({ copyRect: [0, 0, 1920, 1080] });
+  const right = glassSource({ copyRect: [1920, 0, 3840, 1080], values: { brightness: 0.8 } });
+  await sampler.chooseColorsForActors(rows, config, null, undefined, () => [left, right]);
+  assert.equal(calls[0].path, 'backdrop');
+  assert.equal(calls[0].tone.brightness, 0.8);
+});
+
+test('a reset sampler decides afresh instead of smoothing towards the last decision', async () => {
+  const sampler = new Sampler(); let value = 0.02;
+  sampler.sampleLuminance = async () => value;
+  const root = { mapped: true, rect: [0, 0, 300, 400] };
+  const rows = [{ mapped: true, rect: [10, 10, 100, 20] }];
+  for (let i = 0; i < 10; i++) await sampler.chooseColorsForActors(rows, config, root);
+  value = 0.2;
+  const held = new Sampler(); held.sampleLuminance = async () => 0.02;
+  for (let i = 0; i < 10; i++) await held.chooseColorsForActors(rows, config, root);
+  held.sampleLuminance = async () => 0.2;
+  held.invalidate();
+  assert.equal((await held.chooseColorsForActors(rows, config, root)).get(rows[0]), config.lightTextColor,
+    'without a reset the old decision holds');
+  sampler.reset();
+  assert.equal((await sampler.chooseColorsForActors(rows, config, root)).get(rows[0]), config.darkTextColor);
+});
+
+test('text leaving a highlight goes straight back to the colour the other rows have', () => {
+  const { manager, laters, rows, handlers } = hoverFixture(1);
+  const row = rows[0];
+  manager._applyAdaptiveColorMap(new Map([[row, '#1a1a1a']]), true);
+  let background = { red: 30, green: 30, blue: 30, alpha: 255 };
+  row.get_theme_node = () => ({
+    get_foreground_color: () => ({ red: 26, green: 26, blue: 26, alpha: 255 }),
+    get_background_color: () => background,
+  });
+  handlers[0]();
+  laters.pending.shift()();
+  assert.equal(row._currentTargetColor, '#f2f2f2', 'light text on the dark highlight');
+
+  background = { red: 0, green: 0, blue: 0, alpha: 0 };
+  handlers[0]();
+  laters.pending.shift()();
+  assert.equal(row._currentTargetColor, '#1a1a1a', 'back to the sampled colour without waiting for a sample');
+});
+
+test('the menu keeps its open colours while the open animation runs', () => {
+  const timers = [];
+  const idles = [];
+  const C = load('uiManager.js', 'UIManager', {
+    GLib: { PRIORITY_DEFAULT: 0, PRIORITY_HIGH: -100, SOURCE_CONTINUE: true, SOURCE_REMOVE: false,
+      timeout_add: (_p, _ms, fn) => { timers.push(fn); return 1; },
+      idle_add: (priority, fn) => { idles.push([priority, fn]); return 2; } },
+  })['UIManager'];
+  const manager = Object.create(C.prototype);
+  manager._adaptiveConfig = config;
+  manager._adaptiveTimerId = 0;
+  manager._contrastSampler = new Sampler();
+  manager.menu = { isOpen: true };
+  const rounds = [];
+  manager._updateAdaptiveTextColors = skip => rounds.push(skip);
+
+  manager._openSampleId = 0;
+  manager._tickId = 5;
+  manager._startAdaptiveColorSampling(true);
+  assert.deepEqual(rounds, [], 'not inside open-state-changed, which GNOME 51 emits before showing the menu');
+  assert.equal(idles[0][0], -100, 'ahead of the frame');
+  idles.shift()[1]();
+  assert.deepEqual(rounds, [true], 'sampled once at open, without a tween');
+  manager._awaitingOpenColors = false;
+  timers[0]();
+  assert.deepEqual(rounds, [true], 'held while the spring runs');
+  manager._tickId = 0;
+  timers[0]();
+  assert.deepEqual(rounds, [true, false], 'sampled again once it has settled');
+
+  rounds.length = 0;
+  manager._tickId = 5;
+  manager._adaptiveTimerId = 0;
+  manager._startAdaptiveColorSampling(true);
+  idles.shift()[1]();
+  timers[1]();
+  assert.deepEqual(rounds, [true, true], 'an open sample that found nothing is retried during the animation');
+});
+
+test('text a menu adds after opening takes the menu colour before it is drawn', () => {
+  const { manager, laters, rows } = hoverFixture(2);
+  manager.menu = { actor: null, isOpen: true };
+  manager._sharedColor = '#1a1a1a';
+  manager._newTextId = 0;
+  manager._adaptiveInFlight = false;
+  rows[0].get_theme_node = rows[1].get_theme_node = () => ({
+    get_foreground_color: () => ({ red: 255, green: 255, blue: 255, alpha: 255 }),
+    get_background_color: () => ({ red: 0, green: 0, blue: 0, alpha: 0 }),
+  });
+  manager._collectAdaptiveTextTargets = () => rows;
+  manager._queueNewTextColors();
+  assert.equal(laters.pending.length, 1, 'once per frame');
+  laters.pending.shift()();
+  assert.deepEqual(rows.map(r => r._currentTargetColor), ['#1a1a1a', '#1a1a1a']);
+
+  manager._sharedColor = null;
+  manager._awaitingOpenColors = true;
+  let sampled = null;
+  manager._updateAdaptiveTextColors = skip => { sampled = skip; };
+  manager._queueNewTextColors();
+  laters.pending.shift()();
+  assert.equal(sampled, true, 'with no colour yet, the new items are sampled at once');
 });

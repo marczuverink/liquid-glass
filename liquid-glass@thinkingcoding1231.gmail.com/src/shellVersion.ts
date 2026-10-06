@@ -1,5 +1,6 @@
 import Clutter from 'gi://Clutter';
 import Cogl from 'gi://Cogl';
+import type Mtk from 'gi://Mtk';
 import St from 'gi://St';
 import * as Config from 'resource:///org/gnome/shell/misc/config.js';
 
@@ -27,6 +28,14 @@ export function newRootNode(framebuffer: Cogl.Framebuffer, colorState: Clutter.C
     return Clutter.RootNode.new(framebuffer, colorState!, new Cogl.Color(), 0);
   const clearColor = SHELL_MAJOR >= 47 ? new Cogl.Color() : new (Clutter as any).Color();
   return (Clutter.RootNode as any).new(framebuffer, clearColor, 0);
+}
+
+// A snapshot of the stage rect `rect` at `scale`, without the cursor. GNOME 50
+// added the colour state to paint in, which is the stage's when null.
+export function paintStageToContent(rect: Mtk.Rectangle, scale: number): Clutter.Content {
+  if (SHELL_MAJOR >= 50)
+    return global.stage.paint_to_content(rect, scale, null, Clutter.PaintFlag.NO_CURSORS);
+  return (global.stage as any).paint_to_content(rect, scale, Clutter.PaintFlag.NO_CURSORS);
 }
 
 // The pixel format of an offscreen's texture, for a texture its pixels are

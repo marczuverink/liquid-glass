@@ -36,8 +36,8 @@ function panelFixture() {
   const clock = scheduler(); const settings = new Settings(); const instances = [];
   class Popup { actor = {}; box = {}; }
   class Manager {
-    constructor(_p, _s, _l, button) { this.button = button; this.cleaned = 0; instances.push(this); }
-    setup() { if (this.button.fail) throw Error('partial setup'); }
+    constructor(_p, _s, _l, target) { this.menu = target.menu; this.cleaned = 0; instances.push(this); }
+    setup() { if (this.menu.fail) throw Error('partial setup'); }
     cleanup() { this.cleaned++; }
   }
   const panel = { statusArea: {}, contains: b => b.attached,
@@ -98,7 +98,7 @@ test('menu replacement and removal clean up only affected managers', () => {
 
 test('partial setup is cleaned and duplicate menu aliases get one manager', () => {
   const f = panelFixture(); const b = f.add('first'); f.add('alias', b.menu);
-  const broken = f.add('broken'); broken.fail = true; f.flush();
+  const broken = f.add('broken'); broken.menu.fail = true; f.flush();
   assert.equal(f.instances.length, 2); assert.equal(f.instances[1].cleaned, 1);
   f.manager.cleanup(); assert.equal(f.instances[0].cleaned, 1);
 });

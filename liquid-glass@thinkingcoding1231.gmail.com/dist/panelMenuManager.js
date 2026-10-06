@@ -11,6 +11,14 @@ const LEGACY_KEYS = {
     vitalsMenu: 'enable-vitals-menu-glass',
 };
 
+// The popup menus a status area entry opens, with the names they are listed
+// under. ArcMenu destroys the button's own menu and opens two of its own.
+function menusOf(name, button) {
+    if (button.arcMenu)
+        return [[name, button.arcMenu], [`${name}ContextMenu`, button.arcMenuContextMenu]];
+    return [[name, button.menu]];
+}
+
 export class PanelMenuManager {
     _path;
     _settings;
@@ -77,16 +85,17 @@ export class PanelMenuManager {
                 continue;
             buttons.add(button);
             this._watchButton(button);
-            const menu = button.menu;
-            // Dummy menus and custom non-popup actors cannot use UIManager.
-            // Calendar and Quick Settings already have their own managers.
-            if (!(menu instanceof PopupMenu.PopupMenu) || reserved.has(menu) || !menu.actor || !menu.box)
-                continue;
-            detected.push(name);
-            const allowed = LEGACY_KEYS[name]
-                ? this._settings.get_boolean(LEGACY_KEYS[name]) : !disabled.has(name);
-            if (enabled && allowed)
-                wanted.set(menu, { button, name });
+            for (const [menuName, menu] of menusOf(name, button)) {
+                // Dummy menus and custom non-popup actors cannot use UIManager.
+                // Calendar and Quick Settings already have their own managers.
+                if (!(menu instanceof PopupMenu.PopupMenu) || reserved.has(menu) || !menu.actor || !menu.box)
+                    continue;
+                detected.push(menuName);
+                const allowed = LEGACY_KEYS[menuName]
+                    ? this._settings.get_boolean(LEGACY_KEYS[menuName]) : !disabled.has(menuName);
+                if (enabled && allowed)
+                    wanted.set(menu, { name: menuName });
+            }
         }
         return { buttons, wanted, detected };
     }
@@ -126,10 +135,10 @@ export class PanelMenuManager {
     // Most of these menus belong to other extensions and may not be built the
     // way UIManager expects; such a menu is skipped instead of stopping the scan.
     _attachWanted(wanted) {
-        for (const [menu, { button, name }] of wanted) {
+        for (const [menu, { name }] of wanted) {
             if (this._menus.has(menu))
                 continue;
-            const manager = new UIManager(this._path, this._settings, this._logger, button, false, 'enable-extra-menu-glass', PANEL_MENU_PREFIX, `menu:${name}`, false);
+            const manager = new UIManager(this._path, this._settings, this._logger, { menu }, false, 'enable-extra-menu-glass', PANEL_MENU_PREFIX, `menu:${name}`, false);
             try {
                 manager.setup();
                 this._menus.set(menu, { name, manager });
