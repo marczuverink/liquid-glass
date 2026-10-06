@@ -14,6 +14,7 @@ import { setClipIfChanged } from './actors/writes.js';
 import { resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb } from './animation/colors.js';
 
 import { Logger } from './logger.js';
+import { BANNER_TRANSPARENT_CLASS } from './shellVersion.js';
 
 // Room around the glass rect for the shader's edge effects.
 const SHADER_PADDING = 20;
@@ -251,7 +252,7 @@ export class NotificationManager {
   }
 
   _setupBannerEffect(targetActor: St.Widget) {
-    targetActor.add_style_class_name('liquid-glass-transparent');
+    targetActor.add_style_class_name(BANNER_TRANSPARENT_CLASS);
 
     // @ts-expect-error
     if (this.tray._bannerBin) {
@@ -466,7 +467,7 @@ export class NotificationManager {
     }
 
     if (this.currentBanner) {
-      this.currentBanner.remove_style_class_name('liquid-glass-transparent');
+      this.currentBanner.remove_style_class_name(BANNER_TRANSPARENT_CLASS);
       this.currentBanner = null;
     }
 

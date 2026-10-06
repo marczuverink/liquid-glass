@@ -11,6 +11,7 @@ import { getTransformedRect, resolveMonitorGeometry } from './actors/geometry.js
 import { startSyncLoop, stopStageLoop } from './animation/frameLoops.js';
 import { setClipIfChanged } from './actors/writes.js';
 import { resolveCrossFade, adaptiveColorTweener, hexToColorArray, hexToRgb } from './animation/colors.js';
+import { BANNER_TRANSPARENT_CLASS } from './shellVersion.js';
 // Room around the glass rect for the shader's edge effects.
 const SHADER_PADDING = 20;
 
@@ -222,7 +223,7 @@ export class NotificationManager {
     }
 
     _setupBannerEffect(targetActor) {
-        targetActor.add_style_class_name('liquid-glass-transparent');
+        targetActor.add_style_class_name(BANNER_TRANSPARENT_CLASS);
         // @ts-expect-error
         if (this.tray._bannerBin) {
             // @ts-expect-error
@@ -419,7 +420,7 @@ export class NotificationManager {
             this.tray._bannerBin.translation_y = this._originalBannerOffset;
         }
         if (this.currentBanner) {
-            this.currentBanner.remove_style_class_name('liquid-glass-transparent');
+            this.currentBanner.remove_style_class_name(BANNER_TRANSPARENT_CLASS);
             this.currentBanner = null;
         }
         stopStageLoop(this._frameSignalSlot, this._frameSlot);

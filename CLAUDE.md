@@ -56,6 +56,21 @@ extensions.gnome.org (EGO) のレビューでは「AI 生成らしさ」が却�
   未使用のアイコンは含めない。作ったら `shexli <zip の絶対パス>` で確認する
   （shexli は tree-sitter 0.26 と組み合わせるとセグフォルトするので、`uv tool install --python 3.12 shexli --with 'tree-sitter==0.25.2'` で入れる）。
 
+## 古い GNOME（46〜49）・51 での確認
+- 対応版は `metadata.json` の `shell-version`（46〜51）。版による API の違いは `src/shellVersion.ts` に `SHELL_MAJOR` で分けてまとめる。
+  ほかのファイルに版の分岐を散らさない。分岐を足したら `tests/shell-version.test.cjs` にも足す。
+- 各版の GNOME Shell は distrobox `gnome46`〜`gnome49`・`gnome51`（home は `~/gnomeNN-home`）に入っている。作り直しは `tools/gnome-versions/setup.sh NN`。
+  46 = Ubuntu 24.04（mutter 46.2）、47 = Fedora 41、48 = Debian 13、49 = Fedora 43、51 = Fedora 45。50 はホスト。
+- 上流のソース（mutter・gnome-shell・gjs の各版のタグ）は `~/clones/gnome-src/` にある（例: `gnome-shell-46.10/`、`mutter-46.9/`）。
+  ただし 46 の利用者の多くは Ubuntu 24.04 の mutter 46.2 で、上流の最新の点リリースとは挙動が違うことがある。ソースの照合だけで判断せず、ボックスで動かして確かめる。
+- 自動テスト（headless）: `npm run build` のあと、
+  `distrobox enter gnomeNN -- env LG_DTD_DIR=$HOME/.local/share/gnome-shell/extensions/dash-to-dock@micxgx.gmail.com LG_DRV_SCENARIO=<ui|dock|toggles|lifecycle|window> LG_SHELL_TIMEOUT=150 $PWD/tools/backdrop-spike/run-glass.sh ~/gnomeNN-home/lgtest/<シナリオ>`
+  （リポジトリのルートで実行）。`shell.log` の `[drv] ... audit ... OK/NG` と `JS ERROR` を見る。46〜48 は `LG_X11=1` で X11 セッションも回せる。
+  監査は背面の追従しか見ないので、レイアウトの崩れは `shots/*.png` を版どうし・変更前後で見比べて確かめる。ホスト（50）では `distrobox enter` なしで同じスクリプトを回す。
+- 目で見る確認（入れ子のシェル）: `tools/gnome-versions/run.sh NN`（alias `gnome46` など。`--pack` で zip を作り直してから起動）。ログは `~/gnomeNN-home/gNN.log`。
+- シェルが落ちたら `coredumpctl` で core を取り、ボックスの中の gdb ＋ debuginfod でバックトレースを見る（Fedora のボックス）。
+- 調べた版の違いと地雷は memo.md の追記40・追記41 にある。
+
 ## Looking Glass スクリプト作成ルール
 - `Clutter` や `Cogl` などを明示的にインポートしない。`imports.gi`でインポートもしない。`Clutter`のように、最初からそのまま使う。
 - トップレベルのベタ書きスタイルで記述すること。
