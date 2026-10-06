@@ -831,26 +831,43 @@ export default class LgDriver extends Extension {
             `${label && map.has(label) ? `:${map.get(label)}` : ''}`);
           return apply.call(this, map, skip);
         };
+        // A label on the glass itself, not on a card of its own. Picked again
+        // at every mark: some menus (Kiwi Menu) rebuild their items on open.
+        const pick = () => {
+          const onGlass = manager._collectAdaptiveTextTargets()
+            .filter(a => a instanceof St.Label && a.text && mod.backdropLuminance(a, manager.menu.actor) === null);
+          return onGlass.find(a => a.mapped) ?? onGlass[0];
+        };
+        let label = pick();
+        // Frames drawn with the label in another colour than the one it ends up with.
+        const painted = [];
+        const paintId = global.stage.connect('after-paint', () => {
+          const l = pick();
+          if (l?.mapped && GLib.get_monotonic_time() - t0 < 1500e3)
+            painted.push(this._fg(l));
+        });
         open();
-        // A label on the glass itself, not on a card of its own.
-        const label = manager._collectAdaptiveTextTargets()
-          .find(a => a instanceof St.Label && a.text && mod.backdropLuminance(a, manager.menu.actor) === null);
         const marks = [];
         for (const at of [0, 30, 60, 100, 200, 400, 700, 1000, 1400, 2000]) {
           const wait = at - (GLib.get_monotonic_time() - t0) / 1000;
           if (wait > 0)
             await sleep(wait);
+          label = pick() ?? label;
           marks.push(`${at}:${label ? this._fg(label) : '-'}`);
         }
+        global.stage.disconnect(paintId);
         const final = label ? this._fg(label) : null;
+        const wrongFrames = painted.filter(c => c !== final).length;
         const settledAt = marks.findIndex(m => m.endsWith(final));
         const steady = marks.slice(settledAt).every(m => m.endsWith(final));
         const want = color === '#f0f0f0' ? '#1a1a1a' : '#f2f2f2';
         // The first colours applied are the final ones, without a tween.
-        const first = applied.find(a => !/:0s?$/.test(a)) ?? '';
+        const first = applied.find(a => !/:0s?(:#[0-9a-f]+)?$/.test(a)) ?? '';
         manager._applyAdaptiveColorMap = apply;
+        // From the 30 ms mark on, the label shows the final colour.
         log(`e2 ${tag} ${color} ${marks.join(' ')} paths=${JSON.stringify(counts)} applied=${applied.join(',')} ` +
-          `first=${first.split(':')[0]} ${final === want && steady && first.endsWith(`s:${want}`) ? 'OK' : 'NG'}`);
+          `first=${first.split(':')[0]} frames=${painted.length} wrong-frames=${wrongFrames} ` +
+          `${final === want && steady && settledAt <= 3 ? 'OK' : 'NG'}`);
         close();
         await sleep(1500);
       }
@@ -953,6 +970,17 @@ export default class LgDriver extends Extension {
         await hoverCheck('arcmenu', rows.slice(0, 8));
       arcButton.toggleMenu();
       await sleep(1500);
+    }
+
+    // Kiwi Menu, when the run enables it (LG_EXTRA_EXTENSIONS=kiwimenu@kemma). It
+    // rebuilds its items every time it opens.
+    const kiwiButton = Main.panel.statusArea.KiwiMenuButton;
+    const kiwiManager = [...(pmm?._menus?.values() ?? [])].find(e => e.name === 'KiwiMenuButton')?.manager ?? null;
+    if (kiwiButton && kiwiManager) {
+      this._cameraAway = true;
+      await timeline('kiwimenu', kiwiManager, () => kiwiButton.menu.open(true), () => kiwiButton.menu.close(true));
+    } else if (kiwiButton) {
+      log('e2 kiwimenu has no glass');
     }
 
     const qs = ext.stateObj?._quickSettingsManager ?? ext._quickSettingsManager;

@@ -83,6 +83,10 @@ export class UIManager {
     // _startAdaptiveColorSampling().
     _awaitingOpenColors = false;
     _openSampleId = 0;
+    // The colour the last merged sample gave every text, for text added since.
+    _sharedColor = null;
+    _newTextId = 0;
+    _newTextPending = false;
     _applyingColors = false;
     _backdropRefreshId = 0;
     _settingsSignals;
@@ -688,12 +692,17 @@ export class UIManager {
                     this._stableBaseH = undefined;
                     startFrameSync();
                     this._sampleColors.clear();
+                    this._sharedColor = null;
                     this._startAdaptiveColorSampling(true);
                 }
                 else {
                     this._stopAdaptiveColorSampling();
                 }
             })
+        });
+        this._signals.push({
+            target: this.menu.box,
+            id: this.menu.box.connect('child-added', () => this._queueNewTextColors()),
         });
         this._signals.push({
             target: this.menu.actor,
@@ -873,6 +882,7 @@ export class UIManager {
         this._styledActors.clear();
         this._backdropColored.clear();
         this._sampleColors.clear();
+        this._sharedColor = null;
         this._disconnectHoverWatchers();
     }
 
@@ -1024,30 +1034,88 @@ export class UIManager {
             GLib.source_remove(this._openSampleId);
             this._openSampleId = 0;
         }
+        if (this._newTextId !== 0) {
+            global.compositor.get_laters().remove(this._newTextId);
+            this._newTextId = 0;
+        }
+        this._newTextPending = false;
+    }
+
+    // Some menus add their items as they open (Kiwi Menu rebuilds them every
+    // time), after the open sample. Their text takes the menu's colour before it
+    // is drawn, rather than the theme's until the next sample; before the first
+    // sample has a colour, the items are what it waits for.
+    _queueNewTextColors() {
+        if (!this._adaptiveConfig.enabled || !this.menu?.isOpen || this._newTextId !== 0)
+            return;
+        this._newTextId = global.compositor.get_laters().add(Meta.LaterType.BEFORE_REDRAW, () => {
+            this._newTextId = 0;
+            if (this._adaptiveInFlight)
+                this._newTextPending = true;
+            else if (this._sharedColor !== null)
+                this._colorNewText();
+            else if (this._awaitingOpenColors)
+                this._updateAdaptiveTextColors(true);
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _colorNewText() {
+        const color = this._sharedColor;
+        if (color === null)
+            return;
+        const fresh = this._collectAdaptiveTextTargets().filter(actor => !this._sampleColors.has(actor));
+        if (fresh.length === 0)
+            return;
+        this._watchHoverFor(fresh);
+        this._applyBackdropColorsTo(fresh);
+        this._applyAdaptiveColorMap(new Map(fresh.map(actor => [actor, color])), true);
     }
 
     _updateAdaptiveTextColors(skipAnimations = false) {
         if (!this._adaptiveConfig.enabled || this._adaptiveInFlight)
             return;
-        const targets = this._collectAdaptiveTextTargets();
+        let targets = this._collectAdaptiveTextTargets();
+        // A menu still empty when it opens is measured all the same, through its
+        // box, so the text it gets next can take the colour straight away.
+        const placeholder = targets.length === 0 && this._awaitingOpenColors && !this._adaptiveConfig.samplePerElement
+            ? this.menu?.box ?? null : null;
+        if (placeholder)
+            targets = [placeholder];
         if (targets.length === 0)
             return;
-        this._watchHoverFor(targets);
+        if (!placeholder)
+            this._watchHoverFor(targets);
         this._adaptiveInFlight = true;
         this._contrastSampler
             .chooseColorsForActors(targets, this._adaptiveConfig, this.menu?.actor, () => this.glass?.paintCount ?? NaN, () => this.glass ? [this.glass] : [])
             .then(colorMap => {
             if (!this._isEffectActive || this._actorDestroyed)
                 return;
+            if (placeholder) {
+                this._sharedColor = colorMap.get(placeholder) ?? null;
+                if (this._sharedColor !== null) {
+                    this._awaitingOpenColors = false;
+                    this._colorNewText();
+                }
+                return;
+            }
             this._applyAdaptiveColorMap(colorMap, skipAnimations);
-            if (colorMap.size > 0)
+            if (colorMap.size > 0) {
                 this._awaitingOpenColors = false;
+                if (!this._adaptiveConfig.samplePerElement)
+                    this._sharedColor = colorMap.values().next().value ?? null;
+            }
         })
             .catch(e => {
             this._logger.error(`[Liquid Glass] Menu adaptive color update failed: ${e}`);
         })
             .finally(() => {
             this._adaptiveInFlight = false;
+            if (this._newTextPending) {
+                this._newTextPending = false;
+                this._queueNewTextColors();
+            }
         });
     }
 

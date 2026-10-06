@@ -747,3 +747,28 @@ test('the menu keeps its open colours while the open animation runs', () => {
   timers[1]();
   assert.deepEqual(rounds, [true, true], 'an open sample that found nothing is retried during the animation');
 });
+
+test('text a menu adds after opening takes the menu colour before it is drawn', () => {
+  const { manager, laters, rows } = hoverFixture(2);
+  manager.menu = { actor: null, isOpen: true };
+  manager._sharedColor = '#1a1a1a';
+  manager._newTextId = 0;
+  manager._adaptiveInFlight = false;
+  rows[0].get_theme_node = rows[1].get_theme_node = () => ({
+    get_foreground_color: () => ({ red: 255, green: 255, blue: 255, alpha: 255 }),
+    get_background_color: () => ({ red: 0, green: 0, blue: 0, alpha: 0 }),
+  });
+  manager._collectAdaptiveTextTargets = () => rows;
+  manager._queueNewTextColors();
+  assert.equal(laters.pending.length, 1, 'once per frame');
+  laters.pending.shift()();
+  assert.deepEqual(rows.map(r => r._currentTargetColor), ['#1a1a1a', '#1a1a1a']);
+
+  manager._sharedColor = null;
+  manager._awaitingOpenColors = true;
+  let sampled = null;
+  manager._updateAdaptiveTextColors = skip => { sampled = skip; };
+  manager._queueNewTextColors();
+  laters.pending.shift()();
+  assert.equal(sampled, true, 'with no colour yet, the new items are sampled at once');
+});
