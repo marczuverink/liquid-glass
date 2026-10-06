@@ -11,6 +11,9 @@
 //   lifecycle  disables and enables Liquid Glass with every glass shown once
 //   window     application glass on a foot window: drag, a busy window behind,
 //              a change in front, minimise, resize and close
+//   arcmenu    ArcMenu's menu in several layouts and locations, its context
+//              menu, and ArcMenu disabled and enabled again (run-glass.sh with
+//              LG_EXTRA_EXTENSIONS=arcmenu@arcmenu.com)
 //   bench      global._lgBench.run() (run-glass.sh with LG_BENCH=1); LG_DRV_BENCH
 //              picks scenarios (comma separated, default all), LG_DRV_BENCH_SECONDS
 //              the seconds per scenario (default 3), LG_DRV_BENCH_AB=1 adds a run without UI glass
@@ -35,6 +38,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 const OUT_DIR = GLib.getenv('LG_SPIKE_OUT') ?? GLib.get_tmp_dir();
 const SCENARIO = GLib.getenv('LG_DRV_SCENARIO') ?? 'dock';
 const LG_UUID = 'liquid-glass@thinkingcoding1231.gmail.com';
+const ARCMENU_UUID = 'arcmenu@arcmenu.com';
 const COLORS = ['rgb(255,0,255)', 'rgb(255,255,0)'];
 
 function log(msg) {
@@ -200,6 +204,7 @@ export default class LgDriver extends Extension {
     this._signals = [];
     this._frames = 0;
     this._camera = null;
+    this._cameraAway = false;
     this._signals.push([global.stage, global.stage.connect('after-paint', () => this._frames++)]);
     this._signals.push([global.stage, global.stage.connect('before-update', () => {
       if (this._camera?.armed)
@@ -266,6 +271,8 @@ export default class LgDriver extends Extension {
       await this._windowScenario();
     else if (SCENARIO === 'bench')
       await this._benchScenario();
+    else if (SCENARIO === 'arcmenu')
+      await this._arcMenuScenario();
     log(`dump\n${lg().dump()}`);
   }
 
@@ -323,6 +330,11 @@ export default class LgDriver extends Extension {
   }
 
   async _shots(tag, rect, owner) {
+    // Menus at the top left would cover the camera's usual place.
+    if (this._cameraAway) {
+      const m = Main.layoutManager.primaryMonitor;
+      this._camera.set_position(rect[0] + rect[2] / 2 < m.width / 2 ? m.width - rect[2] : 0, 60);
+    }
     this._camera.rect = rect;
     this._camera.set_size(rect[2], rect[3]);
     this._camera.armed = true;
@@ -618,6 +630,91 @@ export default class LgDriver extends Extension {
     log(`calendar without glass: ${await this._countFullStage(open)}`);
     dateMenu.close(true);
     await sleep(1000);
+  }
+
+  async _arcMenuButton() {
+    for (let i = 0; i < 40; i++) {
+      const button = Main.panel.statusArea.ArcMenu;
+      if (button?.arcMenu && button._menuLayout)
+        return button;
+      await sleep(250);
+    }
+    return null;
+  }
+
+  _arcMenuGlasses() {
+    return lg().glassObjects().filter(g => g._owner.startsWith('menu:ArcMenu')).map(g => g._owner);
+  }
+
+  async _arcMenuScenario() {
+    this._cameraAway = true;
+    let button = await this._arcMenuButton();
+    if (!button) {
+      log('a0 no ArcMenu button');
+      return;
+    }
+    const detected = this._lgSettings().get_strv('detected-extra-menus');
+    log(`a0 detected=${JSON.stringify(detected)} glasses=${JSON.stringify(this._arcMenuGlasses())}`);
+    const arcSettings = Extension.lookupByUUID(ARCMENU_UUID).getSettings();
+    const toggle = () => button.toggleMenu();
+
+    await this._surface('a1 arcmenu', 'menu:ArcMenu', toggle, toggle);
+    for (const layout of ['11', 'raven', 'runner', 'plasma']) {
+      arcSettings.set_string('menu-layout', layout);
+      await sleep(2000);
+      await this._menuShotWith(`a2 layout-${layout}`, toggle, toggle, 'menu:ArcMenu');
+    }
+    arcSettings.set_string('menu-layout', 'arcmenu');
+    await sleep(2000);
+
+    arcSettings.set_string('force-menu-location', 'BottomCentered');
+    await sleep(1000);
+    await this._menuShotWith('a3 bottom-centered', toggle, toggle, 'menu:ArcMenu');
+    arcSettings.reset('force-menu-location');
+    await sleep(1000);
+
+    const context = button.arcMenuContextMenu;
+    await this._surface('a4 context', 'menu:ArcMenuContextMenu', () => context.open(true), () => context.close(true));
+
+    // Moving the button recreates it, and with it both menus.
+    arcSettings.set_string('position-in-panel', 'Right');
+    await sleep(2500);
+    button = await this._arcMenuButton();
+    log(`a5 moved glasses=${JSON.stringify(this._arcMenuGlasses())} leftovers=${this._leftovers().length}`);
+    if (button)
+      await this._menuShotWith('a5 moved', () => button.toggleMenu(), () => button.toggleMenu(), 'menu:ArcMenu');
+    arcSettings.reset('position-in-panel');
+    await sleep(2500);
+
+    Main.extensionManager.disableExtension(ARCMENU_UUID);
+    await sleep(1500);
+    log(`a6 arcmenu disabled glasses=${JSON.stringify(this._arcMenuGlasses())} ` +
+      `detected=${JSON.stringify(this._lgSettings().get_strv('detected-extra-menus'))}`);
+    Main.extensionManager.enableExtension(ARCMENU_UUID);
+    button = await this._arcMenuButton();
+    await sleep(1500);
+    log(`a7 arcmenu enabled glasses=${JSON.stringify(this._arcMenuGlasses())}`);
+    if (button)
+      await this._surface('a7 arcmenu-again', 'menu:ArcMenu', () => button.toggleMenu(), () => button.toggleMenu());
+
+    this._lgSettings().set_strv('disabled-extra-menus', ['ArcMenu']);
+    await sleep(1000);
+    log(`a8 switched off glasses=${JSON.stringify(this._arcMenuGlasses())}`);
+    this._lgSettings().reset('disabled-extra-menus');
+    await sleep(1000);
+    log(`a9 switched on glasses=${JSON.stringify(this._arcMenuGlasses())}`);
+  }
+
+  async _menuShotWith(tag, open, close, owner) {
+    open();
+    await sleep(1200);
+    const region = this._region(owner);
+    if (region)
+      await this._shots(tag, region, owner);
+    else
+      log(`${tag}: no region`);
+    close();
+    await sleep(800);
   }
 
   async _monitorScenario() {

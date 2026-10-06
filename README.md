@@ -97,7 +97,7 @@ The effect can be enabled or disabled per UI element on the **Effects** page. In
 | Element | Notes / Special features |
 | --- | --- |
 | **Dash to Dock** | Glass behind the dock. Adds a bottom margin control so the dock can float above the screen edge. Works with the Dash to Dock / Ubuntu Dock extension. |
-| **Calendar & Other Top Bar Menus** | Glass behind the calendar (clock) menu and behind the menus of the other top bar indicators — the keyboard layout and accessibility menus, and the indicators other extensions add. Each detected menu can be switched off on its own. Adds **custom spring animation** (stiffness / damping / mass) for opening and closing, and **adaptive text coloring**. |
+| **Calendar & Other Top Bar Menus** | Glass behind the calendar (clock) menu and behind the menus of the other top bar indicators — the keyboard layout and accessibility menus, and the indicators other extensions add, including [ArcMenu](https://gitlab.com/arcmenu/ArcMenu)'s menu and its right-click menu. Each detected menu can be switched off on its own. Adds **custom spring animation** (stiffness / damping / mass) for opening and closing, and **adaptive text coloring**. |
 | **Notifications** | Glass behind notification banners. Supports **adaptive text coloring** and a hide safety margin to avoid flicker while the banner is dismissed. |
 | **Quick Settings** | Two modes: **Whole menu** applies one sheet of glass behind the whole panel, and **Individual buttons** turns every toggle button into its own piece of glass, keeping each toggle's own accent color (see "Button base colour"). Also supports spring animation and adaptive text coloring. |
 | **OSD** | Glass behind the on-screen displays (volume, brightness, and so on), with adaptive text coloring. |
@@ -220,6 +220,7 @@ A significant part of this codebase was written with the help of AI coding assis
 - [x] Support GNOME 51
 - [x] Support GNOME 46, 47, 48 and 49
 - [x] Continuous corners, refraction-proportional colour separation and backdrop-coloured highlights
+- [x] Add ArcMenu support
 
 ### Next
 - [ ] Publish to extensions.gnome.org (not approved yet)
