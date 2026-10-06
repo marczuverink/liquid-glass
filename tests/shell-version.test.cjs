@@ -84,6 +84,12 @@ test('the root node, Cogl context and menu toggle class follow the version', () 
   }
 });
 
+test('only GNOME 46 keeps the notification banner border', () => {
+  assert.equal(shellVersion('46.0').BANNER_TRANSPARENT_CLASS, 'liquid-glass-transparent-keep-border');
+  assert.equal(shellVersion('47.0').BANNER_TRANSPARENT_CLASS, 'liquid-glass-transparent');
+  assert.equal(shellVersion('50.1').BANNER_TRANSPARENT_CLASS, 'liquid-glass-transparent');
+});
+
 test('GNOME 46 has no St accent colour and falls back', () => {
   assert.equal(shellVersion('46.0').accentColors(), null);
 });

@@ -61,6 +61,11 @@ export function undoCloneScale(clone, volume) {
 // The Quick Settings toggle with a menu arrow: `.quick-menu-toggle` until
 // GNOME 47, `.quick-toggle-has-menu` from 48 on.
 export const QS_MENU_TOGGLE_CLASS = SHELL_MAJOR >= 48 ? 'quick-toggle-has-menu' : 'quick-menu-toggle';
+// On GNOME 46 a notification banner with a zero-width border is stretched
+// across the monitor and its content gets no width, so there the banner's
+// border is only made transparent.
+export const BANNER_TRANSPARENT_CLASS = SHELL_MAJOR >= 47
+    ? 'liquid-glass-transparent' : 'liquid-glass-transparent-keep-border';
 // Cogl.Pipeline.set_uniform_float() takes its values as an array from GNOME 48
 // on. Before, the binding passes a single float where the call expects a
 // pointer, which crashes the shell, so only set_uniform_1f() is usable there:
