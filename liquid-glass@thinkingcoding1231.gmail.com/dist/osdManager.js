@@ -303,6 +303,7 @@ export class OsdManager {
         if (isVisible && !state._wasVisible) {
             state._wasVisible = true;
             this._isFirstAdaptiveRun = true;
+            this._contrastSampler.reset();
             this._updateAdaptiveTextColors();
         }
         else if (!isVisible && state._wasVisible) {
@@ -522,7 +523,7 @@ export class OsdManager {
         let isFirst = this._isFirstAdaptiveRun;
         this._isFirstAdaptiveRun = false;
         this._contrastSampler
-            .chooseColorsForActors(targets, this._adaptiveConfig, null, () => this._osdStates.reduce((sum, st) => sum + (st.glass?.paintCount ?? NaN), 0))
+            .chooseColorsForActors(targets, this._adaptiveConfig, null, () => this._osdStates.reduce((sum, st) => sum + (st.glass?.paintCount ?? NaN), 0), () => this._osdStates.flatMap((st) => st.glass ? [st.glass] : []))
             .then(colorMap => {
             this._applyAdaptiveColorMap(colorMap, isFirst);
         })

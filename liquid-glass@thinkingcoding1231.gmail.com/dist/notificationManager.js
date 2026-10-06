@@ -290,6 +290,7 @@ export class NotificationManager {
             },
         });
         this._isFirstAdaptiveRun = true;
+        this._contrastSampler.reset();
         this._startAdaptiveColorSampling();
     }
 
@@ -559,7 +560,7 @@ export class NotificationManager {
         this._adaptiveInFlight = true;
         const generation = this._bannerGeneration;
         this._contrastSampler
-            .chooseColorsForActors(targets, this._adaptiveConfig, this.currentBanner, () => this.glass?.paintCount ?? NaN)
+            .chooseColorsForActors(targets, this._adaptiveConfig, this.currentBanner, () => this.glass?.paintCount ?? NaN, () => this.glass ? [this.glass] : [])
             .then(colorMap => {
             if (generation !== this._bannerGeneration || !this.currentBanner)
                 return;

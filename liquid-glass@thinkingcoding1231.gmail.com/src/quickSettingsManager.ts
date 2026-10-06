@@ -140,6 +140,10 @@ export class QuickSettingsManager {
   private _applyingForeground = false;
   // Incremented when sampling stops, so a late result is dropped.
   private _adaptiveGeneration = 0;
+  // Set on open until the first sample has coloured the text; see
+  // _startAdaptiveColorSampling().
+  private _awaitingOpenColors = false;
+  private _openSampleId = 0;
   private _settingsSignals: number[];
   private _adaptiveConfig!: typeof AdaptiveContrastConfig;
 
@@ -1101,10 +1105,29 @@ export class QuickSettingsManager {
     this._dirtyBackdropRoots.clear();
   }
 
+  /**
+   * @param skipAnimations Set on open: the first sample is taken before the
+   *   first frame, before the glass is drawn, from the bare backdrop where the
+   *   panel will be, and its colours are applied without a tween and kept
+   *   while the open animation runs. The last open's decision is forgotten.
+   */
   _startAdaptiveColorSampling(skipAnimations = false) {
     if (!this._adaptiveConfig.enabled) return;
-    if (skipAnimations) this._contrastSampler.invalidate();
-    this._updateAdaptiveTextColors(skipAnimations);
+    if (skipAnimations) {
+      this._contrastSampler.reset();
+      this._awaitingOpenColors = true;
+      // From GNOME 51 on, open-state-changed comes before the panel is shown
+      // and placed; this runs once open() has returned, still ahead of the frame.
+      if (this._openSampleId === 0) {
+        this._openSampleId = GLib.idle_add(GLib.PRIORITY_HIGH, () => {
+          this._openSampleId = 0;
+          this._updateAdaptiveTextColors(true);
+          return GLib.SOURCE_REMOVE;
+        });
+      }
+    } else {
+      this._updateAdaptiveTextColors(false);
+    }
     if (this._adaptiveTimerId !== 0) return;
 
     this._adaptiveTimerId = GLib.timeout_add(
@@ -1115,7 +1138,9 @@ export class QuickSettingsManager {
           this._adaptiveTimerId = 0;
           return GLib.SOURCE_REMOVE;
         }
-        this._updateAdaptiveTextColors(false);
+        const opening = this._tickId !== 0;
+        if (!opening || this._awaitingOpenColors)
+          this._updateAdaptiveTextColors(this._awaitingOpenColors);
         return GLib.SOURCE_CONTINUE;
       }
     );
@@ -1126,6 +1151,10 @@ export class QuickSettingsManager {
     if (this._adaptiveTimerId !== 0) {
       GLib.source_remove(this._adaptiveTimerId);
       this._adaptiveTimerId = 0;
+    }
+    if (this._openSampleId !== 0) {
+      GLib.source_remove(this._openSampleId);
+      this._openSampleId = 0;
     }
   }
 
@@ -1142,10 +1171,13 @@ export class QuickSettingsManager {
       .chooseColorsForActors(targets, this._adaptiveConfig, this.menu?.actor,
         // In toggle mode the text is not drawn over the glass, so the glass's
         // paint count says nothing about the sampled pixels.
-        () => this._activeMode === 'background' ? this.glass?.paintCount ?? NaN : NaN)
+        () => this._activeMode === 'background' ? this.glass?.paintCount ?? NaN : NaN,
+        // Only the whole-panel glass copies what is behind it.
+        () => this._activeMode === 'background' && this.glass instanceof BackdropGlass ? [this.glass] : [])
       .then(colorMap => {
         if (generation !== this._adaptiveGeneration || !this._adaptiveConfig.enabled) return;
         this._applyAdaptiveColorMap(colorMap, skipAnimations);
+        if (colorMap.size > 0) this._awaitingOpenColors = false;
       })
       .catch(e => {
         this._logger.error(`[Liquid Glass] Quick Settings adaptive color update failed: ${e}`);

@@ -93,3 +93,15 @@ test('only GNOME 46 keeps the notification banner border', () => {
 test('GNOME 46 has no St accent colour and falls back', () => {
   assert.equal(shellVersion('46.0').accentColors(), null);
 });
+
+test('from GNOME 50 the stage is painted to content with a colour state argument', () => {
+  for (const [version, expected] of [['49.4', 3], ['50.1', 4], ['51.0', 4]]) {
+    let args = null;
+    const stage = { paint_to_content: (...a) => { args = a; return 'content'; } };
+    const v = shellVersion(version, { global: { stage }, Clutter: { PaintFlag: { NO_CURSORS: 4 } } });
+    assert.equal(v.paintStageToContent('rect', 0.5), 'content');
+    assert.equal(args.length, expected, version);
+    assert.deepEqual([args[0], args[1], args[args.length - 1]], ['rect', 0.5, 4], version);
+    if (expected === 4) assert.equal(args[2], null);
+  }
+});

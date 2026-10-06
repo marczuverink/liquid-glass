@@ -83,6 +83,13 @@ export class UIManager {
   private _hoverSignals: Map<Clutter.Actor, number> = new Map();
   private _pendingBackdropRoots: Set<Clutter.Actor> = new Set();
   private _backdropColored: Set<Clutter.Actor> = new Set();
+  // The last sampled colour of each text, which a row's text returns to when
+  // its highlight goes.
+  private _sampleColors: Map<Clutter.Actor, string> = new Map();
+  // Set on open until the first sample has coloured the text; see
+  // _startAdaptiveColorSampling().
+  private _awaitingOpenColors: boolean = false;
+  private _openSampleId: number = 0;
   private _applyingColors: boolean = false;
   private _backdropRefreshId: number = 0;
   private _settingsSignals: number[];
@@ -755,6 +762,7 @@ export class UIManager {
           this._stableBaseW = undefined;
           this._stableBaseH = undefined;
           startFrameSync();
+          this._sampleColors.clear();
           this._startAdaptiveColorSampling(true);
         } else {
           this._stopAdaptiveColorSampling();
@@ -926,6 +934,7 @@ export class UIManager {
       actor.connect('destroy', () => {
         adaptiveColorTweener.cancel(actor);
         this._styledActors.delete(actor);
+        this._sampleColors.delete(actor);
       });
     }
 
@@ -950,6 +959,7 @@ export class UIManager {
     }
     this._styledActors.clear();
     this._backdropColored.clear();
+    this._sampleColors.clear();
     this._disconnectHoverWatchers();
   }
 
@@ -1020,9 +1030,13 @@ export class UIManager {
       if (color) {
         this._backdropColored.add(actor);
         this._setActorColor(actor as unknown as CustomBannerActor, color, true, batchStart);
-      } else {
-        this._backdropColored.delete(actor);
+        continue;
       }
+      // Off the highlight, the text goes straight back to the colour the rest
+      // of the menu has, so moving along the rows never leaves two colours.
+      const sampled = this._sampleColors.get(actor);
+      if (this._backdropColored.delete(actor) && sampled)
+        this._setActorColor(actor as unknown as CustomBannerActor, sampled, true, batchStart);
     }
     this._applyingColors = false;
   }
@@ -1036,18 +1050,42 @@ export class UIManager {
     const batchStart = GLib.get_monotonic_time();
     this._applyingColors = true;
     for (const [actor, color] of colorMap.entries()) {
+      this._sampleColors.set(actor, color);
       if (this._backdropColored.has(actor)) continue;
       this._setActorColor(actor as unknown as CustomBannerActor, color, skipAnimations, batchStart);
     }
     this._applyingColors = false;
   }
 
+  /**
+   * @param skipAnimations Set on open. The first sample is taken before the
+   *   first frame, before the glass is drawn: the screen then shows the bare
+   *   backdrop where the menu will be, and the glass's tone predicts the rest.
+   *   Its colours are applied without a tween and kept while the open
+   *   animation runs, during which the glass is still growing over the
+   *   backdrop. The last open's decision is forgotten: the menu may be over
+   *   something else now.
+   */
   _startAdaptiveColorSampling(skipAnimations = false) {
     if (!this._adaptiveConfig.enabled)
       return;
 
-    if (skipAnimations) this._contrastSampler.invalidate();
-    this._updateAdaptiveTextColors(skipAnimations);
+    if (skipAnimations) {
+      this._contrastSampler.reset();
+      this._awaitingOpenColors = true;
+      // From GNOME 51 on, open-state-changed comes before the menu is shown
+      // and placed; an idle of high priority runs once open() has returned,
+      // still ahead of the frame.
+      if (this._openSampleId === 0) {
+        this._openSampleId = GLib.idle_add(GLib.PRIORITY_HIGH, () => {
+          this._openSampleId = 0;
+          this._updateAdaptiveTextColors(true);
+          return GLib.SOURCE_REMOVE;
+        });
+      }
+    } else {
+      this._updateAdaptiveTextColors(false);
+    }
 
     if (this._adaptiveTimerId !== 0)
       return;
@@ -1061,7 +1099,9 @@ export class UIManager {
           return GLib.SOURCE_REMOVE;
         }
 
-        this._updateAdaptiveTextColors(false);
+        const opening = this._tickId !== 0;
+        if (!opening || this._awaitingOpenColors)
+          this._updateAdaptiveTextColors(this._awaitingOpenColors);
         return GLib.SOURCE_CONTINUE;
       }
     );
@@ -1071,6 +1111,10 @@ export class UIManager {
     if (this._adaptiveTimerId !== 0) {
       GLib.source_remove(this._adaptiveTimerId);
       this._adaptiveTimerId = 0;
+    }
+    if (this._openSampleId !== 0) {
+      GLib.source_remove(this._openSampleId);
+      this._openSampleId = 0;
     }
   }
 
@@ -1088,10 +1132,11 @@ export class UIManager {
 
     this._contrastSampler
       .chooseColorsForActors(targets, this._adaptiveConfig, this.menu?.actor,
-        () => this.glass?.paintCount ?? NaN)
+        () => this.glass?.paintCount ?? NaN, () => this.glass ? [this.glass] : [])
       .then(colorMap => {
         if (!this._isEffectActive || this._actorDestroyed) return;
         this._applyAdaptiveColorMap(colorMap, skipAnimations);
+        if (colorMap.size > 0) this._awaitingOpenColors = false;
       })
       .catch(e => {
         this._logger.error(`[Liquid Glass] Menu adaptive color update failed: ${e}`);
