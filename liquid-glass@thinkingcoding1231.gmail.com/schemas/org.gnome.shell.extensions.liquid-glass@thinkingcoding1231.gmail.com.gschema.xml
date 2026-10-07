@@ -65,6 +65,11 @@
       <default>true</default>
       <summary>Enable menu animation</summary>
     </key>
+    <key name="menu-grow-from-button" type="b">
+      <default>true</default>
+      <summary>Grow the menu out of its button</summary>
+      <description>While animations are on, the glass leaves the button as a drop and stretches into the menu, and goes back into the button when the menu closes.</description>
+    </key>
     <key name="menu-spring-stiffness" type="d">
       <default>120.0</default>
       <summary>Spring stiffness</summary>
@@ -166,6 +171,11 @@
     <key name="enable-panel-menu-animation" type="b">
       <default>true</default>
       <summary>Enable panel menu animation</summary>
+    </key>
+    <key name="panel-menu-grow-from-button" type="b">
+      <default>true</default>
+      <summary>Grow the menu out of its button</summary>
+      <description>While animations are on, the glass leaves the button as a drop and stretches into the menu, and goes back into the button when the menu closes.</description>
     </key>
     <key name="panel-menu-spring-stiffness" type="d">
       <default>120.0</default>

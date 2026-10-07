@@ -9,6 +9,8 @@ export class GlassGeometry {
   public rect: number[] = [0, 0, 0, 0];
   public regions: number[][] = [];
   public multiRegion: boolean = false;
+  // Bodies fused onto the glass ([x, y, w, h], no padding): a menu's drop.
+  public extraRects: number[][] = [];
 
   // Per-instance switches (global._lgGlass.blurRect()/compositeRect()).
   public blurEnabled: boolean;
@@ -109,6 +111,12 @@ export class GlassGeometry {
       if (ry + iy < y0) y0 = ry + iy;
       if (rx + rw - ix > x1) x1 = rx + rw - ix;
       if (ry + rh - iy > y1) y1 = ry + rh - iy;
+    }
+    for (const [rx, ry, rw, rh] of this.extraRects) {
+      x0 = Math.min(x0, rx);
+      y0 = Math.min(y0, ry);
+      x1 = Math.max(x1, rx + rw);
+      y1 = Math.max(y1, ry + rh);
     }
     if (!(x1 > x0) || !(y1 > y0)) return null;
     return [x0, y0, x1, y1];

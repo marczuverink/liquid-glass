@@ -11,12 +11,16 @@ function addNumbers(group, controls, specs, prefix = '', slider = true) {
 function addMotion(group, controls, surface) {
   const key = `enable-${surface}-animation`;
   const toggle = controls.toggle(group, 'Animations', key);
+  const grow = surface === 'quick-settings' ? null
+    : controls.toggle(group, 'Grow from the button', `${surface}-grow-from-button`,
+      'The glass leaves the button as a drop and stretches into the menu');
   // Spring constants and intervals mean their number; no slider.
   const rows = addNumbers(group, controls, SPRING, `${surface}-`, false);
   const keys = surface === 'quick-settings' ? [key, 'quick-settings-apply-to'] : [key];
   controls.watch(keys, () => {
     const panel = surface !== 'quick-settings' || controls.settings.get_value('quick-settings-apply-to').deep_unpack() === 0;
     toggle.visible = panel;
+    if (grow) grow.visible = controls.settings.get_boolean(key);
     for (const row of rows.values()) row.visible = panel && controls.settings.get_boolean(key);
   });
 }

@@ -1,7 +1,7 @@
 # Preferences
 
 The preferences window has three pages: Appearance, Effects and Rendering.
-Settings view switches between Simple (the default, seven shared appearance controls)
+Settings view switches between Simple (the default, eight shared appearance controls)
 and Advanced (individual surfaces, offsets, springs, sampling and optical controls).
 The view is remembered independently of the effects: switching never applies a preset
 or resets existing values. Advanced surface controls are created on demand and reused.

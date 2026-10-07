@@ -5,9 +5,13 @@ import { uniformDeclarations } from '../shellVersion.js';
 
 export class ShaderPipelines {
     _logger;
+    _shapeTexture;
 
-    constructor(_logger) {
+    // `shapeTexture`: the composite takes the glass's outline from a distance
+    // field on layer 2 (glass text) instead of the rounded rect.
+    constructor(_logger, _shapeTexture = false) {
         this._logger = _logger;
+        this._shapeTexture = _shapeTexture;
     }
 
     async load(extensionPath, cancellable = null) {
@@ -104,6 +108,8 @@ export class ShaderPipelines {
         // BlurRenderer when needed.
         this.composite = Cogl.Pipeline.new(ctx);
         configureSamplerLayer(this.composite, 0);
+        if (this._shapeTexture)
+            configureSamplerLayer(this.composite, SHAPE_LAYER);
         // Premultiplied-alpha "over", as ShaderEffect blends by default.
         this.composite.set_blend('RGBA = ADD(SRC_COLOR, DST_COLOR * (1 - SRC_COLOR[A]))');
         this._loadCompositeShader();
@@ -120,11 +126,16 @@ export class ShaderPipelines {
         let { decl, body } = splitShader(this._glassSource, message => this._logger?.warn(message));
         decl = decl.replace(/uniform\s+sampler2D\s+cogl_sampler\d*\s*;[^\n]*/g, '');
         body = body.replace(/\bcogl_sampler\b/g, 'cogl_sampler0');
+        if (this._shapeTexture)
+            decl = `#define LG_SHAPE_TEXTURE 1\n${decl}`;
         const snippet = Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, uniformDeclarations(decl), null);
         snippet.set_replace(body);
         this.composite.add_snippet(snippet);
     }
 }
+
+// The composite's layer for the distance field of a shape-texture glass.
+export const SHAPE_LAYER = 2;
 
 // Bilinear filtering and clamp-to-edge on one layer.
 export function configureSamplerLayer(pipeline, layer) {

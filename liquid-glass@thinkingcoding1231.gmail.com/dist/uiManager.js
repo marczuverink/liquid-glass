@@ -1,6 +1,7 @@
 import { stepMenuSpring, applyMenuFrame, showMenuAtRest } from './animation/menuSpring.js';
 import { addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs } from './animation/frameTicker.js';
 import { Spring, SwiftSpring } from './animation/spring.js';
+import { Jelly } from './animation/jelly.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
@@ -21,6 +22,22 @@ import { MENU_NO_ANIMATION, accentColors } from './shellVersion.js';
 const SHADER_PADDING = 20;
 const SAMPLE_PER_ELEMENT = false;
 const MIN_MENU_SCALE = 0.5;
+// A menu growing out of its button leaves the button's glass behind as a drop,
+// gone by this much of the way and fused to the menu's glass over this width
+// (px), as in glass-lib's popovers.
+const DROP_SPAN = 0.4;
+const DROP_MERGE = 24;
+// The button's glass sits this far (px) inside the top bar's height.
+const BUTTON_INSET_Y = 2;
+// The last part of the way back into the button, over which the glass fades.
+const CLOSE_FADE_SPAN = 0.25;
+// Frames to wait for an opening menu to get its size before it just appears.
+const MORPH_WAIT_FRAMES = 30;
+
+function clamp01(v) {
+    return Math.min(Math.max(v, 0), 1);
+}
+
 const MENU_MEASURE_FRAMES = 30;
 const MENU_MEASURE_STABLE_FRAMES = 3;
 // Quick Settings' open height, measured once for every menu that matches it,
@@ -110,6 +127,9 @@ export class UIManager {
     _swiftDampingFraction = 0.65;
     _swiftSpringScale;
     _enableAnimation;
+    _growFromButton = true;
+    _morph = null;
+    _morphTickId = 0;
     _interfaceSettings = null;
     _accentColorSignalId = 0;
     _accentColorTimeoutId = 0;
@@ -180,6 +200,7 @@ export class UIManager {
             return;
         this._bindSettings();
         this._enableAnimation = this._settings.get_boolean(this._animationKey());
+        this._growFromButton = this._settings.get_boolean(this._key('grow-from-button'));
         this._menuScale = this._settings.get_double(this._key('scale'));
         this._matchQuickSettingsHeight = this._settings.get_boolean(this._key('match-quick-settings-height'));
         const remembered = this._ownsSettingsNamespace
@@ -504,6 +525,9 @@ export class UIManager {
         connectSetting(this._animationKey(), () => {
             this._enableAnimation = this._settings.get_boolean(this._animationKey());
         });
+        connectSetting(this._key('grow-from-button'), () => {
+            this._growFromButton = this._settings.get_boolean(this._key('grow-from-button'));
+        });
         connectSetting(this._key('spring-stiffness'), () => {
             this._springStiffness = this._settings.get_double(this._key('spring-stiffness'));
             if (this._springScale)
@@ -709,6 +733,9 @@ export class UIManager {
             id: this.menu.actor.connect('notify::mapped', () => {
                 if (!this.menu.actor.mapped) {
                     stopFrameSync();
+                    // The glass outlives the menu while it goes back into the button.
+                    if (this._morph?.closing)
+                        return;
                     if (this.glass) {
                         this.glass.hide();
                         this.glass.opacity = 0;
@@ -726,6 +753,9 @@ export class UIManager {
     }
 
     _syncGeometry() {
+        // The morph places the glass itself.
+        if (this._morph)
+            return;
         if (!this._syncBgVisibility())
             return;
         const { w, h, scaleX, scaleY } = this._measureMenu();
@@ -1166,9 +1196,13 @@ export class UIManager {
             this._tickId = 0;
         }
         if (!this._enableAnimation) {
+            this._endMorph();
             showMenuAtRest(this.glass, this.animActor);
             return;
         }
+        if (this._growFromButton && St.Settings.get().enable_animations && this._startMorph(targetValue === 1))
+            return;
+        this._endMorph();
         if (this.animActor)
             this.animActor.remove_all_transitions();
         if (this.glass)
@@ -1201,6 +1235,157 @@ export class UIManager {
         }
     }
 
+    // The button the menu belongs to, as the glass it grows out of: [x, y, w, h]
+    // in stage coordinates, or null when it is not on screen.
+    _buttonRect() {
+        const source = this.menu?.sourceActor;
+        if (!source || !isActorValid(source) || !source.mapped)
+            return null;
+        const [x, y] = source.get_transformed_position();
+        const [w, h] = source.get_transformed_size();
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !(w >= 1) || !(h >= 1))
+            return null;
+        const inset = Math.min(BUTTON_INSET_Y, h / 4);
+        return [x, y + inset, w, h - inset * 2];
+    }
+
+    // The resting menu's glass body, [x, y, w, h] in stage coordinates.
+    _menuBodyRect() {
+        if (!this.targetActor.mapped)
+            return null;
+        const { w, h } = this._measureMenu();
+        const [x, y] = this._resolveMenuOrigin(w);
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !(w > 1) || !(h > 1))
+            return null;
+        const e = this._glassExpand;
+        return [x - e, y - e, w + e * 2, h + e * 2];
+    }
+
+    /**
+     * Starts the glass towards the menu (`open`) or back into the button.
+     * False when there is no button to grow out of; the scale spring runs then.
+     */
+    _startMorph(open) {
+        const button = this._buttonRect();
+        if (!this.glass || !button)
+            return false;
+        // Reversing midway starts from where the glass is.
+        const from = this._morph?.jelly.rect ?? (open ? button : this._menuBodyRect());
+        if (!from)
+            return false;
+        this._stopMorphTicker();
+        const jelly = new Jelly();
+        jelly.start(from);
+        this._morph = { closing: !open, jelly, button, waitFrames: 0 };
+        this.animActor.remove_all_transitions();
+        this.glass.remove_all_transitions();
+        this.animActor.set_scale(1.0, 1.0);
+        if (open)
+            this.animActor.opacity = 0;
+        this._morphTickId = addFrameTicker(() => this._stepMorph(), normalizeAnimationIntervalMs(this._animationInterval));
+        return true;
+    }
+
+    _stepMorph() {
+        const m = this._morph;
+        if (!m || !this.glass) {
+            this._morphTickId = 0;
+            return false;
+        }
+        m.button = this._buttonRect() ?? m.button;
+        if (m.closing) {
+            m.jelly.setMark(m.button);
+        }
+        else {
+            const target = this._menuBodyRect();
+            if (!target) {
+                // Not laid out yet: hold the glass on the button for a few frames.
+                this._placeMorph(m.jelly.rect, null, 0);
+                if (++m.waitFrames < MORPH_WAIT_FRAMES)
+                    return true;
+                this._morphTickId = 0;
+                this._endMorph();
+                return false;
+            }
+            m.jelly.setMark(target);
+        }
+        const moving = m.jelly.step(GLib.get_monotonic_time());
+        const p = m.jelly.progress;
+        // Opening, the button's glass stays behind as a drop that shrinks away;
+        // closing, the glass pours back into one that grows there. The items show
+        // once the glass has begun to open, and go first.
+        const left = m.closing ? clamp01((p - (1 - DROP_SPAN)) / DROP_SPAN) : 1 - p / DROP_SPAN;
+        const content = m.closing ? clamp01(1 - p / 0.5) : clamp01((p - 0.3) / 0.7);
+        let drop = null;
+        if (left > 0.02) {
+            const [bx, by, bw, bh] = m.button;
+            drop = [bx + bw * (1 - left) / 2, by + bh * (1 - left) / 2, bw * left, bh * left];
+        }
+        // Back on the button the glass fades instead of settling there over its label.
+        const fade = m.closing ? clamp01((1 - p) / CLOSE_FADE_SPAN) : 1;
+        this._placeMorph(m.jelly.rect, drop, content, fade);
+        if (moving && fade > 0)
+            return true;
+        this._morphTickId = 0;
+        const closed = m.closing;
+        this._endMorph();
+        if (closed) {
+            this.glass.hide();
+            this.glass.opacity = 0;
+            this.animActor.opacity = 0;
+            if (!this.menu.isOpen)
+                this.menu.actor.hide();
+        }
+        return false;
+    }
+
+    // Draws the travelling glass: its body `rect` and the button's `drop`
+    // (stage coordinates), with the menu's items at `content` opacity, clipped
+    // to the glass.
+    _placeMorph(rect, drop, content, opacity = 1) {
+        const glass = this.glass;
+        const monitor = this._getMenuMonitorGeometry();
+        const mx = monitor?.x ?? 0;
+        const my = monitor?.y ?? 0;
+        const p = SHADER_PADDING;
+        if (!glass.visible)
+            glass.show();
+        glass.opacity = Math.round(255 * opacity);
+        this._applyGlassBounds(glass, rect[0] - p, rect[1] - p, rect[2] + p * 2, rect[3] + p * 2, mx, my, Math.max(1, monitor?.width ?? 1), Math.max(1, monitor?.height ?? 1));
+        this._applyGlassScale(1, 1);
+        glass.setDrop(drop && [drop[0] - mx, drop[1] - my, drop[2], drop[3]], drop ? drop[3] / 2 : 0, DROP_MERGE);
+        if (this.targetActor.mapped) {
+            this.animActor.opacity = Math.round(255 * content);
+            const [ax, ay] = this.animActor.get_transformed_position();
+            const scale = this.targetActor.get_scale()[0] || 1;
+            if (Number.isFinite(ax) && Number.isFinite(ay))
+                this.animActor.set_clip((rect[0] - ax) / scale, (rect[1] - ay) / scale, rect[2] / scale, rect[3] / scale);
+        }
+        glass.syncSources();
+    }
+
+    _stopMorphTicker() {
+        if (!this._morphTickId)
+            return;
+        removeFrameTicker(this._morphTickId);
+        this._morphTickId = 0;
+    }
+
+    // Leaves the glass and the menu as the rest of the manager expects them.
+    _endMorph() {
+        this._stopMorphTicker();
+        if (!this._morph)
+            return;
+        this._morph = null;
+        this.glass?.setDrop(null);
+        if (!this._actorDestroyed && this.animActor) {
+            this.animActor.remove_clip();
+            this.animActor.opacity = 255;
+        }
+        if (this.glass && this.targetActor.mapped)
+            this._syncGeometry();
+    }
+
     _removeEffect() {
         if (!this._isEffectActive)
             return;
@@ -1220,6 +1405,7 @@ export class UIManager {
             removeFrameTicker(this._tickId);
             this._tickId = 0;
         }
+        this._endMorph();
         stopStageLoop(this._frameSignalSlot, this._frameSlot);
         this._disconnectAccentColor();
     }

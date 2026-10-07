@@ -43,6 +43,7 @@ export const GlassActor = GObject.registerClass(class GlassActor extends Clutter
             logger: params.logger,
             repaint: () => this._queueRepaint(),
             setDiagnostics: enabled => { this._diagEnabled = enabled; },
+            shapeTexture: params.shapeTexture,
         });
         registerGlass(this);
         this._loadShaders();
@@ -311,6 +312,12 @@ export const GlassActor = GObject.registerClass(class GlassActor extends Clutter
     setGlassGeometry(x, y, w, h) { this._renderer.setGlassGeometry(x, y, w, h); }
 
     setMultiRegionMode(enabled) { this._renderer.setMultiRegionMode(enabled); }
+
+    setDrop(rect, radius, merge) { this._renderer.setDrop(rect, radius, merge); }
+
+    setShapeTexture(texture, range, band) {
+        this._renderer.setShapeTexture(texture, range, band);
+    }
 
     setGlassRegions(regions) { this._renderer.setGlassRegions(regions); }
 

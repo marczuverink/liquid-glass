@@ -1,7 +1,7 @@
 import Adw from 'gi://Adw';
 import {PreferenceControls} from './controls.js';
 import {WindowRules} from './windows.js';
-import {sharedKeys, TEXT_KEYS, MENU_KEYS, POPUP_KEYS, MOTION, QUALITY, booleanChoices} from './model.js';
+import {sharedKeys, TEXT_KEYS, MENU_KEYS, POPUP_KEYS, MOTION, GROW_KEYS, QUALITY, booleanChoices} from './model.js';
 import {buildAdvancedPreferences} from './advanced.js';
 import {addBlurMyShellWarning} from './blur-my-shell.js';
 
@@ -47,6 +47,8 @@ export function buildPreferences(window, settings) {
 
   const behavior = controls.group(appearance, 'Behavior');
   controls.choice(behavior, 'Animations', MOTION);
+  controls.choice(behavior, 'Menus grow from their button', booleanChoices(GROW_KEYS),
+    'Calendar and other top bar menus, while animations are on');
   controls.choice(behavior, 'Automatic text contrast', booleanChoices(TEXT_KEYS));
   controls.choice(behavior, 'Match menu heights', booleanChoices([
     'menu-match-quick-settings-height', 'panel-menu-match-quick-settings-height',

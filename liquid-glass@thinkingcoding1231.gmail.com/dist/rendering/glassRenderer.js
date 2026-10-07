@@ -1,7 +1,7 @@
 import Cogl from 'gi://Cogl';
 import { MaterialSettings } from './material.js';
 import { BlurRenderer } from './blur.js';
-import { ShaderPipelines, configureSamplerLayer } from './pipelines.js';
+import { ShaderPipelines, configureSamplerLayer, SHAPE_LAYER } from './pipelines.js';
 import { GlassGeometry } from './geometry.js';
 import { UniformState } from './uniforms.js';
 import { RenderPasses } from './passes.js';
@@ -22,11 +22,12 @@ export class GlassRenderer {
     geometry;
     material;
     _repaint;
+    _shapeTexture = null;
 
     constructor(params) {
         this._repaint = params.repaint;
         this.passes = new RenderPasses();
-        this.pipelines = new ShaderPipelines(params.logger);
+        this.pipelines = new ShaderPipelines(params.logger, params.shapeTexture ?? false);
         this.blur = new BlurRenderer(this.pipelines, this.passes, () => this._repaint());
         this.uniforms = new UniformState();
         this.geometry = new GlassGeometry(this.uniforms.values);
@@ -69,6 +70,10 @@ export class GlassRenderer {
         configureSamplerLayer(compPipeline, 0);
         compPipeline.set_layer_texture(1, layerTex);
         configureSamplerLayer(compPipeline, 1);
+        if (this._shapeTexture) {
+            compPipeline.set_layer_texture(SHAPE_LAYER, this._shapeTexture);
+            configureSamplerLayer(compPipeline, SHAPE_LAYER);
+        }
         // Uniforms set before the pipeline existed are written now.
         this.uniforms.flush();
     }
@@ -97,6 +102,7 @@ export class GlassRenderer {
     }
 
     cleanup() {
+        this._shapeTexture = null;
         this.material.clear();
         // Dropping the references frees the textures and pipelines; GJS owns them.
         this.blur.clear();
@@ -212,6 +218,36 @@ export class GlassRenderer {
         this.geometry.rect[2] = w;
         this.geometry.rect[3] = h;
         this._repaintIfDirty();
+    }
+
+    /**
+     * Fuses a second rounded rect [x, y, w, h] onto the glass (same space as
+     * setGlassGeometry(), without padding) by a smooth union `merge` px wide;
+     * null removes it.
+     */
+    setDrop(rect, radius = 0, merge = 24) {
+        const r = rect && rect[2] >= 1 && rect[3] >= 1 ? rect : null;
+        this.uniforms.set('drop_x', r ? r[0] : 0);
+        this.uniforms.set('drop_y', r ? r[1] : 0);
+        this.uniforms.set('drop_w', r ? r[2] : 0);
+        this.uniforms.set('drop_h', r ? r[3] : 0);
+        this.uniforms.set('drop_radius', radius);
+        this.uniforms.set('drop_merge', merge);
+        this.geometry.extraRects = r ? [r.slice()] : [];
+        this._repaintIfDirty();
+    }
+
+    /**
+     * The distance field a shape-texture glass takes its outline from: it covers
+     * the glass rect, holds `range` px each way, and the lens rises over `band`
+     * px from the edge.
+     */
+    setShapeTexture(texture, range, band) {
+        this._shapeTexture = texture;
+        this.uniforms.set('shape_range', range);
+        this.uniforms.set('shape_band', band);
+        this.uniforms.takeDirty();
+        this._repaint();
     }
 
     setMultiRegionMode(enabled) {

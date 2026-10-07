@@ -114,6 +114,24 @@ uniform float region_tint_b[MAX_GLASS_REGIONS];
 // two tints stay independent. 0 when the colour could not be resolved.
 uniform float region_base_strength[MAX_GLASS_REGIONS];
 
+// A second rounded rect fused onto the glass by a smooth union: the button a
+// menu grows out of, left behind as a drop that shrinks away. In the actor's
+// pixel space like dock_*, without padding. Off while drop_w < 1.
+uniform float drop_x;
+uniform float drop_y;
+uniform float drop_w;
+uniform float drop_h;
+uniform float drop_radius;
+uniform float drop_merge; // width of the smooth union, px
+
+#ifdef LG_SHAPE_TEXTURE
+// The outline as a distance field over the dock_* rect, for glass text. The
+// distance is stored in 16 bits, high byte in red and low byte in green: the
+// encoding is linear, so bilinear filtering interpolates the distance itself.
+uniform float shape_range; // px of distance each way the field holds
+uniform float shape_band;  // the lens band, px
+#endif
+
 // Signed distance to a circular-cornered rounded rectangle.
 float sdCircleRoundRect(vec2 p, vec2 b, float r) {
     vec2 d = abs(p) - b + vec2(r);
@@ -287,6 +305,79 @@ vec2 heightGradient(vec2 p, vec2 b, vec2 corner, float band, float zScale, vec2 
 
 vec3 getNormal(vec2 gradH) {
     return normalize(vec3(-gradH.x, -gradH.y, 1.0));
+}
+
+// Polynomial smooth minimum: min() where a and b differ by more than k, and a
+// join bulging by at most k/4 otherwise.
+float sminPoly(float a, float b, float k) {
+    float h = max(k - abs(a - b), 0.0) / max(k, 1.0e-4);
+    return min(a, b) - h * h * k * 0.25;
+}
+
+#ifdef LG_SHAPE_TEXTURE
+float shapeTextureSD(vec2 p) {
+    vec2 size = max(vec2(dock_w, dock_h), vec2(1.0));
+    vec2 st = p / size + 0.5;
+    // Past the field's rect the distance keeps growing.
+    vec2 beyond = max(abs(st - 0.5) - 0.5, 0.0) * size;
+    vec2 c = texture2D(cogl_sampler2, clamp(st, vec2(0.0), vec2(1.0))).rg;
+    float v = (c.r * 65280.0 + c.g * 255.0) / 65535.0;
+    return mix(-shape_range, shape_range, v) + length(beyond);
+}
+#endif
+
+// The outlines the plain rounded rect does not describe (the glass with its
+// drop, glass text): the signed distance at p, local to the glass rect's
+// centre, and the lens band there.
+vec2 fusedShape(vec2 p, vec2 b, vec2 corner) {
+#ifdef LG_SHAPE_TEXTURE
+    return vec2(shapeTextureSD(p), max(shape_band, 1.0));
+#else
+    float d = sdRoundRect(p, b, corner);
+    float band = lensBandFor(min(b.x, b.y));
+    if (drop_w < 1.0)
+        return vec2(d, band);
+
+    vec2 dropHalf = max(vec2(drop_w, drop_h) * 0.5, vec2(1.0));
+    vec2 dropCentre = vec2(drop_x, drop_y) + dropHalf - vec2(dock_x + dock_w * 0.5, dock_y + dock_h * 0.5);
+    float dd = sdRoundRect(p - dropCentre, dropHalf, cornerShape(dropHalf, drop_radius));
+    float k = max(drop_merge, 1.0e-3);
+    // The band follows whichever body the pixel belongs to, so the small
+    // drop keeps the lens of a small glass.
+    float w = smoothstep(-k, k, d - dd);
+    return vec2(sminPoly(d, dd, k), mix(band, lensBandFor(min(dropHalf.x, dropHalf.y)), w));
+#endif
+}
+
+// Unit gradient of fusedShape(), by central differences: a smooth union or
+// a sampled field has no cheap closed form.
+vec2 fusedDir(vec2 p, vec2 b, vec2 corner) {
+    const float e = 0.5;
+    vec2 g = vec2(fusedShape(p + vec2(e, 0.0), b, corner).x - fusedShape(p - vec2(e, 0.0), b, corner).x,
+                  fusedShape(p + vec2(0.0, e), b, corner).x - fusedShape(p - vec2(0.0, e), b, corner).x);
+    float len = length(g);
+    return len > 1.0e-5 ? g / len : vec2(1.0, 0.0);
+}
+
+float getHeightFused(vec2 p, vec2 b, vec2 corner, float zScale) {
+    vec2 s = fusedShape(p, b, corner);
+    float smoothZone = max(edge_smoothing, 1.0);
+    if (s.x > smoothZone)
+        return 0.0;
+    float t = normalizedDepth(s.x, b, s.y);
+    float h = profileHeight(t, zScale * lensScaleFor(s.y));
+    float fade = 1.0 - smoothstep(-smoothZone, smoothZone, s.x);
+    return h * fade;
+}
+
+vec2 heightGradientFused(vec2 p, vec2 b, vec2 corner, float zScale, vec2 resolution) {
+    vec2 dir = fusedDir(p, b, corner);
+    float e = gradientStep(resolution);
+
+    float hOut = getHeightFused(p + dir * e, b, corner, zScale);
+    float hIn  = getHeightFused(p - dir * e, b, corner, zScale);
+
+    return dir * ((hOut - hIn) / (2.0 * e));
 }
 
 // UV displacement from refraction through the surface.
@@ -521,6 +612,17 @@ void main() {
     float d = sdRoundRect(local_pos, box_size, corner);
 
     float lensBand = lensBandFor(min(box_size.x, box_size.y));
+
+#ifdef LG_SHAPE_TEXTURE
+    bool fused = true;
+#else
+    bool fused = drop_w >= 1.0 && multi_region_mode < 0.5;
+#endif
+    if (fused) {
+        vec2 shape = fusedShape(local_pos, box_size, corner);
+        d = shape.x;
+        lensBand = shape.y;
+    }
     float lensScale = lensScaleFor(lensBand);
 
     // Inside = 1, outside = 0. smoothstep() is undefined for edge0 >= edge1 and
@@ -599,7 +701,7 @@ void main() {
 
     // 0 on the lit side, 1 opposite the light. The epsilon avoids NaN at the
     // centre.
-    vec2 outwardDir = normalize(local_pos + vec2(1e-4));
+    vec2 outwardDir = fused ? fusedDir(local_pos, box_size, corner) : normalize(local_pos + vec2(1e-4));
     float lightAlignment = max(dot(outwardDir, shadowDir), 0.0);
 
     // 85% on the lit side to 100% on the far side; gentle, since a bottom dock
@@ -656,7 +758,9 @@ void main() {
 
     vec3 shadowColor = vec3(0.03, 0.04, 0.08);
 
-    vec2 gradH = heightGradient(local_pos, box_size, corner, lensBand, max_z * lensScale, resolution);
+    vec2 gradH = fused
+        ? heightGradientFused(local_pos, box_size, corner, max_z, resolution)
+        : heightGradient(local_pos, box_size, corner, lensBand, max_z * lensScale, resolution);
     vec3 normal = getNormal(gradH);
 
     vec2 disp = getDisplacement(d, normal, resolution);

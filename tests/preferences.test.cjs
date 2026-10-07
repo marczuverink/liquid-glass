@@ -108,10 +108,10 @@ function fixture(overrides = {}, dbusResponses = [], blurMyShell = null) {
     row: title => widgets.find(widget => widget.title === title)};
 }
 
-test('preferences expose three pages and seven shared appearance controls', () => {
+test('preferences expose three pages and eight shared appearance controls', () => {
   const f = fixture();
   assert.deepEqual(f.window.children.map(page => page.title), ['Appearance', 'Effects', 'Rendering']);
-  assert.equal(f.window.children[0].children.filter(group => group.title !== 'Settings' && group.visible !== false).flatMap(group => group.children).length, 7);
+  assert.equal(f.window.children[0].children.filter(group => group.title !== 'Settings' && group.visible !== false).flatMap(group => group.children).length, 8);
   assert.equal(f.widgets.filter(widget => /Spring|Sample Interval|X Offset|Y Offset/.test(widget.title ?? '')).length, 0);
   assert.equal(f.window.search_enabled, true);
 });

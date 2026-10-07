@@ -5,7 +5,9 @@ import { splitShader } from './shaderSource.js';
 import { uniformDeclarations } from '../shellVersion.js';
 
 export class ShaderPipelines {
-  constructor(private _logger?: Logger) { }
+  // `shapeTexture`: the composite takes the glass's outline from a distance
+  // field on layer 2 (glass text) instead of the rounded rect.
+  constructor(private _logger?: Logger, private _shapeTexture = false) { }
 
   async load(extensionPath: string | undefined, cancellable: Gio.Cancellable | null = null): Promise<void> {
     if (!extensionPath) throw new Error('Missing extension path for shader loading');
@@ -113,6 +115,7 @@ export class ShaderPipelines {
 
     this.composite = Cogl.Pipeline.new(ctx);
     configureSamplerLayer(this.composite, 0);
+    if (this._shapeTexture) configureSamplerLayer(this.composite, SHAPE_LAYER);
 
     // Premultiplied-alpha "over", as ShaderEffect blends by default.
     this.composite.set_blend(
@@ -134,12 +137,16 @@ export class ShaderPipelines {
 
     decl = decl.replace(/uniform\s+sampler2D\s+cogl_sampler\d*\s*;[^\n]*/g, '');
     body = body.replace(/\bcogl_sampler\b/g, 'cogl_sampler0');
+    if (this._shapeTexture) decl = `#define LG_SHAPE_TEXTURE 1\n${decl}`;
 
     const snippet = Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, uniformDeclarations(decl), null);
     snippet.set_replace(body);
     this.composite.add_snippet(snippet);
   }
 }
+
+// The composite's layer for the distance field of a shape-texture glass.
+export const SHAPE_LAYER = 2;
 
 // Bilinear filtering and clamp-to-edge on one layer.
 export function configureSamplerLayer(pipeline: Cogl.Pipeline, layer: number): void {

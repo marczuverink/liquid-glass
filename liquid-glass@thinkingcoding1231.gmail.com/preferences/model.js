@@ -7,6 +7,7 @@ export const TEXT_KEYS = ['menu', 'panel-menu', 'notification', 'quick-settings'
 export const MENU_KEYS = ['enable-menu-glass', 'enable-quick-settings-glass', 'enable-extra-menu-glass', 'enable-desktop-menu-glass'];
 export const POPUP_KEYS = ['enable-notification-glass', 'enable-osd-glass'];
 export const MOTION_KEYS = ['menu', 'panel-menu', 'quick-settings'].map(surface => `enable-${surface}-animation`);
+export const GROW_KEYS = ['menu', 'panel-menu'].map(surface => `${surface}-grow-from-button`);
 
 export function uniformPatch(keys, value) {
   return Object.fromEntries(keys.map(key => [key, value]));
