@@ -11,6 +11,7 @@
 - `git:c` — コミットのみ。merge・push はしない (default)
 - `git:cmp` — commit・merge・push する
 - `git:cm` — commit・merge する。push はしない
+- `git:mg` — 新たなコミットはせず、これまでのコミットを merge・push する
 - `do:all` — 与えられたタスクをすべて一度にやる (default)
 - `do:step` — step by step で進める（1 ターンですべてはやらず、区切りごとにユーザーに確認する）
 - `mode:plan` — 原因分析や実装計画立てのみ行い、コード編集はしない
