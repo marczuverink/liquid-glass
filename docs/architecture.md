@@ -7,11 +7,15 @@ The extension source is in `liquid-glass@thinkingcoding1231.gmail.com/src`.
 | --- | --- |
 | `actors/` | Actor validity, allocation rescue, cached writes, coordinates and custom actor types |
 | `capture/` | Desktop/background capture, UI and window clones, nested glass and capture clipping |
-| `animation/` | Shared spring models, colour interpolation and frame-sync switches |
+| `animation/` | Shared spring models (including the jelly a morphing glass travels on), colour interpolation and frame-sync switches |
 | `rendering/` | Blur buffers, pipelines, crop targets, glass extents, uniform caching and material settings |
 | `diagnostics/` | Logging, the opt-in ring recorder and Looking Glass controls |
 | `quickSettings/toggleStyles.ts` | Toggle discovery, native theme colours, temporary styles and their timer/signal lifetime |
 | `preferences/` | Shared appearance controls, grouped settings writes and application selection; see [Preferences](preferences.md) |
+| `topBarManager.ts` | Glass under the top bar: one pill or one island per box |
+| `desktop/` | The desktop layer (placement, stacking, dragging), the glass cards of the widgets, the glass clock and the distance fields of its digits (`glassText.ts`) |
+| `launcher/` | The search launcher and its use of the overview's search providers |
+| `adaptiveText.ts` | Adaptive text colour for surfaces that stay on screen (top bar, desktop, launcher) |
 | `liquidEffect.ts` | Clutter effect lifecycle, frame reuse and the existing interface used by managers |
 
 `utils.ts` remains an explicit compatibility export list. Internal modules import directly from the owner; new functionality should not be added to the compatibility file. The diagnostic exports previously provided by `liquidEffect.ts` remain available there too.

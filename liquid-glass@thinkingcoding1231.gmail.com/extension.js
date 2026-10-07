@@ -15,6 +15,8 @@ import {OsdManager} from './dist/osdManager.js';
 import {ApplicationManager} from './dist/applicationManager.js';
 import {WindowListService} from './dist/windowListService.js';
 import {TopBarManager} from './dist/topBarManager.js';
+import {DesktopLayer} from './dist/desktop/desktopLayer.js';
+import {Launcher} from './dist/launcher/launcher.js';
 import {Logger} from './dist/logger.js';
 import {adaptiveColorTweener} from './dist/animation/colors.js';
 import {installGlassDiagnostics, removeGlassDiagnostics, flushGlassRing,
@@ -47,6 +49,12 @@ export default class LiquidGlassExtension extends Extension {
 
     this._topBarManager = new TopBarManager(path, this._settings, this._logger);
     this._topBarManager.setup();
+
+    this._desktopLayer = new DesktopLayer(path, this._settings, this._logger);
+    this._desktopLayer.setup();
+
+    this._launcher = new Launcher(path, this._settings, this._logger);
+    this._launcher.setup();
 
     this._blurMyShellWatch = new BlurMyShellWatch(this._settings, this._logger);
     this._blurMyShellWatch.setup();
@@ -131,6 +139,12 @@ export default class LiquidGlassExtension extends Extension {
 
     this._topBarManager.cleanup();
     this._topBarManager = null;
+
+    this._desktopLayer.cleanup();
+    this._desktopLayer = null;
+
+    this._launcher.cleanup();
+    this._launcher = null;
 
     this._blurMyShellWatch.cleanup();
     this._blurMyShellWatch = null;

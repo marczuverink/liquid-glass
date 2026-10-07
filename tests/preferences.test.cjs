@@ -75,7 +75,11 @@ function fixture(overrides = {}, dbusResponses = [], blurMyShell = null) {
   const Gtk = {Adjustment: Widget, ColorDialogButton: Widget, ColorDialog: Widget, Button: Widget, ListBox: Widget,
     Scale: Widget, Orientation: {HORIZONTAL: 0},
     SignalListItemFactory: Widget, Box: Widget, Label: Widget, Image: Widget,
-    StringList: {new: titles => titles}, Align: {CENTER: 0}, SelectionMode: {NONE: 0}};
+    StringList: {new: titles => titles}, Align: {CENTER: 0}, SelectionMode: {NONE: 0},
+    FontDialogButton: Widget, FontDialog: Widget, FontLevel: {FACE: 2},
+    accelerator_parse: text => [text.length > 0, text.length > 0 ? 1 : 0, 0]};
+  const fontDescription = text => ({copy() { return fontDescription(text); }, unset_fields() {}, to_string: () => text});
+  const Pango = {FontDescription: {from_string: fontDescription}, FontMask: {SIZE: 1}};
   const dbusCalls = [];
   const bmsSchemas = '/home/test/.local/share/gnome-shell/extensions/blur-my-shell@aunetx/schemas';
   const GioSettings = function (props) {
@@ -100,7 +104,7 @@ function fixture(overrides = {}, dbusResponses = [], blurMyShell = null) {
   const GLib = {Variant, FileTest: {EXISTS: 16}, build_filenamev: parts => parts.join('/'),
     file_test: file => blurMyShell !== null && file === `${bmsSchemas}/gschemas.compiled`,
     get_user_data_dir: () => '/home/test/.local/share', get_system_data_dirs: () => ['/usr/share']};
-  const load = createModuleLoader({Adw, Gtk, Gio, Gdk: {RGBA}, GLib});
+  const load = createModuleLoader({Adw, Gtk, Gio, Gdk: {RGBA}, GLib, Pango});
   const settings = new Settings(); const window = new Widget();
   const {buildPreferences} = load(path.join(root, 'preferences/pages.js'));
   const controls = buildPreferences(window, settings);
@@ -108,9 +112,9 @@ function fixture(overrides = {}, dbusResponses = [], blurMyShell = null) {
     row: title => widgets.find(widget => widget.title === title)};
 }
 
-test('preferences expose three pages and eight shared appearance controls', () => {
+test('preferences expose four pages and eight shared appearance controls', () => {
   const f = fixture();
-  assert.deepEqual(f.window.children.map(page => page.title), ['Appearance', 'Effects', 'Rendering']);
+  assert.deepEqual(f.window.children.map(page => page.title), ['Appearance', 'Effects', 'Desktop', 'Rendering']);
   assert.equal(f.window.children[0].children.filter(group => group.title !== 'Settings' && group.visible !== false).flatMap(group => group.children).length, 8);
   assert.equal(f.widgets.filter(widget => /Spring|Sample Interval|X Offset|Y Offset/.test(widget.title ?? '')).length, 0);
   assert.equal(f.window.search_enabled, true);
@@ -126,11 +130,11 @@ test('opening and closing preferences preserves a customized configuration witho
   assert.equal(f.values.get('menu-scale'), 0.83);
 });
 
-test('editing shared blur updates all nine surfaces in one transaction and no other settings', () => {
+test('editing shared blur updates all eleven surfaces in one transaction and no other settings', () => {
   const f = fixture();
   f.row('Blur').value = 12;
   assert.equal(f.writes.length, 1);
-  assert.equal(Object.keys(f.writes[0]).length, 9);
+  assert.equal(Object.keys(f.writes[0]).length, 11);
   assert.ok(Object.keys(f.writes[0]).every(key => key.endsWith('-blur-radius')));
   assert.ok(Object.values(f.writes[0]).every(value => value === 12));
   assert.equal(f.row('Blur').subtitle, '');
@@ -139,7 +143,7 @@ test('editing shared blur updates all nine surfaces in one transaction and no ot
 test('corners include toggle glass and changing them does not enable any effect', () => {
   const f = fixture(); f.row('Corners').value = 24;
   assert.equal(f.values.get('quick-settings-toggle-corner-radius'), 24);
-  assert.equal(Object.keys(f.writes[0]).length, 10);
+  assert.equal(Object.keys(f.writes[0]).length, 12);
   assert.equal(f.values.get('enable-application-glass'), false);
   assert.equal(f.values.get('top-bar-style'), 'off');
 });

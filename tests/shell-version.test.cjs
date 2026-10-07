@@ -105,3 +105,11 @@ test('from GNOME 50 the stage is painted to content with a colour state argument
     if (expected === 4) assert.equal(args[2], null);
   }
 });
+
+test('a vertical box uses orientation from GNOME 48 on and vertical before', () => {
+  const Clutter = { Orientation: { VERTICAL: 1 } };
+  assert.deepEqual(shellVersion('46.0', { Clutter }).verticalBoxParams(), { vertical: true });
+  assert.deepEqual(shellVersion('47.10', { Clutter }).verticalBoxParams(), { vertical: true });
+  assert.deepEqual(shellVersion('48.0', { Clutter }).verticalBoxParams(), { orientation: 1 });
+  assert.deepEqual(shellVersion('51.0', { Clutter }).verticalBoxParams(), { orientation: 1 });
+});

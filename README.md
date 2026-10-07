@@ -118,10 +118,33 @@ Where it is supported, the extension samples the brightness of what is behind th
 
 Recent versions of [Blur my Shell](https://github.com/aunetx/blur-my-shell) (74) blur popup menus, notifications and OSDs by default. Its blur shows through the glass, so turn off **Popups** in Blur my Shell. While Blur my Shell's popup blur is on, the Liquid Glass preferences show a warning at the top of the Appearance page with a button that turns it off, and the extension notes it in its log when Logging is on. Turning off Popups leaves Blur my Shell's other effects on.
 
+## On the Desktop
+
+The **Desktop** page of the preferences adds glass that is not part of GNOME's own interface. All three are off by default.
+
+### Glass Clock
+
+A large clock whose digits are themselves glass, like the clock on the iPhone's lock screen, with the date above it. It sits on the desktop below the windows. Pick a place for it (one of the four corners or the centre) or drag it anywhere; it stays where it was dropped until you pick a place again. The font, the size, the time format (as in Settings, 24-hour or 12-hour), the date, the blur and the tint can be changed. Without a font of your own it uses the interface font in bold.
+
+### Desktop Widgets
+
+Cards of glass on the desktop, stacked in a corner or the centre of the primary monitor and draggable one by one:
+
+- **Weather** — the current weather and the next hours. With [GNOME Weather](https://apps.gnome.org/Weather/) installed it shows the location GNOME Weather has, as the calendar menu does, with no setup. Without it, type a place in the preferences and the forecast comes from [Open-Meteo](https://open-meteo.com/) ("Weather data by Open-Meteo.com" is shown on the card). Click the card to open GNOME Weather.
+- **Up next** — the rest of today's events and tomorrow's, from the calendars the calendar menu shows. Click it to open GNOME Calendar.
+- **Now playing** — the track a music or video player is playing (any MPRIS player), with previous, play/pause and next buttons. Hidden while no player is running.
+
+The widgets and the clock are hidden in the overview, together with the windows.
+
+### Launcher
+
+A search field on glass in the middle of the screen, like Spotlight, opened with <kbd>Super</kbd> + <kbd>Alt</kbd> + <kbd>Space</kbd> (changeable in the preferences). It asks the same search providers as the overview, so it finds applications, settings, files, calculations and whatever else your installed apps provide, as far as they are enabled in Settings → Search. Use the arrow keys and <kbd>Enter</kbd>, or click a result; <kbd>Esc</kbd> or a click outside closes it.
+
 ## Preferences
 
 - **Appearance** — shared blur, corners and tint; animations, automatic text contrast and matching menu heights.
 - **Effects** — choose where glass appears: top bar, dock, menus, popups and application windows.
+- **Desktop** — the glass clock, the desktop widgets and the launcher.
 - **Rendering** — rendering quality, refraction, edge lighting, shadows and diagnostics.
 
 Opening the window preserves your configuration. **Custom** means your existing
@@ -228,6 +251,7 @@ A significant part of this codebase was written with the help of AI coding assis
 - [x] Add ArcMenu support
 - [x] Add top bar glass (one pill or three pills)
 - [x] Grow menus out of their top bar button
+- [x] Add a glass clock, desktop widgets (weather, up next, now playing) and a search launcher
 
 ### Next
 - [ ] Publish to extensions.gnome.org (not approved yet)

@@ -4,6 +4,7 @@ import {WindowRules} from './windows.js';
 import {sharedKeys, TEXT_KEYS, MENU_KEYS, POPUP_KEYS, MOTION, GROW_KEYS, QUALITY, TOP_BAR, booleanChoices} from './model.js';
 import {buildAdvancedPreferences} from './advanced.js';
 import {addBlurMyShellWarning} from './blur-my-shell.js';
+import {buildDesktopPage} from './desktop.js';
 
 function collectGroups(page, build) {
   const added = [];
@@ -32,6 +33,7 @@ export function buildPreferences(window, settings) {
 
   const appearance = page('Appearance', 'preferences-desktop-appearance-symbolic');
   const effects = page('Effects', 'preferences-other-symbolic');
+  const desktop = page('Desktop', 'user-desktop-symbolic');
   const advanced = page('Rendering', 'applications-engineering-symbolic');
   addBlurMyShellWarning(appearance, controls);
   const view = controls.group(appearance, 'Settings');
@@ -70,6 +72,8 @@ export function buildPreferences(window, settings) {
     {title: 'Strong', patch: {'shadow-radius': 50, 'shadow-intensity': 0.5}},
   ]);
   controls.number(rendering, 'Edge shading', ['glass-ao-intensity'], 0, 1, 0.05, '', {slider: true});
+
+  buildDesktopPage(desktop, controls);
 
   const effectsTail = collectGroups(effects, () => {
     new WindowRules(settings, controls).add(effects);

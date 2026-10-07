@@ -66,6 +66,12 @@ export function undoCloneScale(clone, volume) {
     }
 }
 
+// The properties that make an St.BoxLayout stack its children vertically:
+// `orientation` from GNOME 48 on; before, `vertical`, which GNOME 51 removed.
+export function verticalBoxParams() {
+    return SHELL_MAJOR >= 48 ? { orientation: Clutter.Orientation.VERTICAL } : { vertical: true };
+}
+
 // The Quick Settings toggle with a menu arrow: `.quick-menu-toggle` until
 // GNOME 47, `.quick-toggle-has-menu` from 48 on.
 export const QS_MENU_TOGGLE_CLASS = SHELL_MAJOR >= 48 ? 'quick-toggle-has-menu' : 'quick-menu-toggle';

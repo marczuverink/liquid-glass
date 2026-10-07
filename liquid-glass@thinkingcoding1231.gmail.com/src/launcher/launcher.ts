@@ -1,0 +1,376 @@
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as SystemActions from 'resource:///org/gnome/shell/misc/systemActions.js';
+import Clutter from 'gi://Clutter';
+import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
+import Meta from 'gi://Meta';
+import Pango from 'gi://Pango';
+import Shell from 'gi://Shell';
+import St from 'gi://St';
+
+import { BackdropGlass } from '../rendering/backdropGlass.js';
+import { ensureGlassAllocated } from '../actors/allocation.js';
+import { isActorValid } from '../actors/lifecycle.js';
+import { startSyncLoop, stopStageLoop } from '../animation/frameLoops.js';
+import { hexToColorArray } from '../animation/colors.js';
+import { Jelly } from '../animation/jelly.js';
+import { AdaptiveTextColor } from '../adaptiveText.js';
+import { sanitizeColorPreference } from '../contrastSampler.js';
+import { verticalBoxParams } from '../shellVersion.js';
+import type { Logger } from '../logger.js';
+
+const WIDTH = 680;
+// The search field's top, as a fraction of the monitor's height.
+const TOP = 0.2;
+const MAX_RESULTS = 8;
+const PER_PROVIDER = 5;
+const ICON_SIZE = 32;
+const SEARCH_DELAY_MS = 120;
+const SHADER_PADDING = 20;
+const SHADOW_MARGIN = 60;
+const FADE_MS = 150;
+// The glass opens from this much larger, like SwiftUI's materialize.
+const OPEN_SCALE = 1.06;
+
+interface Result {
+  provider: any;
+  order: number;
+  meta: any;
+}
+
+function isCancelled(e: unknown): boolean {
+  return e instanceof GLib.Error && e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED);
+}
+
+/**
+ * A search field on glass in the middle of the screen, like Spotlight, that
+ * opens with a shortcut and asks the same search providers as the overview
+ * (applications, settings, files, the calculator and whatever else is
+ * installed and enabled in Settings).
+ */
+export class Launcher {
+  // The open launcher, for the test driver.
+  static instance: Launcher | null = null;
+
+  private _settingsIds: number[] = [];
+  // The look's watchers, while the launcher is open.
+  private _materialIds: number[] = [];
+  private _keybinding = false;
+  private _root: St.Widget | null = null;
+  private _panel: St.BoxLayout | null = null;
+  private _entry: St.Entry | null = null;
+  private _list: St.BoxLayout | null = null;
+  private _glass: BackdropGlass | null = null;
+  private _grab: any = null;
+  private _jelly = new Jelly();
+  private _jellyStarted = false;
+  private _frameSyncId = 0;
+  private _frameSignalId = 0;
+  private _searchId = 0;
+  private _cancellable: Gio.Cancellable | null = null;
+  private _results: Result[] = [];
+  private _rows: St.Button[] = [];
+  private _selected = 0;
+  private _terms: string[] = [];
+  private _text: AdaptiveTextColor;
+
+  constructor(private _path: string, private _settings: Gio.Settings, private _logger: Logger) {
+    this._text = new AdaptiveTextColor(() => (this._panel ? [this._panel] : []),
+      () => (this._glass ? [this._glass] : []), _logger, 'launcher');
+  }
+
+  setup(): void {
+    Launcher.instance = this;
+    const watch = (key: string, fn: () => void) => this._settingsIds.push(this._settings.connect(`changed::${key}`, fn));
+    watch('enable-launcher', () => this._syncKeybinding());
+    this._syncKeybinding();
+  }
+
+  private _syncKeybinding(): void {
+    const wanted = this._settings.get_boolean('enable-launcher');
+    if (wanted && !this._keybinding) {
+      Main.wm.addKeybinding('launcher-shortcut', this._settings, Meta.KeyBindingFlags.NONE,
+        Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW, () => this.toggle());
+      this._keybinding = true;
+    } else if (!wanted && this._keybinding) {
+      Main.wm.removeKeybinding('launcher-shortcut');
+      this._keybinding = false;
+      this.close();
+    }
+  }
+
+  toggle(): void {
+    if (this._root) this.close();
+    else this.open();
+  }
+
+  open(): void {
+    if (this._root) return;
+    const monitor = Main.layoutManager.primaryMonitor;
+    if (!monitor) return;
+
+    const root = new St.Widget({ name: 'liquid-glass-launcher', reactive: true,
+      x: monitor.x, y: monitor.y, width: monitor.width, height: monitor.height, opacity: 0 });
+    // A click outside the field closes it.
+    root.connect('button-press-event', () => {
+      this.close();
+      return Clutter.EVENT_STOP;
+    });
+
+    const glass = new BackdropGlass({
+      extensionPath: this._path, settings: this._settings, logger: this._logger, owner: 'launcher',
+    } as any);
+    glass.setPadding(SHADER_PADDING);
+    glass.setIsDock(false);
+    glass.setShadowMaxRadius(SHADOW_MARGIN - 10);
+    root.add_child(glass);
+
+    const panel = new St.BoxLayout({ style_class: 'liquid-glass-launcher', reactive: true, width: WIDTH,
+      x: Math.round((monitor.width - WIDTH) / 2), y: Math.round(monitor.height * TOP), ...verticalBoxParams() } as any);
+    // Clicks on the field stay there.
+    panel.connect('button-press-event', () => Clutter.EVENT_STOP);
+    const entry = new St.Entry({ style_class: 'lg-launcher-entry', hint_text: 'Search', can_focus: true, x_expand: true,
+      primary_icon: new St.Icon({ icon_name: 'edit-find-symbolic', style_class: 'lg-launcher-entry-icon' }) });
+    const list = new St.BoxLayout({ style_class: 'lg-launcher-list', ...verticalBoxParams() } as any);
+    panel.add_child(entry);
+    panel.add_child(list);
+    root.add_child(panel);
+    Main.layoutManager.uiGroup.add_child(root);
+
+    this._root = root;
+    this._panel = panel;
+    this._entry = entry;
+    this._list = list;
+    this._glass = glass;
+    this._results = [];
+    this._rows = [];
+    this._selected = 0;
+    this._applyMaterial();
+    this._materialIds = (['tint-color', 'tint-strength', 'blur-radius', 'corner-radius', 'brightness', 'contrast',
+      'saturation']).map(key => this._settings.connect(`changed::launcher-${key}`, () => this._applyMaterial()));
+
+    entry.clutter_text.connect('text-changed', () => this._queueSearch());
+    entry.clutter_text.connect('key-press-event', (_a: Clutter.Actor, event: Clutter.Event) => this._onKey(event));
+
+    this._grab = Main.pushModal(root, { actionMode: Shell.ActionMode.POPUP });
+    global.stage.set_key_focus(entry.clutter_text);
+    this._jelly = new Jelly();
+    this._jellyStarted = false;
+    startSyncLoop(this._frameSignalSlot, this._frameSlot, {
+      alive: () => !!this._root,
+      honourFreeze: true,
+      errorTag: 'Launcher',
+      step: () => this._sync(),
+    });
+    (root as any).ease({ opacity: 255, duration: FADE_MS, mode: Clutter.AnimationMode.EASE_OUT_QUAD });
+    if (this._settings.get_boolean('launcher-enable-adaptive-text-color')) {
+      this._text.start(this._settings.get_int('launcher-sample-interval-ms'),
+        sanitizeColorPreference(this._settings.get_string('launcher-adaptive-text-preference')));
+    }
+  }
+
+  close(): void {
+    const root = this._root;
+    if (!root) return;
+    this._root = null;
+    stopStageLoop(this._frameSignalSlot, this._frameSlot);
+    this._cancelSearch();
+    this._text.clear();
+    if (this._grab) Main.popModal(this._grab);
+    this._grab = null;
+    for (const id of this._materialIds) this._settings.disconnect(id);
+    this._materialIds = [];
+    const glass = this._glass;
+    this._glass = null;
+    this._panel = null;
+    this._entry = null;
+    this._list = null;
+    this._rows = [];
+    this._results = [];
+    root.remove_all_transitions();
+    glass?.cleanup();
+    if (isActorValid(root)) root.destroy();
+  }
+
+  /** Types `text` into the field, for the test driver. */
+  setText(text: string): void {
+    if (this._entry) this._entry.text = text;
+  }
+
+  private _applyMaterial(): void {
+    const glass = this._glass;
+    if (!glass) return;
+    const s = this._settings;
+    glass.setTintColor(...hexToColorArray(s.get_string('launcher-tint-color')));
+    glass.setTintStrength(s.get_double('launcher-tint-strength'));
+    glass.setBlurRadius(s.get_int('launcher-blur-radius'));
+    glass.setCornerRadius(s.get_double('launcher-corner-radius'));
+    glass.setBrightness(s.get_double('launcher-brightness'));
+    glass.setContrast(s.get_double('launcher-contrast'));
+    glass.setSaturation(s.get_double('launcher-saturation'));
+  }
+
+  // Every frame: the glass follows the field and its results on the jelly,
+  // and the results are cut off where the glass ends.
+  private _sync(): void {
+    const glass = this._glass!;
+    const panel = this._panel!;
+    const root = this._root!;
+    const [w, h] = [panel.width, panel.height];
+    if (!(w >= 1) || !(h >= 1)) return;
+    const rest = [panel.x, panel.y, w, h];
+    if (!this._jellyStarted) {
+      this._jellyStarted = true;
+      const grow = (OPEN_SCALE - 1) / 2;
+      this._jelly.start([rest[0] - w * grow, rest[1] - h * grow, w * OPEN_SCALE, h * OPEN_SCALE]);
+    }
+    this._jelly.setMark(rest);
+    // At rest it starts over from there, ready for the next change of size.
+    if (!this._jelly.step(GLib.get_monotonic_time())) this._jelly.start(rest);
+    const [x, y, gw, gh] = this._jelly.rect;
+    const p = SHADER_PADDING;
+    glass.set_position(0, 0);
+    glass.set_size(root.width, root.height);
+    glass.setResolution(root.width, root.height);
+    glass.setGlassGeometry(x - p, y - p, gw + p * 2, gh + p * 2);
+    panel.set_clip(x - panel.x, y - panel.y, gw, gh);
+    ensureGlassAllocated(glass);
+    glass.syncSources();
+  }
+
+  private _onKey(event: Clutter.Event): boolean {
+    const key = event.get_key_symbol();
+    if (key === Clutter.KEY_Escape) {
+      this.close();
+      return Clutter.EVENT_STOP;
+    }
+    if (key === Clutter.KEY_Down || key === Clutter.KEY_Up) {
+      const n = this._rows.length;
+      if (n > 0) this._select((this._selected + (key === Clutter.KEY_Down ? 1 : n - 1)) % n);
+      return Clutter.EVENT_STOP;
+    }
+    if (key === Clutter.KEY_Return || key === Clutter.KEY_KP_Enter || key === Clutter.KEY_ISO_Enter) {
+      this._activate(this._selected);
+      return Clutter.EVENT_STOP;
+    }
+    return Clutter.EVENT_PROPAGATE;
+  }
+
+  private _select(index: number): void {
+    this._rows[this._selected]?.remove_style_pseudo_class('selected');
+    this._selected = index;
+    this._rows[index]?.add_style_pseudo_class('selected');
+  }
+
+  private _activate(index: number): void {
+    const result = this._results[index];
+    if (!result) return;
+    const { provider, meta } = result;
+    const terms = this._terms;
+    this.close();
+    if (provider.isRemoteProvider) {
+      provider.activateResult(meta.id, terms);
+    } else if (meta.id.endsWith('.desktop')) {
+      Shell.AppSystem.get_default().lookup_app(meta.id)?.activate();
+    } else {
+      (SystemActions.getDefault() as any).activateAction(meta.id);
+    }
+  }
+
+  private _cancelSearch(): void {
+    if (this._searchId) GLib.Source.remove(this._searchId);
+    this._searchId = 0;
+    this._cancellable?.cancel();
+    this._cancellable = null;
+  }
+
+  private _queueSearch(): void {
+    this._cancelSearch();
+    this._searchId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, SEARCH_DELAY_MS, () => {
+      this._searchId = 0;
+      this._search();
+      return GLib.SOURCE_REMOVE;
+    });
+  }
+
+  // The overview's providers, applications first.
+  private _providers(): any[] {
+    return (Main.overview as any).searchController._searchResults._providers;
+  }
+
+  private _search(): void {
+    const text = this._entry?.text.trim() ?? '';
+    this._terms = text ? text.split(/\s+/) : [];
+    this._results = [];
+    this._show();
+    if (!this._terms.length) return;
+    const cancellable = new Gio.Cancellable();
+    this._cancellable = cancellable;
+    this._providers().forEach((provider, order) => this._ask(provider, order, cancellable));
+  }
+
+  private async _ask(provider: any, order: number, cancellable: Gio.Cancellable): Promise<void> {
+    const terms = this._terms;
+    try {
+      const ids = await provider.getInitialResultSet(terms, cancellable);
+      const wanted = provider.filterResults(ids, PER_PROVIDER);
+      if (cancellable.is_cancelled() || wanted.length === 0) return;
+      const metas = await provider.getResultMetas(wanted, cancellable);
+      if (cancellable.is_cancelled()) return;
+      this._results.push(...metas.map((meta: any) => ({ provider, order, meta })));
+      this._results.sort((a, b) => a.order - b.order);
+      this._results.length = Math.min(this._results.length, MAX_RESULTS);
+      this._show();
+    } catch (e) {
+      // A remote provider's D-Bus call throws a GError when it fails or is cancelled.
+      if (!isCancelled(e)) this._logger.log(`[Liquid Glass] Search provider failed: ${e}`);
+    }
+  }
+
+  private _show(): void {
+    const list = this._list;
+    if (!list) return;
+    list.destroy_all_children();
+    this._rows = this._results.map((result, i) => {
+      const row = new St.Button({ style_class: 'lg-launcher-result', can_focus: false, x_expand: true });
+      const box = new St.BoxLayout({ style_class: 'lg-launcher-result-box', x_expand: true });
+      const icon = result.meta.createIcon(ICON_SIZE);
+      const text = new St.BoxLayout({ y_align: Clutter.ActorAlign.CENTER, x_expand: true, ...verticalBoxParams() } as any);
+      const name = new St.Label({ text: result.meta.name ?? '', style_class: 'lg-launcher-name' });
+      name.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+      text.add_child(name);
+      const detail = result.meta.description || result.provider.appInfo?.get_name() || '';
+      if (detail) {
+        const label = new St.Label({ text: detail, style_class: 'lg-launcher-detail' });
+        label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+        text.add_child(label);
+      }
+      box.add_child(icon);
+      box.add_child(text);
+      row.set_child(box);
+      row.connect('clicked', () => this._activate(i));
+      row.connect('notify::hover', () => { if (row.hover) this._select(i); });
+      list.add_child(row);
+      return row;
+    });
+    this._select(Math.min(this._selected, Math.max(this._rows.length - 1, 0)));
+    this._text.invalidate();
+  }
+
+  cleanup(): void {
+    this.close();
+    if (this._keybinding) Main.wm.removeKeybinding('launcher-shortcut');
+    this._keybinding = false;
+    for (const id of this._settingsIds) this._settings.disconnect(id);
+    this._settingsIds = [];
+    Launcher.instance = null;
+  }
+
+  private get _frameSlot() {
+    return { get: () => this._frameSyncId, set: (id: number) => { this._frameSyncId = id; } };
+  }
+
+  private get _frameSignalSlot() {
+    return { get: () => this._frameSignalId, set: (id: number) => { this._frameSignalId = id; } };
+  }
+}

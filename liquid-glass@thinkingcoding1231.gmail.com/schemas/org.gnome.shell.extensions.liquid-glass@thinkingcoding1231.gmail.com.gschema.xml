@@ -823,5 +823,179 @@
       <description>"light" or "dark" decides when both are equally readable; "auto" favours neither.</description>
     </key>
 
+    <key name="enable-desktop-widgets" type="b">
+      <default>false</default>
+      <summary>Show widgets on the desktop</summary>
+    </key>
+    <key name="desktop-widgets" type="as">
+      <default>['weather', 'events', 'media']</default>
+      <summary>Desktop widgets</summary>
+      <description>Which widgets are shown: "weather", "events" (up next) and "media" (now playing).</description>
+    </key>
+    <key name="desktop-widgets-position" type="s">
+      <default>"top-right"</default>
+      <summary>Where the widgets are stacked</summary>
+      <description>"top-left", "top-right", "bottom-left", "bottom-right" or "center" of the primary monitor. A widget that was dragged stays where it was dropped.</description>
+    </key>
+    <key name="desktop-item-positions" type="s">
+      <default>"{}"</default>
+      <summary>Where desktop items were dragged</summary>
+      <description>JSON: item id to the fraction [x, y] of the work area its centre was dropped at.</description>
+    </key>
+    <key name="weather-location" type="s">
+      <default>""</default>
+      <summary>Weather location without GNOME Weather</summary>
+      <description>A place name looked up with Open-Meteo. Used only when GNOME Weather is not installed; otherwise the weather follows GNOME Weather's location.</description>
+    </key>
+    <key name="weather-temperature-unit" type="s">
+      <default>"auto"</default>
+      <summary>Temperature unit</summary>
+      <description>"auto", "celsius" or "fahrenheit".</description>
+    </key>
+    <key name="desktop-widget-tint-color" type="s">
+      <default>"#ffffff"</default>
+      <summary>Tint color (Hex)</summary>
+    </key>
+    <key name="desktop-widget-tint-strength" type="d">
+      <default>0.12</default>
+      <summary>Tint strength</summary>
+    </key>
+    <key name="desktop-widget-blur-radius" type="i">
+      <default>8</default>
+      <summary>Blur radius</summary>
+    </key>
+    <key name="desktop-widget-corner-radius" type="d">
+      <default>28.0</default>
+      <summary>Corner radius</summary>
+    </key>
+    <key name="desktop-widget-brightness" type="d">
+      <default>1.0</default>
+      <summary>Brightness</summary>
+    </key>
+    <key name="desktop-widget-contrast" type="d">
+      <default>1.0</default>
+      <summary>Contrast</summary>
+    </key>
+    <key name="desktop-widget-saturation" type="d">
+      <default>1.5</default>
+      <summary>Saturation</summary>
+    </key>
+    <key name="desktop-widget-enable-adaptive-text-color" type="b">
+      <default>true</default>
+      <summary>Adapt the desktop items' text colour to what is behind them</summary>
+    </key>
+    <key name="desktop-widget-sample-interval-ms" type="i">
+      <default>2000</default>
+      <summary>How often the desktop items' text colour is checked (ms)</summary>
+    </key>
+    <key name="desktop-widget-adaptive-text-preference" type="s">
+      <default>"auto"</default>
+      <summary>Preferred text colour</summary>
+      <description>"light" or "dark" decides when both are equally readable; "auto" favours neither.</description>
+    </key>
+    <key name="enable-glass-clock" type="b">
+      <default>false</default>
+      <summary>Show a clock with glass digits on the desktop</summary>
+    </key>
+    <key name="glass-clock-position" type="s">
+      <default>"center"</default>
+      <summary>Where the glass clock is</summary>
+      <description>"top-left", "top-right", "bottom-left", "bottom-right" or "center" of the primary monitor, unless it was dragged.</description>
+    </key>
+    <key name="glass-clock-font" type="s">
+      <default>""</default>
+      <summary>Font of the glass clock</summary>
+      <description>A Pango font description without a size, such as "Cantarell Bold". Empty uses the interface font in bold.</description>
+    </key>
+    <key name="glass-clock-size" type="i">
+      <range min="48" max="480"/>
+      <default>160</default>
+      <summary>Size of the glass clock's digits (px)</summary>
+    </key>
+    <key name="glass-clock-format" type="s">
+      <default>"system"</default>
+      <summary>Time format</summary>
+      <description>"system" follows the clock format in Settings, "24h" or "12h".</description>
+    </key>
+    <key name="glass-clock-show-date" type="b">
+      <default>true</default>
+      <summary>Show the date above the glass clock</summary>
+    </key>
+    <key name="glass-clock-tint-color" type="s">
+      <default>"#ffffff"</default>
+      <summary>Tint color (Hex)</summary>
+    </key>
+    <key name="glass-clock-tint-strength" type="d">
+      <default>0.16</default>
+      <summary>Tint strength</summary>
+    </key>
+    <key name="glass-clock-blur-radius" type="i">
+      <default>2</default>
+      <summary>Blur radius</summary>
+    </key>
+    <key name="glass-clock-brightness" type="d">
+      <default>1.15</default>
+      <summary>Brightness</summary>
+    </key>
+    <key name="glass-clock-contrast" type="d">
+      <default>1.0</default>
+      <summary>Contrast</summary>
+    </key>
+    <key name="glass-clock-saturation" type="d">
+      <default>1.3</default>
+      <summary>Saturation</summary>
+    </key>
+
+    <key name="enable-launcher" type="b">
+      <default>false</default>
+      <summary>Search launcher</summary>
+      <description>A search field on glass in the middle of the screen, opened with the launcher shortcut. It shows the same results as the overview's search.</description>
+    </key>
+    <key name="launcher-shortcut" type="as">
+      <default><![CDATA[['<Super><Alt>space']]]></default>
+      <summary>Shortcut that opens the launcher</summary>
+    </key>
+    <key name="launcher-tint-color" type="s">
+      <default>"#ffffff"</default>
+      <summary>Tint color (Hex)</summary>
+    </key>
+    <key name="launcher-tint-strength" type="d">
+      <default>0.16</default>
+      <summary>Tint strength</summary>
+    </key>
+    <key name="launcher-blur-radius" type="i">
+      <default>12</default>
+      <summary>Blur radius</summary>
+    </key>
+    <key name="launcher-corner-radius" type="d">
+      <default>28.0</default>
+      <summary>Corner radius</summary>
+    </key>
+    <key name="launcher-brightness" type="d">
+      <default>1.0</default>
+      <summary>Brightness</summary>
+    </key>
+    <key name="launcher-contrast" type="d">
+      <default>1.0</default>
+      <summary>Contrast</summary>
+    </key>
+    <key name="launcher-saturation" type="d">
+      <default>1.5</default>
+      <summary>Saturation</summary>
+    </key>
+    <key name="launcher-enable-adaptive-text-color" type="b">
+      <default>true</default>
+      <summary>Adapt the launcher's text colour to what is behind it</summary>
+    </key>
+    <key name="launcher-sample-interval-ms" type="i">
+      <default>600</default>
+      <summary>How often the launcher's text colour is checked (ms)</summary>
+    </key>
+    <key name="launcher-adaptive-text-preference" type="s">
+      <default>"auto"</default>
+      <summary>Preferred text colour</summary>
+      <description>"light" or "dark" decides when both are equally readable; "auto" favours neither.</description>
+    </key>
+
   </schema>
 </schemalist>

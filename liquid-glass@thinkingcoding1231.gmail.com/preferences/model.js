@@ -1,9 +1,10 @@
 export const SURFACES = ['dock', 'menu', 'panel-menu', 'notification', 'quick-settings', 'osd', 'application', 'desktop-menu',
-  'top-bar'];
+  'top-bar', 'desktop-widget', 'launcher'];
 
 export const sharedKeys = suffix => SURFACES.map(surface => `${surface}-${suffix}`);
 
-export const ADAPTIVE_SURFACES = ['menu', 'panel-menu', 'notification', 'quick-settings', 'osd', 'top-bar'];
+export const ADAPTIVE_SURFACES = ['menu', 'panel-menu', 'notification', 'quick-settings', 'osd', 'top-bar',
+  'desktop-widget', 'launcher'];
 
 export const TEXT_KEYS = ADAPTIVE_SURFACES
   .map(surface => `${surface}-enable-adaptive-text-color`);
