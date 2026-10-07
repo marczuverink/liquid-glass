@@ -1087,9 +1087,18 @@ export class UIManager {
         if (!placeholder)
             this._watchHoverFor(targets);
         this._adaptiveInFlight = true;
+        // A menu that rebuilds its items can destroy text while it is measured.
+        const gone = new Set();
+        const destroyIds = targets.map(actor => actor.connect('destroy', () => gone.add(actor)));
+        const unwatch = () => targets.forEach((actor, i) => {
+            if (!gone.has(actor))
+                actor.disconnect(destroyIds[i]);
+        });
         this._contrastSampler
             .chooseColorsForActors(targets, this._adaptiveConfig, this.menu?.actor, () => this.glass?.paintCount ?? NaN, () => this.glass ? [this.glass] : [])
             .then(colorMap => {
+            for (const actor of gone)
+                colorMap.delete(actor);
             if (!this._isEffectActive || this._actorDestroyed)
                 return;
             if (placeholder) {
@@ -1111,6 +1120,7 @@ export class UIManager {
             this._logger.error(`[Liquid Glass] Menu adaptive color update failed: ${e}`);
         })
             .finally(() => {
+            unwatch();
             this._adaptiveInFlight = false;
             if (this._newTextPending) {
                 this._newTextPending = false;

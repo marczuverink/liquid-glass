@@ -65,6 +65,7 @@ class Actor {
   get_style() { return this.style; }
   set_style(s) { this.style = s; }
   connect() { return 1; }
+  disconnect() {}
   get_theme_node() { return { get_foreground_color: () => ({ red: 242, green: 242, blue: 242, alpha: 255 }), get_background_color: () => ({red: 0, green: 0, blue: 0}) }; }
   remove_style_class_name() {}
   has_style_class_name() { return false; }
@@ -267,6 +268,31 @@ test('a sampling round does not walk theme nodes across the whole menu', () => {
   manager._updateAdaptiveTextColors();
 
   assert.equal(themeReads, 0, 'the periodic round leaves theme nodes alone');
+});
+
+test('text destroyed while it is measured is left alone', async () => {
+  const { manager, rows } = hoverFixture(2);
+  const destroyHandlers = new Map();
+  const disconnected = [];
+  for (const row of rows) {
+    row.connect = (name, fn) => { if (name === 'destroy') destroyHandlers.set(row, fn); return 50; };
+    row.disconnect = () => disconnected.push(row);
+  }
+  let finish;
+  manager._collectAdaptiveTextTargets = () => rows;
+  manager._contrastSampler.chooseColorsForActors = () => new Promise(resolve => { finish = resolve; });
+  manager._adaptiveInFlight = false;
+  manager._isEffectActive = true;
+  const applied = [];
+  manager._setActorColor = actor => applied.push(actor);
+
+  manager._updateAdaptiveTextColors();
+  destroyHandlers.get(rows[0])();
+  finish(new Map(rows.map(row => [row, '#000000'])));
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.deepEqual(applied, [rows[1]]);
+  assert.deepEqual(disconnected, [rows[1]], 'a destroyed actor is not disconnected');
 });
 
 test('a menu whose rows are rebuilt keeps one stable sampling region', async () => {
