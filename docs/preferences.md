@@ -12,6 +12,9 @@ shown as Custom and are retained until an explicit edit. A shared edit updates o
 that control's keys, including disabled surfaces, in one delayed GSettings transaction.
 No migration or reset runs on open. Custom is a status, not a preset or saved undo point.
 Smooth motion sets critically damped springs; it does not run automatically.
+The Blur my Shell warning at the top of Appearance follows `blur-my-shell-popup-blur`,
+which the shell writes. Its Turn Off button writes only Blur my Shell's own popup
+`blur` key, and only when clicked.
 
 `preferences/pages.js` defines the visible choices. `model.js` defines which existing
 keys those choices own. `controls.js` owns grouped writes, mixed-value readouts and

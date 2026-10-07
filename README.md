@@ -113,6 +113,10 @@ Where it is supported, the extension samples the brightness of what is behind th
 - **Individual buttons** gives each toggle button its own glass shape, tracked individually. "Button corners" sets the roundness of each shape, and "Button base colour" controls how much of the toggle's own original color (for example the blue of an active toggle) is kept, independently of the custom tint color.
 
 
+### Using it with Blur my Shell
+
+Recent versions of [Blur my Shell](https://github.com/aunetx/blur-my-shell) (74) blur popup menus, notifications and OSDs by default. Its blur shows through the glass, so turn off **Popups** in Blur my Shell. While Blur my Shell's popup blur is on, the Liquid Glass preferences show a warning at the top of the Appearance page with a button that turns it off, and the extension notes it in its log when Logging is on. Turning off Popups leaves Blur my Shell's other effects on.
+
 ## Preferences
 
 - **Appearance** — shared blur, corners and tint; animations, automatic text contrast and matching menu heights.
@@ -121,8 +125,8 @@ Where it is supported, the extension samples the brightness of what is behind th
 
 Opening the window preserves your configuration. **Custom** means your existing
 values differ or do not match a preset. Editing a shared control applies its value
-to every surface; it does not enable disabled effects. Choose **Smooth** for
-non-bouncing menu animations. See [Preferences](docs/preferences.md) for behavior and tests.
+to every surface; it does not enable disabled effects. Menu animations default to
+**Smooth**, which does not bounce. See [Preferences](docs/preferences.md) for behavior and tests.
 
 
 ## Glass Settings (Rendering page)

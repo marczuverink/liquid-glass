@@ -5,6 +5,18 @@
 - メインのソースコードやビルド設定は `liquid-glass@thinkingcoding1231.gmail.com/` 配下にあります。
 - 基本的には`dev`ブランチで作業してください。コード編集などを行う際は`dev`ブランチにいることを確認してください。
 
+## プロンプトの短縮形
+ユーザーのプロンプトに次の短縮形が含まれていたら、それに従う。指定がない項目は (default) の挙動にする。
+ただし、プロンプト中の自然言語による指示のほうが短縮形・既定値より優先される。
+- `git:c` — コミットのみ。merge・push はしない (default)
+- `git:cmp` — commit・merge・push する
+- `git:cm` — commit・merge する。push はしない
+- `git:mg` — 新たなコミットはせず、これまでのコミットを merge・push する
+- `do:all` — 与えられたタスクをすべて一度にやる (default)
+- `do:step` — step by step で進める（1 ターンですべてはやらず、区切りごとにユーザーに確認する）
+- `mode:plan` — 原因分析や実装計画立てのみ行い、コード編集はしない
+- `mode:auto` — 原因分析からコード編集まですべて行う (default)
+
 ## コマンド実行ルール
 - `npm` やビルド関連のコマンドを実行する際は、`liquid-glass@thinkingcoding1231.gmail.com` ディレクトリ内で実行すること。（例: `cd liquid-glass@thinkingcoding1231.gmail.com && npm run build`）
 - TSファイルを修正・編集した後は、`npm run build` を実行してビルドエラーが出ないかチェックすること。

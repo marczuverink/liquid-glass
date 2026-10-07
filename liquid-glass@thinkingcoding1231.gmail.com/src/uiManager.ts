@@ -164,9 +164,9 @@ export class UIManager {
     this._menuXoffset = 0;
     this._menuYoffset = 0;
 
-    this._springScale = new Spring(120, 8, 1.0);
+    this._springScale = new Spring(120, 22, 1.0);
     this._springStiffness = 120;
-    this._springDamping = 8;
+    this._springDamping = 22;
     this._springMass = 1.0;
 
     this._swiftSpringScale = new SwiftSpring(this._swiftResponse, this._swiftDampingFraction);
@@ -1180,10 +1180,18 @@ export class UIManager {
 
     this._adaptiveInFlight = true;
 
+    // A menu that rebuilds its items can destroy text while it is measured.
+    const gone = new Set<Clutter.Actor>();
+    const destroyIds = targets.map(actor => actor.connect('destroy', () => gone.add(actor)));
+    const unwatch = () => targets.forEach((actor, i) => {
+      if (!gone.has(actor)) actor.disconnect(destroyIds[i]);
+    });
+
     this._contrastSampler
       .chooseColorsForActors(targets, this._adaptiveConfig, this.menu?.actor,
         () => this.glass?.paintCount ?? NaN, () => this.glass ? [this.glass] : [])
       .then(colorMap => {
+        for (const actor of gone) colorMap.delete(actor);
         if (!this._isEffectActive || this._actorDestroyed) return;
         if (placeholder) {
           this._sharedColor = colorMap.get(placeholder) ?? null;
@@ -1204,6 +1212,7 @@ export class UIManager {
         this._logger.error(`[Liquid Glass] Menu adaptive color update failed: ${e}`);
       })
       .finally(() => {
+        unwatch();
         this._adaptiveInFlight = false;
         if (this._newTextPending) {
           this._newTextPending = false;

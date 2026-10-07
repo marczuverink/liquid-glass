@@ -29,6 +29,11 @@ function* walk(widget) {
 const rows = [...walk(window)].filter(widget => widget instanceof Adw.PreferencesRow);
 const find = title => rows.find(row => row.title === title);
 if (!find('Blur').subtitle.includes('Custom')) throw Error('Mixed values not indicated');
+const warning = find('Blur my Shell is blurring popups').get_ancestor(Adw.PreferencesGroup);
+if (warning.visible) throw Error('Blur my Shell warning shown without the shell reporting it');
+settings.set_boolean('blur-my-shell-popup-blur', true);
+if (!warning.visible) throw Error('Blur my Shell warning not shown');
+settings.set_boolean('blur-my-shell-popup-blur', false);
 find('Blur').value = 12;
 for (const surface of ['dock', 'menu', 'panel-menu', 'notification', 'quick-settings', 'osd', 'application', 'desktop-menu']) {
   if (settings.get_int(`${surface}-blur-radius`) !== 12) throw Error(`Shared blur did not reach ${surface}`);
