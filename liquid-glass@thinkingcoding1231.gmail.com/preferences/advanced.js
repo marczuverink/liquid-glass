@@ -1,6 +1,7 @@
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
 import {SURFACE_OPTIONS, APPEARANCE, LAYOUT, SPRING, OPTICS, LIGHTING, SHADOWS} from './advanced-model.js';
+import {ADAPTIVE_SURFACES} from './model.js';
 import {addPanelMenus} from './panel-menus.js';
 
 function addNumbers(group, controls, specs, prefix = '', slider = true) {
@@ -48,7 +49,7 @@ function addSurface(page, controls, surface, title) {
   controls.color(group, 'Tint', [`${surface}-tint-color`]);
   addLayout(group, controls, surface, appearance);
   if (['menu', 'panel-menu', 'quick-settings'].includes(surface)) addMotion(group, controls, surface);
-  if (['menu', 'panel-menu', 'notification', 'quick-settings', 'osd'].includes(surface)) {
+  if (ADAPTIVE_SURFACES.includes(surface)) {
     const key = `${surface}-enable-adaptive-text-color`;
     controls.toggle(group, 'Automatic text contrast', key);
     const row = controls.number(group, 'Contrast interval (ms)', [`${surface}-sample-interval-ms`], 100, 2000, 50);
@@ -97,7 +98,7 @@ export function buildAdvancedPreferences(pages, controls) {
   const surfaces = new Map();
   const effects = controls.group(pages.effects, 'Individual effects');
   for (const [surface, title, key, hint] of SURFACE_OPTIONS) {
-    if (surface !== 'application') controls.toggle(effects, title, key, hint ?? '');
+    if (key && surface !== 'application') controls.toggle(effects, title, key, hint ?? '');
   }
   const groups = [selectorGroup, effects, addPanelMenus(pages.effects, controls),
     ...addRendering(pages.rendering, controls)];

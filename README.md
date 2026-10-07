@@ -96,6 +96,7 @@ The effect can be enabled or disabled per UI element on the **Effects** page. In
 
 | Element | Notes / Special features |
 | --- | --- |
+| **Top Bar** | The bar itself, as **one pill** across the screen or **three pills** behind its groups of buttons (activities, clock, status icons), chosen on the Effects page. Off by default. Supports **adaptive text coloring**. |
 | **Dash to Dock** | Glass behind the dock. Adds a bottom margin control so the dock can float above the screen edge. Works with the Dash to Dock / Ubuntu Dock extension. |
 | **Calendar & Other Top Bar Menus** | Glass behind the calendar (clock) menu and behind the menus of the other top bar indicators — the keyboard layout and accessibility menus, and the indicators other extensions add, including [ArcMenu](https://gitlab.com/arcmenu/ArcMenu)'s menu and its right-click menu. Each detected menu can be switched off on its own. Menus **grow out of their button**: the glass leaves the button as a drop and stretches into the menu, and goes back into the button when the menu closes (Appearance → Behavior → "Menus grow from their button"). With that off, a **custom spring animation** (stiffness / damping / mass) scales the menu instead. Also supports **adaptive text coloring**. |
 | **Notifications** | Glass behind notification banners. Supports **adaptive text coloring** and a hide safety margin to avoid flicker while the banner is dismissed. |
@@ -120,7 +121,7 @@ Recent versions of [Blur my Shell](https://github.com/aunetx/blur-my-shell) (74)
 ## Preferences
 
 - **Appearance** — shared blur, corners and tint; animations, automatic text contrast and matching menu heights.
-- **Effects** — choose where glass appears: dock, menus, popups and application windows.
+- **Effects** — choose where glass appears: top bar, dock, menus, popups and application windows.
 - **Rendering** — rendering quality, refraction, edge lighting, shadows and diagnostics.
 
 Opening the window preserves your configuration. **Custom** means your existing
@@ -225,6 +226,8 @@ A significant part of this codebase was written with the help of AI coding assis
 - [x] Support GNOME 46, 47, 48 and 49
 - [x] Continuous corners, refraction-proportional colour separation and backdrop-coloured highlights
 - [x] Add ArcMenu support
+- [x] Add top bar glass (one pill or three pills)
+- [x] Grow menus out of their top bar button
 
 ### Next
 - [ ] Publish to extensions.gnome.org (not approved yet)

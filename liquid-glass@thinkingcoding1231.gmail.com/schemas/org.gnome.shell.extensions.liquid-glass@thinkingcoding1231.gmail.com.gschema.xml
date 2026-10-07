@@ -775,5 +775,53 @@
       <description>Collect the per-paint state that global._lgGlass.dump() reports (backdrop copy, blur and composite rects, texture pool, blur result). This runs on every paint of every glass surface, so it costs performance even when logging is off. Leave this disabled unless you are debugging a rendering problem.</description>
     </key>
 
+    <key name="top-bar-style" type="s">
+      <default>"off"</default>
+      <summary>Top bar glass</summary>
+      <description>"off" keeps the top bar as the theme draws it, "pill" puts one glass pill across it, "islands" puts a pill behind each of its three groups of buttons.</description>
+    </key>
+    <key name="top-bar-tint-color" type="s">
+      <default>"#ffffff"</default>
+      <summary>Tint color (Hex)</summary>
+    </key>
+    <key name="top-bar-tint-strength" type="d">
+      <default>0.12</default>
+      <summary>Tint strength</summary>
+    </key>
+    <key name="top-bar-blur-radius" type="i">
+      <default>5</default>
+      <summary>Blur radius</summary>
+    </key>
+    <key name="top-bar-corner-radius" type="d">
+      <default>99.0</default>
+      <summary>Corner radius</summary>
+      <description>Anything from half the bar's height up makes round ends.</description>
+    </key>
+    <key name="top-bar-brightness" type="d">
+      <default>1.0</default>
+      <summary>Brightness</summary>
+    </key>
+    <key name="top-bar-contrast" type="d">
+      <default>1.0</default>
+      <summary>Contrast</summary>
+    </key>
+    <key name="top-bar-saturation" type="d">
+      <default>1.5</default>
+      <summary>Saturation</summary>
+    </key>
+    <key name="top-bar-enable-adaptive-text-color" type="b">
+      <default>true</default>
+      <summary>Adapt the top bar's text colour to what is behind it</summary>
+    </key>
+    <key name="top-bar-sample-interval-ms" type="i">
+      <default>1000</default>
+      <summary>How often the top bar's text colour is checked (ms)</summary>
+    </key>
+    <key name="top-bar-adaptive-text-preference" type="s">
+      <default>"auto"</default>
+      <summary>Preferred text colour</summary>
+      <description>"light" or "dark" decides when both are equally readable; "auto" favours neither.</description>
+    </key>
+
   </schema>
 </schemalist>

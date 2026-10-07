@@ -8,6 +8,7 @@ export const SURFACE_OPTIONS = [
   ['osd', 'Volume and brightness', 'enable-osd-glass'],
   ['application', 'Application windows', 'enable-application-glass'],
   ['desktop-menu', 'Desktop menu', 'enable-desktop-menu-glass'],
+  ['top-bar', 'Top bar', null],
 ];
 
 export const APPEARANCE = [
@@ -32,6 +33,7 @@ export const LAYOUT = {
   osd: [['glass-expand', 'Glass expansion', 0, 50, 1], ['y-offset', 'Vertical offset', -100, 100, 1]],
   application: [],
   'desktop-menu': [['content-opacity', 'Content opacity', 0, 1, 0.01]],
+  'top-bar': [],
 };
 
 export const SPRING = [

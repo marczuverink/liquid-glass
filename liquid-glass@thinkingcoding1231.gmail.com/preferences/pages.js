@@ -1,7 +1,7 @@
 import Adw from 'gi://Adw';
 import {PreferenceControls} from './controls.js';
 import {WindowRules} from './windows.js';
-import {sharedKeys, TEXT_KEYS, MENU_KEYS, POPUP_KEYS, MOTION, GROW_KEYS, QUALITY, booleanChoices} from './model.js';
+import {sharedKeys, TEXT_KEYS, MENU_KEYS, POPUP_KEYS, MOTION, GROW_KEYS, QUALITY, TOP_BAR, booleanChoices} from './model.js';
 import {buildAdvancedPreferences} from './advanced.js';
 import {addBlurMyShellWarning} from './blur-my-shell.js';
 
@@ -55,6 +55,7 @@ export function buildPreferences(window, settings) {
   ]));
 
   const surfaces = controls.group(effects, 'Show glass on');
+  controls.choice(surfaces, 'Top bar', TOP_BAR, 'The bar itself; menus are below', false);
   controls.toggle(surfaces, 'Dock', 'enable-dock-glass');
   controls.choice(surfaces, 'Menus', booleanChoices(MENU_KEYS), 'Calendar, quick settings, other top bar menus and desktop');
   controls.choice(surfaces, 'Popups', booleanChoices(POPUP_KEYS), 'Notifications and volume / brightness indicators');

@@ -126,11 +126,11 @@ test('opening and closing preferences preserves a customized configuration witho
   assert.equal(f.values.get('menu-scale'), 0.83);
 });
 
-test('editing shared blur updates all eight surfaces in one transaction and no other settings', () => {
+test('editing shared blur updates all nine surfaces in one transaction and no other settings', () => {
   const f = fixture();
   f.row('Blur').value = 12;
   assert.equal(f.writes.length, 1);
-  assert.equal(Object.keys(f.writes[0]).length, 8);
+  assert.equal(Object.keys(f.writes[0]).length, 9);
   assert.ok(Object.keys(f.writes[0]).every(key => key.endsWith('-blur-radius')));
   assert.ok(Object.values(f.writes[0]).every(value => value === 12));
   assert.equal(f.row('Blur').subtitle, '');
@@ -139,8 +139,9 @@ test('editing shared blur updates all eight surfaces in one transaction and no o
 test('corners include toggle glass and changing them does not enable any effect', () => {
   const f = fixture(); f.row('Corners').value = 24;
   assert.equal(f.values.get('quick-settings-toggle-corner-radius'), 24);
-  assert.equal(Object.keys(f.writes[0]).length, 9);
+  assert.equal(Object.keys(f.writes[0]).length, 10);
   assert.equal(f.values.get('enable-application-glass'), false);
+  assert.equal(f.values.get('top-bar-style'), 'off');
 });
 
 test('Smooth uses critically damped motion across menus without changing their appearance', () => {
