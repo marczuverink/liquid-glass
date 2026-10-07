@@ -5,7 +5,8 @@ const path = require('node:path');
 const {createModuleLoader} = require('./helpers/load-module.cjs');
 const root = path.join(__dirname, '../liquid-glass@thinkingcoding1231.gmail.com');
 
-function fixture(overrides = {}, dbusResponses = []) {
+// `blurMyShell`, when given, stands for Blur my Shell's popup settings, installed for the user.
+function fixture(overrides = {}, dbusResponses = [], blurMyShell = null) {
   const values = new Map();
   const types = new Map();
   const ranges = new Map();
@@ -76,7 +77,14 @@ function fixture(overrides = {}, dbusResponses = []) {
     SignalListItemFactory: Widget, Box: Widget, Label: Widget, Image: Widget,
     StringList: {new: titles => titles}, Align: {CENTER: 0}, SelectionMode: {NONE: 0}};
   const dbusCalls = [];
-  const Gio = {Settings, SettingsBindFlags: {GET: 1, DEFAULT: 0}, DBusCallFlags: {NONE: 0},
+  const bmsSchemas = '/home/test/.local/share/gnome-shell/extensions/blur-my-shell@aunetx/schemas';
+  const GioSettings = function (props) {
+    return props?.settings_schema === 'blur-my-shell-popup' ? blurMyShell : new Settings(props);
+  };
+  const Gio = {Settings: GioSettings, SettingsBindFlags: {GET: 1, DEFAULT: 0}, DBusCallFlags: {NONE: 0},
+    SettingsSchemaSource: {get_default: () => null,
+      new_from_directory: dir => ({lookup: id => dir === bmsSchemas && id === 'org.gnome.shell.extensions.blur-my-shell.popup'
+        ? 'blur-my-shell-popup' : null})},
     Cancellable: class { cancel() { this.cancelled = true; } },
     DBus: {session: {
       call(_name, _path, _interface, method, _args, _type, _flags, _timeout, cancellable, callback) {
@@ -89,7 +97,10 @@ function fixture(overrides = {}, dbusResponses = []) {
         }}, {}));
       },
     }}};
-  const load = createModuleLoader({Adw, Gtk, Gio, Gdk: {RGBA}, GLib: {Variant}});
+  const GLib = {Variant, FileTest: {EXISTS: 16}, build_filenamev: parts => parts.join('/'),
+    file_test: file => blurMyShell !== null && file === `${bmsSchemas}/gschemas.compiled`,
+    get_user_data_dir: () => '/home/test/.local/share', get_system_data_dirs: () => ['/usr/share']};
+  const load = createModuleLoader({Adw, Gtk, Gio, Gdk: {RGBA}, GLib});
   const settings = new Settings(); const window = new Widget();
   const {buildPreferences} = load(path.join(root, 'preferences/pages.js'));
   const controls = buildPreferences(window, settings);
@@ -285,4 +296,25 @@ test('a slider dragged between steps stores the value the row displays', () => {
   assert.ok(Object.values(f.writes[0]).every(value => value === 13));
   f.row('Tint strength').value = 0.4567;
   assert.ok(Object.values(f.writes[1]).every(value => value === 0.46));
+});
+
+test('the Blur my Shell warning shows only while the shell reports popup blur, and can turn it off', () => {
+  const popup = {blur: true, set_boolean(key, value) { this[key] = value; }};
+  const f = fixture({}, [], popup);
+  const row = f.row('Blur my Shell is blurring popups');
+  const group = f.widgets.find(widget => widget instanceof Object && widget.children?.includes(row));
+  assert.equal(group.visible, false);
+  f.values.set('blur-my-shell-popup-blur', true);
+  for (const {signal, fn} of f.listeners.values()) if (signal === 'changed::blur-my-shell-popup-blur') fn();
+  assert.equal(group.visible, true);
+  const button = f.widgets.find(widget => widget.label === 'Turn Off');
+  button.emit('clicked');
+  assert.equal(popup.blur, false);
+  assert.equal(f.writes.length, 0, 'turning it off writes only Blur my Shell\'s setting');
+});
+
+test('the warning offers no button when Blur my Shell\'s settings cannot be found', () => {
+  const f = fixture();
+  assert.ok(f.row('Blur my Shell is blurring popups'));
+  assert.equal(f.widgets.find(widget => widget.label === 'Turn Off'), undefined);
 });

@@ -3,6 +3,7 @@ import {PreferenceControls} from './controls.js';
 import {WindowRules} from './windows.js';
 import {sharedKeys, TEXT_KEYS, MENU_KEYS, POPUP_KEYS, MOTION, QUALITY, booleanChoices} from './model.js';
 import {buildAdvancedPreferences} from './advanced.js';
+import {addBlurMyShellWarning} from './blur-my-shell.js';
 
 function collectGroups(page, build) {
   const added = [];
@@ -32,6 +33,7 @@ export function buildPreferences(window, settings) {
   const appearance = page('Appearance', 'preferences-desktop-appearance-symbolic');
   const effects = page('Effects', 'preferences-other-symbolic');
   const advanced = page('Rendering', 'applications-engineering-symbolic');
+  addBlurMyShellWarning(appearance, controls);
   const view = controls.group(appearance, 'Settings');
   controls.choice(view, 'Settings view', [
     {title: 'Simple', patch: {'preferences-advanced': false}},

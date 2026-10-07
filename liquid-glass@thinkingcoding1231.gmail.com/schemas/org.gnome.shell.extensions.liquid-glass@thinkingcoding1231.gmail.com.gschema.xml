@@ -151,6 +151,11 @@
       <summary>Panel menus excluded from glass</summary>
       <description>Panel indicator names disabled individually in preferences.</description>
     </key>
+    <key name="blur-my-shell-popup-blur" type="b">
+      <default>false</default>
+      <summary>Blur my Shell is blurring popups</summary>
+      <description>Written by the shell at runtime so the preferences window can warn that Blur my Shell's popup blur shows through the glass.</description>
+    </key>
     <key name="detected-extra-menus" type="as">
       <default>[]</default>
       <summary>Detected optional panel menus</summary>

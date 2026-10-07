@@ -7,6 +7,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import {UIManager} from './dist/uiManager.js';
 import {PanelMenuManager} from './dist/panelMenuManager.js';
+import {BlurMyShellWatch} from './dist/blurMyShell.js';
 import {DashManager} from './dist/dockManager.js';
 import {NotificationManager} from './dist/notificationManager.js';
 import {QuickSettingsManager} from './dist/quickSettingsManager.js';
@@ -42,6 +43,9 @@ export default class LiquidGlassExtension extends Extension {
 
     this._panelMenuManager = new PanelMenuManager(path, this._settings, this._logger);
     this._panelMenuManager.setup();
+
+    this._blurMyShellWatch = new BlurMyShellWatch(this._settings, this._logger);
+    this._blurMyShellWatch.setup();
 
     this._notificationManager = new NotificationManager(path, this._settings, this._logger);
     this._notificationManager.setup();
@@ -120,6 +124,9 @@ export default class LiquidGlassExtension extends Extension {
 
     this._panelMenuManager.cleanup();
     this._panelMenuManager = null;
+
+    this._blurMyShellWatch.cleanup();
+    this._blurMyShellWatch = null;
 
     this._uiManager.cleanup();
     this._uiManager = null;
