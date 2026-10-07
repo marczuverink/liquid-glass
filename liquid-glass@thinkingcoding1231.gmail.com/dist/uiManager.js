@@ -144,9 +144,9 @@ export class UIManager {
         this._glassExpand = 0;
         this._menuXoffset = 0;
         this._menuYoffset = 0;
-        this._springScale = new Spring(120, 8, 1.0);
+        this._springScale = new Spring(120, 22, 1.0);
         this._springStiffness = 120;
-        this._springDamping = 8;
+        this._springDamping = 22;
         this._springMass = 1.0;
         this._swiftSpringScale = new SwiftSpring(this._swiftResponse, this._swiftDampingFraction);
         this._enableAnimation = false;

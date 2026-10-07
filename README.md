@@ -121,8 +121,8 @@ Where it is supported, the extension samples the brightness of what is behind th
 
 Opening the window preserves your configuration. **Custom** means your existing
 values differ or do not match a preset. Editing a shared control applies its value
-to every surface; it does not enable disabled effects. Choose **Smooth** for
-non-bouncing menu animations. See [Preferences](docs/preferences.md) for behavior and tests.
+to every surface; it does not enable disabled effects. Menu animations default to
+**Smooth**, which does not bounce. See [Preferences](docs/preferences.md) for behavior and tests.
 
 
 ## Glass Settings (Rendering page)

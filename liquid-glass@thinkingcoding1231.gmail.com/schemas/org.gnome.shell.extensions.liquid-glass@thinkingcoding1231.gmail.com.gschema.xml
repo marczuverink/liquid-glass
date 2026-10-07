@@ -70,7 +70,7 @@
       <summary>Spring stiffness</summary>
     </key>
     <key name="menu-spring-damping" type="d">
-      <default>8.0</default>
+      <default>22.0</default>
       <summary>Spring damping</summary>
     </key>
     <key name="menu-spring-mass" type="d">
@@ -167,7 +167,7 @@
       <summary>Spring stiffness</summary>
     </key>
     <key name="panel-menu-spring-damping" type="d">
-      <default>8.0</default>
+      <default>22.0</default>
       <summary>Spring damping</summary>
     </key>
     <key name="panel-menu-spring-mass" type="d">
@@ -361,7 +361,7 @@
       <summary>Spring stiffness</summary>
     </key>
     <key name="quick-settings-spring-damping" type="d">
-      <default>8.0</default>
+      <default>22.0</default>
       <summary>Spring damping</summary>
     </key>
     <key name="quick-settings-spring-mass" type="d">
