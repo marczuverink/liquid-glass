@@ -385,45 +385,55 @@ vec2 fusedShape(vec2 p, vec2 b, vec2 corner) {
 #endif
 }
 
-// The outline the lens is shaped from: fusedShape(), or for glass text its
-// softened field.
-vec2 lensShape(vec2 p, vec2 b, vec2 corner) {
-#ifdef LG_SHAPE_TEXTURE
-    return vec2(shapeLensSD(p), max(shape_band, 1.0));
-#else
-    return fusedShape(p, b, corner);
-#endif
-}
-
-// Unit gradient of lensShape(), by central differences: a smooth union or
-// a sampled field has no cheap closed form.
+// Unit gradient of fusedShape(), by central differences: a smooth union or
+// a sampled field has no cheap closed form. Glass text takes it from its
+// softened field, which turns smoothly where the outline's distance folds.
 vec2 fusedDir(vec2 p, vec2 b, vec2 corner) {
     const float e = 0.5;
-    vec2 g = vec2(lensShape(p + vec2(e, 0.0), b, corner).x - lensShape(p - vec2(e, 0.0), b, corner).x,
-                  lensShape(p + vec2(0.0, e), b, corner).x - lensShape(p - vec2(0.0, e), b, corner).x);
+#ifdef LG_SHAPE_TEXTURE
+    vec2 g = vec2(shapeLensSD(p + vec2(e, 0.0)) - shapeLensSD(p - vec2(e, 0.0)),
+                  shapeLensSD(p + vec2(0.0, e)) - shapeLensSD(p - vec2(0.0, e)));
+#else
+    vec2 g = vec2(fusedShape(p + vec2(e, 0.0), b, corner).x - fusedShape(p - vec2(e, 0.0), b, corner).x,
+                  fusedShape(p + vec2(0.0, e), b, corner).x - fusedShape(p - vec2(0.0, e), b, corner).x);
+#endif
     float len = length(g);
     return len > 1.0e-5 ? g / len : vec2(1.0, 0.0);
 }
 
-float getHeightFused(vec2 p, vec2 b, vec2 corner, float zScale) {
-    vec2 s = lensShape(p, b, corner);
+// Surface height at signed distance d from the outline, for a lens `band`.
+float heightAtDistance(float d, vec2 b, float band, float zScale) {
     float smoothZone = max(edge_smoothing, 1.0);
-    if (s.x > smoothZone)
+    if (d > smoothZone)
         return 0.0;
-    float t = normalizedDepth(s.x, b, s.y);
-    float h = profileHeight(t, zScale * lensScaleFor(s.y));
-    float fade = 1.0 - smoothstep(-smoothZone, smoothZone, s.x);
+    float t = normalizedDepth(d, b, band);
+    float h = profileHeight(t, zScale * lensScaleFor(band));
+    float fade = 1.0 - smoothstep(-smoothZone, smoothZone, d);
     return h * fade;
 }
 
 vec2 heightGradientFused(vec2 p, vec2 b, vec2 corner, float zScale, vec2 resolution) {
-    vec2 dir = fusedDir(p, b, corner);
     float e = gradientStep(resolution);
-
-    float hOut = getHeightFused(p + dir * e, b, corner, zScale);
-    float hIn  = getHeightFused(p - dir * e, b, corner, zScale);
-
+#ifdef LG_SHAPE_TEXTURE
+    // The height follows the outline itself, so the glass reaches right into
+    // its corners; only the slope's direction comes from the softened field.
+    // That field's gradient also shortens to nothing along a stroke's middle,
+    // so the slope does not flip there either.
+    const float g = 0.5;
+    vec2 grad = vec2(shapeLensSD(p + vec2(g, 0.0)) - shapeLensSD(p - vec2(g, 0.0)),
+                     shapeLensSD(p + vec2(0.0, g)) - shapeLensSD(p - vec2(0.0, g))) / (2.0 * g);
+    float d = shapeTextureSD(p);
+    float band = max(shape_band, 1.0);
+    float slope = (heightAtDistance(d + e, b, band, zScale) - heightAtDistance(d - e, b, band, zScale)) / (2.0 * e);
+    return grad * slope;
+#else
+    vec2 dir = fusedDir(p, b, corner);
+    vec2 sOut = fusedShape(p + dir * e, b, corner);
+    vec2 sIn = fusedShape(p - dir * e, b, corner);
+    float hOut = heightAtDistance(sOut.x, b, sOut.y, zScale);
+    float hIn = heightAtDistance(sIn.x, b, sIn.y, zScale);
     return dir * ((hOut - hIn) / (2.0 * e));
+#endif
 }
 
 // UV displacement from refraction through the surface.
