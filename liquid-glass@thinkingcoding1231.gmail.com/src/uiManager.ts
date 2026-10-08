@@ -40,8 +40,6 @@ const MIN_MENU_SCALE = 0.5;
 // (px), as in glass-lib's popovers.
 const DROP_SPAN = 0.55;
 const DROP_MERGE = 40;
-// The button's glass sits this far (px) inside the top bar's height.
-const BUTTON_INSET_Y = 2;
 // A closing menu's glass draws back into a drop this wide (px) in the middle
 // of its button, and is gone once it has come this much of the way.
 const CLOSED_DROP = 10;
@@ -57,6 +55,8 @@ interface MenuMorph {
   jelly: Jelly;
   // The button's glass, [x, y, w, h] in stage coordinates.
   button: number[];
+  // The corner radius the glass starts with: the button's capsule when opening.
+  startRadius: number;
   waitFrames: number;
 }
 
@@ -1343,16 +1343,24 @@ export class UIManager {
     }
   }
 
-  // The button the menu belongs to, as the glass it grows out of: [x, y, w, h]
-  // in stage coordinates, or null when it is not on screen.
+  // The button the menu belongs to, as the glass it grows out of: the capsule
+  // the theme highlights it with, [x, y, w, h] in stage coordinates, or null
+  // when it is not on screen. Panel buttons draw it inside a transparent
+  // border, and the clock on its label rather than on the whole button.
   private _buttonRect(): number[] | null {
     const source = this.menu?.sourceActor;
     if (!source || !isActorValid(source) || !source.mapped) return null;
-    const [x, y] = source.get_transformed_position();
-    const [w, h] = source.get_transformed_size();
+    const label = (source as any)._clockDisplay;
+    const actor: St.Widget = label instanceof St.Widget && label.mapped ? label : source;
+    const [x, y] = actor.get_transformed_position();
+    const [w, h] = actor.get_transformed_size();
     if (!Number.isFinite(x) || !Number.isFinite(y) || !(w >= 1) || !(h >= 1)) return null;
-    const inset = Math.min(BUTTON_INSET_Y, h / 4);
-    return [x, y + inset, w, h - inset * 2];
+    const node = actor.get_theme_node();
+    const [sx, sy] = actor.get_transformed_size().map((v, i) => v / Math.max(i ? actor.height : actor.width, 1));
+    const left = node.get_border_width(St.Side.LEFT) * sx, right = node.get_border_width(St.Side.RIGHT) * sx;
+    const top = node.get_border_width(St.Side.TOP) * sy, bottom = node.get_border_width(St.Side.BOTTOM) * sy;
+    if (w - left - right < 1 || h - top - bottom < 1) return [x, y, w, h];
+    return [x + left, y + top, w - left - right, h - top - bottom];
   }
 
   // Where the menu's items are at rest: their stage rect without the
@@ -1391,7 +1399,8 @@ export class UIManager {
     this._stopMorphTicker();
     const jelly = new Jelly();
     jelly.start(from);
-    this._morph = { closing: !open, jelly, button, waitFrames: 0 };
+    const startRadius = this._morph ? this._morphRadius(this._morph, from) : open ? button[3] / 2 : this._cornerRadius;
+    this._morph = { closing: !open, jelly, button, startRadius, waitFrames: 0 };
 
     this.animActor.remove_all_transitions();
     this.glass.remove_all_transitions();
@@ -1420,7 +1429,7 @@ export class UIManager {
       const target = this._menuBodyRect();
       if (!target) {
         // Not laid out yet: hold the glass on the button for a few frames.
-        this._placeMorph(m.jelly.rect, null);
+        this._placeMorph(m.jelly.rect, null, m.startRadius);
         if (++m.waitFrames < MORPH_WAIT_FRAMES) return true;
         this._morphTickId = 0;
         this._endMorph();
@@ -1440,7 +1449,7 @@ export class UIManager {
       const [bx, by, bw, bh] = m.button;
       drop = [bx + bw * (1 - left) / 2, by + bh * (1 - left) / 2, bw * left, bh * left];
     }
-    this._placeMorph(m.jelly.rect, drop);
+    this._placeMorph(m.jelly.rect, drop, this._morphRadius(m, m.jelly.rect));
     if (moving && !(m.closing && p >= CLOSED_AT)) return true;
 
     this._morphTickId = 0;
@@ -1455,9 +1464,18 @@ export class UIManager {
     return false;
   }
 
-  // Draws the travelling glass, its body `rect` and the button's `drop`
-  // (stage coordinates), at full opacity: only its shape changes.
-  private _placeMorph(rect: number[], drop: number[] | null): void {
+  // The travelling glass's corner radius: from the one it started with to the
+  // menu's (closing, the shrinking glass rounds itself off).
+  private _morphRadius(m: MenuMorph, rect: number[]): number {
+    const p = m.jelly.progress;
+    const radius = m.closing ? this._cornerRadius : m.startRadius + (this._cornerRadius - m.startRadius) * p;
+    return Math.min(radius, rect[2] / 2, rect[3] / 2);
+  }
+
+  // Draws the travelling glass, its body `rect` with corners of `radius` and
+  // the button's `drop` (stage coordinates), at full opacity: only its shape
+  // changes.
+  private _placeMorph(rect: number[], drop: number[] | null, radius: number): void {
     const glass = this.glass!;
     const monitor = this._getMenuMonitorGeometry();
     const mx = monitor?.x ?? 0;
@@ -1467,7 +1485,7 @@ export class UIManager {
     glass.opacity = 255;
     this._applyGlassBounds(glass, rect[0] - p, rect[1] - p, rect[2] + p * 2, rect[3] + p * 2,
       mx, my, Math.max(1, monitor?.width ?? 1), Math.max(1, monitor?.height ?? 1));
-    this._applyGlassScale(1, 1);
+    applyGlassScale(glass, radius, 1, 1);
     glass.setDrop(drop && [drop[0] - mx, drop[1] - my, drop[2], drop[3]], drop ? drop[3] / 2 : 0, DROP_MERGE);
     this._placeContent(rect);
     glass.syncSources();
