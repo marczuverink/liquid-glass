@@ -1,7 +1,7 @@
 import { stepMenuSpring, applyMenuFrame, showMenuAtRest } from './animation/menuSpring.js';
 import { addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs } from './animation/frameTicker.js';
 import { Spring, SwiftSpring } from './animation/spring.js';
-import { Jelly } from './animation/jelly.js';
+import { MenuMorphMotion } from './animation/menuMorph.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
@@ -9,6 +9,7 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import Gio from 'gi://Gio';
 import { BackdropGlass } from './rendering/backdropGlass.js';
+import { ContentLens } from './rendering/contentLens.js';
 import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
 import { UnpickableWidget } from './actors/unpickable.js';
 import { ensureGlassAllocated } from './actors/allocation.js';
@@ -22,19 +23,16 @@ import { MENU_NO_ANIMATION, accentColors } from './shellVersion.js';
 const SHADER_PADDING = 20;
 const SAMPLE_PER_ELEMENT = false;
 const MIN_MENU_SCALE = 0.5;
-// A menu growing out of its button leaves the button's glass behind as a drop,
-// gone by this much of the way and fused to the menu's glass over this width
-// (px), as in glass-lib's popovers.
-const DROP_SPAN = 0.55;
-const DROP_MERGE = 40;
-// A closing menu's glass draws back into a drop this wide (px) in the middle
-// of its button, and is gone once it has come this much of the way.
-const CLOSED_DROP = 10;
-const CLOSED_AT = 0.97;
+// The menu's glass and the button's are fused over this width (px), as
+// liquid-dom's showcase spaces them.
+const DROP_MERGE = 37;
 // Frames to wait for an opening menu to get its size before it just appears.
 const MORPH_WAIT_FRAMES = 30;
-// The menu's own open animation, which the morph replaces.
+// The menu's own open and close animations, which the morph replaces; it keeps
+// the closing fade.
 const BOXPOINTER_EASED = ['opacity', 'translation-x', 'translation-y', 'scale-x', 'scale-y'];
+const BOXPOINTER_MOVES = BOXPOINTER_EASED.slice(1);
+const CONTENT_LENS = 'liquid-glass-content-lens';
 const MENU_MEASURE_FRAMES = 30;
 const MENU_MEASURE_STABLE_FRAMES = 3;
 // Quick Settings' open height, measured once for every menu that matches it,
@@ -731,7 +729,7 @@ export class UIManager {
                 if (!this.menu.actor.mapped) {
                     stopFrameSync();
                     // The glass outlives the menu while it goes back into the button.
-                    if (this._morph?.closing)
+                    if (this._morph && !this._morph.opening)
                         return;
                     if (this.glass) {
                         this.glass.hide();
@@ -1289,14 +1287,19 @@ export class UIManager {
         if (!this.glass || !button)
             return false;
         // Reversing midway starts from where the glass is.
-        const from = this._morph?.jelly.rect ?? (open ? button : this._menuBodyRect());
-        if (!from)
+        const prev = this._morph;
+        if (!open && !prev?.motion && !this._menuBodyRect())
             return false;
         this._stopMorphTicker();
-        const jelly = new Jelly();
-        jelly.start(from);
-        const startRadius = this._morph ? this._morphRadius(this._morph, from) : open ? button[3] / 2 : this._cornerRadius;
-        this._morph = { closing: !open, jelly, button, startRadius, waitFrames: 0 };
+        let lens = prev?.lens;
+        if (!lens) {
+            lens = new ContentLens();
+            this.animActor.add_effect_with_name(CONTENT_LENS, lens);
+        }
+        this._morph = {
+            opening: open, motion: null, button, lens, lastUs: 0, waitFrames: 0,
+            from: prev?.motion?.frame ?? null, velocities: prev?.motion?.velocities ?? null,
+        };
         this.animActor.remove_all_transitions();
         this.glass.remove_all_transitions();
         this.animActor.set_pivot_point(0, 0);
@@ -1311,45 +1314,41 @@ export class UIManager {
             return false;
         }
         m.button = this._buttonRect() ?? m.button;
-        if (m.closing) {
-            const [bx, by, bw, bh] = m.button;
-            const r = Math.min(CLOSED_DROP, bw, bh) / 2;
-            m.jelly.setMark([bx + bw / 2 - r, by + bh / 2 - r, r * 2, r * 2]);
+        // The menu stays where it opens; closing, it only fades.
+        for (const name of m.opening ? BOXPOINTER_EASED : BOXPOINTER_MOVES) {
+            const ease = this.targetActor.get_transition(name);
+            if (!ease)
+                continue;
+            if (m.opening)
+                ease.set_from(ease.get_interval().peek_final_value());
+            else
+                ease.set_to(ease.get_interval().peek_initial_value());
         }
-        else {
-            for (const name of BOXPOINTER_EASED) {
-                const ease = this.targetActor.get_transition(name);
-                if (ease)
-                    ease.set_from(ease.get_interval().peek_final_value());
-            }
-            const target = this._menuBodyRect();
-            if (!target) {
+        const menu = this._menuBodyRect();
+        if (!m.motion) {
+            if (!menu) {
                 // Not laid out yet: hold the glass on the button for a few frames.
-                this._placeMorph(m.jelly.rect, null, m.startRadius);
+                this._placeMorph({ body: m.button, bodyRadius: m.button[3] / 2, button: m.button, contentScale: 1,
+                    contentOpacity: 0, lens: 0, glassOpacity: 1, done: false });
                 if (++m.waitFrames < MORPH_WAIT_FRAMES)
                     return true;
                 this._morphTickId = 0;
                 this._endMorph();
                 return false;
             }
-            m.jelly.setMark(target);
+            m.motion = new MenuMorphMotion(m.opening, m.button, menu, this._cornerRadius, m.from, m.velocities);
         }
-        const moving = m.jelly.step(GLib.get_monotonic_time());
-        const p = m.jelly.progress;
-        // Opening, the button's glass stays behind as a drop that shrinks away
-        // while the glass pulls out of it; closing, the glass draws back into a
-        // drop that vanishes in the button.
-        let drop = null;
-        const left = m.closing ? 0 : 1 - p / DROP_SPAN;
-        if (left > 0.02) {
-            const [bx, by, bw, bh] = m.button;
-            drop = [bx + bw * (1 - left) / 2, by + bh * (1 - left) / 2, bw * left, bh * left];
+        else {
+            m.motion.retarget(m.button, menu, this._cornerRadius);
         }
-        this._placeMorph(m.jelly.rect, drop, this._morphRadius(m, m.jelly.rect));
-        if (moving && !(m.closing && p >= CLOSED_AT))
+        const now = GLib.get_monotonic_time();
+        const frame = m.motion.step(m.lastUs ? (now - m.lastUs) / 1e6 : 1 / 60);
+        m.lastUs = now;
+        this._placeMorph(frame);
+        if (!frame.done)
             return true;
         this._morphTickId = 0;
-        const closed = m.closing;
+        const closed = !m.opening;
         this._endMorph();
         if (closed) {
             this.glass.hide();
@@ -1361,55 +1360,48 @@ export class UIManager {
         return false;
     }
 
-    // The travelling glass's corner radius: from the one it started with to the
-    // menu's (closing, the shrinking glass rounds itself off).
-    _morphRadius(m, rect) {
-        const p = m.jelly.progress;
-        const radius = m.closing ? this._cornerRadius : m.startRadius + (this._cornerRadius - m.startRadius) * p;
-        return Math.min(radius, rect[2] / 2, rect[3] / 2);
-    }
-
-    // Draws the travelling glass, its body `rect` with corners of `radius` and
-    // the button's `drop` (stage coordinates), at full opacity: only its shape
-    // changes.
-    _placeMorph(rect, drop, radius) {
+    // Draws the travelling glass: the menu's body fused with the button's
+    // capsule (stage coordinates), and the menu's items in it.
+    _placeMorph(f) {
         const glass = this.glass;
         const monitor = this._getMenuMonitorGeometry();
         const mx = monitor?.x ?? 0;
         const my = monitor?.y ?? 0;
         const p = SHADER_PADDING;
+        const body = f.body;
         if (!glass.visible)
             glass.show();
-        glass.opacity = 255;
-        this._applyGlassBounds(glass, rect[0] - p, rect[1] - p, rect[2] + p * 2, rect[3] + p * 2, mx, my, Math.max(1, monitor?.width ?? 1), Math.max(1, monitor?.height ?? 1));
-        applyGlassScale(glass, radius, 1, 1);
-        glass.setDrop(drop && [drop[0] - mx, drop[1] - my, drop[2], drop[3]], drop ? drop[3] / 2 : 0, DROP_MERGE);
-        this._placeContent(rect);
+        glass.opacity = Math.round(255 * f.glassOpacity);
+        this._applyGlassBounds(glass, body[0] - p, body[1] - p, body[2] + p * 2, body[3] + p * 2, mx, my, Math.max(1, monitor?.width ?? 1), Math.max(1, monitor?.height ?? 1));
+        applyGlassScale(glass, f.bodyRadius, 1, 1);
+        const b = f.button;
+        glass.setDrop([b[0] - mx, b[1] - my, b[2], b[3]], b[3] / 2, DROP_MERGE);
+        this._placeContent(f);
         glass.syncSources();
     }
 
-    // Scales the menu's items, whole and opaque, into the travelling glass
-    // `rect`: centred across it, against its edge on the button's side.
-    _placeContent(rect) {
+    // Draws the menu's items `f.contentScale` times their size around the
+    // middle of the travelling glass, cut to its outline.
+    _placeContent(f) {
         const a = this.animActor;
         const rest = this._menuRest();
         if (!rest || !this._morph) {
             a.opacity = 0;
             return;
         }
-        a.opacity = 255;
+        a.opacity = Math.round(255 * f.contentOpacity * f.glassOpacity);
         const e = this._glassExpand;
-        const bodyW = rest.w + e * 2;
-        const bodyH = rest.h + e * 2;
+        const [bx, by, bw, bh] = f.body;
         // Never 0, which Cogl cannot invert.
-        const s = Math.max(Math.min(rect[2] / bodyW, rect[3] / bodyH, 1), 0.01);
-        const fromBelow = this._morph.button[1] > rest.y;
-        const x = rect[0] + (rect[2] - bodyW * s) / 2 + e * s;
-        const y = (fromBelow ? rect[1] + rect[3] - bodyH * s : rect[1]) + e * s;
+        const s = Math.max(f.contentScale, 0.01);
+        const x = bx + (bw - (rest.w + e * 2) * s) / 2 + e * s;
+        const y = by + (bh - (rest.h + e * 2) * s) / 2 + e * s;
         const k = rest.k;
         a.set_scale(s, s);
         a.set_translation((x - rest.x) / k, (y - rest.y) / k, 0);
-        a.set_clip((rect[0] - x) / (s * k), (rect[1] - y) / (s * k), rect[2] / (s * k), rect[3] / (s * k));
+        const clip = [(bx - x) / (s * k), (by - y) / (s * k), bw / (s * k), bh / (s * k)];
+        a.set_clip(clip[0], clip[1], clip[2], clip[3]);
+        this._morph.lens.shape(clip, s * k, f.bodyRadius, f.lens);
     }
 
     _stopMorphTicker() {
@@ -1427,6 +1419,7 @@ export class UIManager {
         this._morph = null;
         this.glass?.setDrop(null);
         if (!this._actorDestroyed && this.animActor) {
+            this.animActor.remove_effect_by_name(CONTENT_LENS);
             this.animActor.remove_clip();
             this.animActor.set_translation(0, 0, 0);
             this.animActor.set_scale(1.0, 1.0);

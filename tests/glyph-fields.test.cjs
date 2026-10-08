@@ -90,10 +90,10 @@ test('the added height goes to the rows where the outline runs upright', () => {
     return d < 1 && Math.hypot((x - 30) / 10, Math.max(Math.abs(y - 30) - 10, 0) / 10) >= 1;
   });
   const shares = glyphs.rowShares(alpha, w, 10, 50);
-  const middle = shares.slice(10, 30).reduce((a, b) => a + b, 0);
-  const ends = shares.slice(0, 5).reduce((a, b) => a + b, 0) + shares.slice(35).reduce((a, b) => a + b, 0);
-  assert.ok(middle > 0.8, `middle ${middle}`);
-  assert.ok(ends < 0.05, `ends ${ends}`);
+  const perRow = (a, b) => shares.slice(a, b).reduce((s, v) => s + v, 0) / (b - a);
+  // The rows away from the curves take several times what the curves' rows do.
+  const middle = perRow(15, 25), curves = (perRow(0, 8) + perRow(32, 40)) / 2;
+  assert.ok(middle > curves * 3, `middle ${middle.toFixed(4)} curves ${curves.toFixed(4)}`);
   assert.ok(Math.abs(shares.reduce((a, b) => a + b, 0) - 1) < 1e-9);
 });
 
@@ -171,4 +171,62 @@ test('a slanted straight stroke stays straight when the glyph grows, whatever st
   const slope = pts.reduce((s, [y, x]) => s + (y - my) * (x - mx), 0) / pts.reduce((s, [y]) => s + (y - my) ** 2, 0);
   const worst = Math.max(...pts.map(([y, x]) => Math.abs(mx + slope * (y - my) - x)));
   assert.ok(worst < 0.5, `the diagonal strays ${worst.toFixed(2)} px from a straight line`);
+});
+
+// The width of the ink across row y of `alpha` (`w` wide) around column x.
+function runAt(alpha, w, y, x) {
+  let a = x, b = x;
+  while (a > 0 && alpha[y * w + a - 1] >= 128) a--;
+  while (b < w - 1 && alpha[y * w + b + 1] >= 128) b++;
+  return alpha[y * w + x] >= 128 ? b - a + 1 : 0;
+}
+
+test('a slanted stroke keeps its width when the glyph grows', () => {
+  // A stroke 10 px wide slanting at 45 degrees from (10, 10) to (60, 60).
+  const [w, h] = [80, 80];
+  const across = 10 * Math.SQRT2;
+  const alpha = coverage(w, h, (x, y) => y >= 9.5 && y < 60.5 && Math.abs(x - y) < across / 2);
+  const extra = 50;
+  const tall = glyphs.tallen(alpha, w, h, 10, 60, extra);
+  // Twice as tall, the stroke slants at atan(2); 10 px wide across its slant
+  // it spans 10 / sin(atan(2)) = 11.2 px across a row (the plain stretch: 14.1).
+  const y = 10 + Math.round((60 + extra - 10) / 2);
+  const x = Math.round(10 + (y - 10) / 2);
+  const run = runAt(tall, w, y, x);
+  assert.ok(Math.abs(run - 10 / Math.sin(Math.atan(2))) <= 1.5, `${run} px across`);
+});
+
+test('a ring with nothing upright grows evenly and keeps its width all round', () => {
+  // An ellipse 60 x 80 px with a stroke 8 px wide.
+  const [w, h] = [80, 100];
+  const ring = (x, y, a, b) => ((x - 40) / a) ** 2 + ((y - 50) / b) ** 2 < 1;
+  const alpha = coverage(w, h, (x, y) => ring(x, y, 30, 40) && !ring(x, y, 22, 32));
+  const tall = glyphs.tallen(alpha, w, h, 10, 90, 80);
+  const rows = coveredRows(tall, w, h + 80, 40);
+  // Top and bottom still 8 rows thick.
+  const runs = [];
+  for (const y of rows) {
+    if (runs.length && runs[runs.length - 1][1] === y - 1) runs[runs.length - 1][1] = y;
+    else runs.push([y, y]);
+  }
+  assert.equal(runs.length, 2, JSON.stringify(runs));
+  for (const [a, b] of runs) assert.ok(Math.abs(b - a + 1 - 8) <= 1, JSON.stringify(runs));
+  // Its outside spans the band, 160 rows.
+  assert.ok(Math.abs(runs[1][1] - runs[0][0] + 1 - 160) <= 2, JSON.stringify(runs));
+  // And its sides are 8 px wide halfway down.
+  assert.ok(Math.abs(runAt(tall, w, 90, 14) - 8) <= 1, String(runAt(tall, w, 90, 14)));
+});
+
+test('the cut end of a flat stroke stays square where its rows grow', () => {
+  // A bar 8 rows thick from x = 10 to 50 hanging off an upright stroke, all
+  // in rows that grow evenly with a ring beside them.
+  const [w, h] = [100, 100];
+  const ring = (x, y, a, b) => ((x - 75) / a) ** 2 + ((y - 50) / b) ** 2 < 1;
+  const alpha = coverage(w, h, (x, y) => (x >= 9.5 && x < 50.5 && y >= 45.5 && y < 53.5) ||
+    (x >= 42.5 && x < 50.5 && y >= 9.5 && y < 90.5) || (ring(x, y, 20, 40) && !ring(x, y, 12, 32)));
+  const tall = glyphs.tallen(alpha, w, h, 10, 90, 80);
+  // The bar's rows down its free end and further in.
+  const end = coveredRows(tall, w, h + 80, 11), inner = coveredRows(tall, w, h + 80, 30);
+  assert.ok(Math.abs(end.length - 8) <= 1 && Math.abs(inner.length - 8) <= 1, `${end} / ${inner}`);
+  assert.ok(Math.abs(end[0] - inner[0]) <= 1, `${end[0]} vs ${inner[0]}`);
 });

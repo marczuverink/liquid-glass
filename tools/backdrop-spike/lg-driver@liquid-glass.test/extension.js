@@ -1211,19 +1211,13 @@ export default class LgDriver extends Extension {
     return import(`file://${Extension.lookupByUUID(LG_UUID).path}/dist/${path}`);
   }
 
-  // Runs every Jelly `factor` times slower, so shots catch it midway.
-  async _slowJelly(factor) {
-    const {Jelly} = await this._lgModule('animation/jelly.js');
-    const step = Jelly.prototype._drvStep ?? Jelly.prototype.step;
-    Jelly.prototype._drvStep = step;
-    Jelly.prototype.step = function (nowUs) {
-      if (this._drvReal === undefined) {
-        this._drvReal = nowUs;
-        this._drvVirt = nowUs;
-      }
-      this._drvVirt += (nowUs - this._drvReal) / factor;
-      this._drvReal = nowUs;
-      return step.call(this, this._drvVirt);
+  // Runs the menus' morphs `factor` times slower, so shots catch them midway.
+  async _slowMorph(factor) {
+    const {MenuMorphMotion} = await this._lgModule('animation/menuMorph.js');
+    const step = MenuMorphMotion.prototype._drvStep ?? MenuMorphMotion.prototype.step;
+    MenuMorphMotion.prototype._drvStep = step;
+    MenuMorphMotion.prototype.step = function (elapsed) {
+      return step.call(this, elapsed / factor);
     };
   }
 
@@ -1398,26 +1392,31 @@ export default class LgDriver extends Extension {
     }
     const m = Main.layoutManager.primaryMonitor;
     if (parts.includes('morph')) {
-      await this._slowJelly(12);
+      await this._slowMorph(12);
       const dateMenu = Main.panel.statusArea.dateMenu.menu;
       dateMenu.open(true);
-      await this._timedShots('morph-open', [m.x + m.width / 4, m.y, m.width / 2, 700], [100, 400, 900, 1600, 2600, 4500]);
-      await sleep(1500);
+      await this._timedShots('morph-open', [m.x + m.width / 4, m.y, m.width / 2, 700],
+        [150, 600, 1200, 2000, 3000, 4500, 7000, 9500]);
+      await sleep(1000);
       dateMenu.close(true);
-      await this._timedShots('morph-close', [m.x + m.width / 4, m.y, m.width / 2, 700], [100, 600, 1300, 2200, 3500]);
+      await this._timedShots('morph-close', [m.x + m.width / 4, m.y, m.width / 2, 700],
+        [150, 800, 1600, 2600, 4000, 6000, 9000]);
       await sleep(2000);
-      await this._slowJelly(1);
+      await this._slowMorph(1);
     }
     if (parts.includes('morphtrace')) {
-      // Every frame of the calendar's glass at full speed: where it heads and where it is.
-      const {Jelly} = await this._lgModule('animation/jelly.js');
-      const step = Jelly.prototype.step;
+      // Every frame of the calendar's glass at full speed.
+      const {MenuMorphMotion} = await this._lgModule('animation/menuMorph.js');
+      const step = MenuMorphMotion.prototype.step;
       const t0 = GLib.get_monotonic_time();
-      Jelly.prototype.step = function (nowUs) {
-        const moving = step.call(this, nowUs);
+      MenuMorphMotion.prototype.step = function (elapsed) {
+        const f = step.call(this, elapsed);
         const r = n => n.map(v => v.toFixed(1)).join(',');
-        log(`trace t=${((nowUs - t0) / 1000).toFixed(0)} mark=${r(this._mark)} rect=${r(this.rect)}`);
-        return moving;
+        log(`trace t=${((GLib.get_monotonic_time() - t0) / 1000).toFixed(0)} opening=${this.opening} ` +
+          `body=${r(f.body)} radius=${f.bodyRadius.toFixed(1)} button=${r(f.button)} ` +
+          `content=${f.contentScale.toFixed(2)}/${f.contentOpacity.toFixed(2)} lens=${f.lens.toFixed(2)} ` +
+          `glass=${f.glassOpacity.toFixed(2)}`);
+        return f;
       };
       const dateMenu = Main.panel.statusArea.dateMenu.menu;
       const clock = Main.panel.statusArea.dateMenu._clockDisplay;
@@ -1426,7 +1425,7 @@ export default class LgDriver extends Extension {
       await sleep(2500);
       dateMenu.close(true);
       await sleep(1500);
-      Jelly.prototype.step = step;
+      MenuMorphMotion.prototype.step = step;
     }
     if (parts.includes('qssub')) {
       // A Quick Settings submenu stays centred under the panel when the shell
