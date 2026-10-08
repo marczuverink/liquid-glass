@@ -32,15 +32,8 @@ export class PreferenceControls {
     if (changes.some(([key, value]) => !transaction.is_writable(key) || !transaction.settings_schema.get_key(key).range_check(value)))
       throw new Error('These settings cannot be changed together');
     transaction.delay();
-    try {
-      for (const [key, value] of changes) {
-        if (!transaction.set_value(key, value)) throw new Error(`Cannot change ${key}`);
-      }
-      transaction.apply();
-    } catch (error) {
-      transaction.revert();
-      throw error;
-    }
+    for (const [key, value] of changes) transaction.set_value(key, value);
+    transaction.apply();
   }
 
   group(page, title, description = '') {

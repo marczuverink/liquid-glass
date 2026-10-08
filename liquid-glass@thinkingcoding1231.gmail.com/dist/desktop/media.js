@@ -63,7 +63,6 @@ export class MediaWidget extends GlassCard {
                 this._removePlayer(name);
         });
         Gio.DBus.session.call('org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus', 'ListNames', null, null, Gio.DBusCallFlags.NONE, -1, this._cancellable, (conn, res) => {
-            // Throws a GError when the bus call fails or is cancelled.
             try {
                 const [names] = conn.call_finish(res).deepUnpack();
                 for (const name of names)
@@ -83,7 +82,6 @@ export class MediaWidget extends GlassCard {
         const player = { name, proxy: null, changedId: 0, playedAt: 0 };
         this._players.set(name, player);
         Gio.DBusProxy.new_for_bus(Gio.BusType.SESSION, Gio.DBusProxyFlags.NONE, null, name, MPRIS_PATH, PLAYER_IFACE, this._cancellable, (_o, res) => {
-            // Throws a GError when the proxy cannot be made or the wait was cancelled.
             try {
                 player.proxy = Gio.DBusProxy.new_for_bus_finish(res);
             }

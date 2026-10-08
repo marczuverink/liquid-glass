@@ -34,23 +34,20 @@ export function addPanelMenus(page, controls) {
   controls.watch(['detected-extra-menus', 'disabled-extra-menus', 'enable-extra-menu-glass',
     ...Object.values(LEGACY).map(([key]) => key)], () => {
     syncing = true;
-    try {
-      const names = settings.get_strv('detected-extra-menus');
-      const disabled = new Set(settings.get_strv('disabled-extra-menus'));
-      for (const [name, row] of rows) {
-        if (names.includes(name)) continue;
-        group.remove(row);
-        rows.delete(name);
-      }
-      for (const name of names) {
-        const row = rows.get(name) ?? add(name);
-        row.active = LEGACY[name] ? settings.get_boolean(LEGACY[name][0]) : !disabled.has(name);
-      }
-      empty.visible = names.length === 0;
-      group.sensitive = settings.get_boolean('enable-extra-menu-glass');
-    } finally {
-      syncing = false;
+    const names = settings.get_strv('detected-extra-menus');
+    const disabled = new Set(settings.get_strv('disabled-extra-menus'));
+    for (const [name, row] of rows) {
+      if (names.includes(name)) continue;
+      group.remove(row);
+      rows.delete(name);
     }
+    for (const name of names) {
+      const row = rows.get(name) ?? add(name);
+      row.active = LEGACY[name] ? settings.get_boolean(LEGACY[name][0]) : !disabled.has(name);
+    }
+    empty.visible = names.length === 0;
+    group.sensitive = settings.get_boolean('enable-extra-menu-glass');
+    syncing = false;
   });
   return group;
 }

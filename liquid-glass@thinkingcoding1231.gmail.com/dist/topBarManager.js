@@ -84,7 +84,8 @@ export class TopBarManager {
         this._applyMaterial();
         this._lastKey = '';
         startSyncLoop(this._frameSignalSlot, this._frameSlot, {
-            alive: () => !!this._glass,
+            // At shell shutdown the stage destroys the glass before we are told.
+            alive: () => !!this._glass && isActorValid(this._glass),
             honourFreeze: true,
             errorTag: 'TopBarManager',
             step: () => {

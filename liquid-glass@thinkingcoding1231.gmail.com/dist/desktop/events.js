@@ -48,7 +48,7 @@ export class EventsWidget extends GlassCard {
 
     // The menu's event source, which the shell replaces when the session mode changes.
     _eventSource() {
-        const source = Main.panel.statusArea.dateMenu?._eventSource ?? null;
+        const source = Main.panel.statusArea.dateMenu._eventSource;
         if (source !== this._source) {
             if (this._source && this._sourceId)
                 this._source.disconnect(this._sourceId);

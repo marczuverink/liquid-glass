@@ -331,7 +331,6 @@ export class Launcher {
             this._show();
         }
         catch (e) {
-            // A remote provider's D-Bus call throws a GError when it fails or is cancelled.
             if (!isCancelled(e))
                 this._logger.log(`[Liquid Glass] Search provider failed: ${e}`);
         }
