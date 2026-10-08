@@ -4,6 +4,7 @@ import Gtk from 'gi://Gtk';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import {buildPreferences} from '../liquid-glass@thinkingcoding1231.gmail.com/preferences/pages.js';
+import {PreferenceControls} from '../liquid-glass@thinkingcoding1231.gmail.com/preferences/controls.js';
 
 if (GLib.getenv('GSETTINGS_BACKEND') !== 'memory') throw Error('Run with GSETTINGS_BACKEND=memory');
 Adw.init();
@@ -18,6 +19,16 @@ settings.set_int('menu-blur-radius', 21);
 settings.set_double('menu-scale', 0.83);
 const snapshot = () => JSON.stringify(schema.list_keys().sort().map(key => [key, settings.get_value(key).print(true)]));
 const before = snapshot();
+// Which keys the rows of each group write, to compare the two views.
+const rowKeys = [];
+for (const [method, keysOf] of [['toggle', a => [a[2]]], ['number', a => a[2]], ['color', a => a[2]],
+  ['choice', a => a[2].flatMap(choice => Object.keys(choice.patch))]]) {
+  const original = PreferenceControls.prototype[method];
+  PreferenceControls.prototype[method] = function (...args) {
+    rowKeys.push([args[0], keysOf(args)]);
+    return original.apply(this, args);
+  };
+}
 const window = new Adw.PreferencesWindow();
 const controls = buildPreferences(window, settings);
 if (snapshot() !== before) throw Error('Opening preferences changed the configuration');
@@ -51,6 +62,17 @@ for (const [first, later] of [['Individual effects', 'Application windows'], ['S
   if (groupTitles.lastIndexOf(first) > groupTitles.indexOf(later)) throw Error(`${first} is below ${later}: ${groupTitles.join(' | ')}`);
 }
 const surface = [...walk(window)].find(row => row instanceof Adw.ComboRow && row.title === 'Surface');
+// Every key the simple view sets must be reachable in the advanced one.
+const shownKeys = () => rowKeys.filter(([group]) => group.visible).flatMap(([, keys]) => keys);
+const advancedKeys = new Set();
+for (let i = 0; i < surface.model.get_n_items(); i++) {
+  surface.selected = i;
+  for (const key of shownKeys()) advancedKeys.add(key);
+}
+find('Settings view').selected = 0;
+const missing = [...new Set(shownKeys())].filter(key => key !== 'preferences-advanced' && !advancedKeys.has(key));
+if (missing.length) throw Error(`Only the simple view sets ${missing.join(', ')}`);
+find('Settings view').selected = 1;
 for (let i = 0; i < 8; i++) surface.selected = i;
 for (const [index, title, prefix] of [[1, 'Calendar', 'menu'], [2, 'Other top bar menus', 'panel-menu'],
   [4, 'Quick settings', 'quick-settings']]) {

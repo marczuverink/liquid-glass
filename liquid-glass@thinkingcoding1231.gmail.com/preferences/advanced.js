@@ -1,7 +1,7 @@
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
 import {SURFACE_OPTIONS, APPEARANCE, LAYOUT, SPRING, OPTICS, LIGHTING, SHADOWS} from './advanced-model.js';
-import {ADAPTIVE_SURFACES} from './model.js';
+import {ADAPTIVE_SURFACES, TOP_BAR} from './model.js';
 import {addPanelMenus} from './panel-menus.js';
 
 function addNumbers(group, controls, specs, prefix = '', slider = true) {
@@ -99,6 +99,7 @@ export function buildAdvancedPreferences(pages, controls) {
   const effects = controls.group(pages.effects, 'Individual effects');
   for (const [surface, title, key, hint] of SURFACE_OPTIONS) {
     if (key && surface !== 'application') controls.toggle(effects, title, key, hint ?? '');
+    else if (surface === 'top-bar') controls.choice(effects, title, TOP_BAR, 'The bar itself; menus are below', false);
   }
   const groups = [selectorGroup, effects, addPanelMenus(pages.effects, controls),
     ...addRendering(pages.rendering, controls)];

@@ -163,8 +163,13 @@ export class TopBarManager {
         else {
             for (const box of [panel._leftBox, panel._centerBox, panel._rightBox]) {
                 const extent = box ? this._boxExtent(box) : null;
-                if (extent)
-                    rects.push([extent[0] - ISLAND_PAD_X, inset, extent[1] - extent[0] + ISLAND_PAD_X * 2, height - inset * 2]);
+                if (!extent)
+                    continue;
+                // The outer buttons reach the screen's edges; their islands keep the single pill's margin.
+                const x0 = Math.max(extent[0] - ISLAND_PAD_X, inset * 2);
+                const x1 = Math.min(extent[1] + ISLAND_PAD_X, width - inset * 2);
+                if (x1 > x0)
+                    rects.push([x0, inset, x1 - x0, height - inset * 2]);
             }
         }
         const key = `${x},${y},${width},${height},${rects.flat().join(',')}`;
