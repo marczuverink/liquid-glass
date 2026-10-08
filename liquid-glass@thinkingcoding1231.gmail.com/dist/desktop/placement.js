@@ -1,5 +1,5 @@
 // Where an item on the desktop goes: a corner or the centre of the primary
-// monitor's work area, or where the user dragged it, kept as the fraction of
+// monitor's work area, or where the user moved it, kept as the fraction of
 // the work area its centre is at so it survives a resolution change.
 export const ANCHORS = ['top-left', 'top-right', 'bottom-left', 'bottom-right', 'center'];
 // Room between an item and the edge of the work area, and between items.
@@ -52,7 +52,25 @@ export function fractionOf(pos, area, size) {
     return [Math.min(Math.max(fx, 0), 1), Math.min(Math.max(fy, 0), 1)];
 }
 
-// The positions the user dragged items to, by item id, as stored in the
+/** `rect` with the edges a handle holds moved by (dx, dy), at least `min` px each way. */
+export function resizeRect(rect, hx, hy, dx, dy, min) {
+    const out = { ...rect };
+    if (hx > 0)
+        out.width = Math.max(rect.width + dx, min);
+    if (hx < 0) {
+        out.width = Math.max(rect.width - dx, min);
+        out.x = rect.x + rect.width - out.width;
+    }
+    if (hy > 0)
+        out.height = Math.max(rect.height + dy, min);
+    if (hy < 0) {
+        out.height = Math.max(rect.height - dy, min);
+        out.y = rect.y + rect.height - out.height;
+    }
+    return out;
+}
+
+// The positions the user moved items to, by item id, as stored in the
 // `desktop-item-positions` setting. Anything unreadable counts as none.
 export function parsePositions(json) {
     let parsed;

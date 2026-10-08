@@ -13,7 +13,8 @@ function fixture(overrides = {}, dbusResponses = [], blurMyShell = null) {
   const xml = fs.readFileSync(path.join(root, 'schemas/org.gnome.shell.extensions.liquid-glass@thinkingcoding1231.gmail.com.gschema.xml'), 'utf8');
   for (const [, key, type, body] of xml.matchAll(/<key name="([^"]+)" type="([^"]+)">([\s\S]*?)<\/key>/g)) {
     const raw = body.match(/<default>([\s\S]*?)<\/default>/)[1].trim();
-    const value = type === 'as' ? [] : type === 's' ? raw.slice(1, -1) : type === 'b' ? raw === 'true' : Number(raw);
+    const value = type === 'as' ? [] : type === 's' ? raw.slice(1, -1) : type === 'b' ? raw === 'true'
+      : type.startsWith('(') ? JSON.parse(`[${raw.slice(1, -1)}]`) : Number(raw);
     types.set(key, type); values.set(key, value);
     const range = body.match(/<range min="([^"]+)" max="([^"]+)"\s*\/>/);
     if (range) ranges.set(key, {min: Number(range[1]), max: Number(range[2])});
@@ -86,6 +87,7 @@ function fixture(overrides = {}, dbusResponses = [], blurMyShell = null) {
     return props?.settings_schema === 'blur-my-shell-popup' ? blurMyShell : new Settings(props);
   };
   const Gio = {Settings: GioSettings, SettingsBindFlags: {GET: 1, DEFAULT: 0}, DBusCallFlags: {NONE: 0},
+    AppInfo: {get_all: () => []},
     SettingsSchemaSource: {get_default: () => null,
       new_from_directory: dir => ({lookup: id => dir === bmsSchemas && id === 'org.gnome.shell.extensions.blur-my-shell.popup'
         ? 'blur-my-shell-popup' : null})},

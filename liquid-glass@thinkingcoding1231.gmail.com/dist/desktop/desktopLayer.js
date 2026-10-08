@@ -1,8 +1,13 @@
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import GLib from 'gi://GLib';
+import Meta from 'gi://Meta';
 import St from 'gi://St';
 import { isActorValid } from '../actors/lifecycle.js';
 import { addBeforeRedraw, removeBeforeRedraw, startSyncLoop, stopStageLoop } from '../animation/frameLoops.js';
-import GLib from 'gi://GLib';
+import { MENU_ANIMATION } from '../shellVersion.js';
+import { UIManager } from '../uiManager.js';
+import { EditFrame } from './editFrame.js';
 import { parsePositions, placeAtFraction, fractionOf, sanitizeAnchor, stackAt } from './placement.js';
 import { WeatherWidget } from './weather.js';
 import { EventsWidget } from './events.js';
@@ -11,14 +16,18 @@ import { GlassClock } from './clock.js';
 export const WIDGET_IDS = ['weather', 'events', 'media'];
 
 /**
- * The glass clock and the desktop widgets. They live in the shell's
- * background group, above the wallpaper and below every window, so they are
- * hidden with the windows in the overview. Each sits at a corner or the
- * centre of the primary monitor's work area, stacked with the others there,
- * unless the user dragged it somewhere else.
+ * The glass clock and the desktop widgets, above the wallpaper and below
+ * every window, so they are hidden with the windows in the overview. Each
+ * sits at a corner or the centre of the primary monitor's work area, stacked
+ * with the others there, unless the user moved it somewhere else. A right
+ * click on one opens its menu, from which it can be moved (and the clock
+ * resized).
  */
 export class DesktopLayer {
+    _path;
     _settings;
+    _logger;
+    _openPreferences;
     _container = null;
     _items = new Map();
     _settingsIds = [];
@@ -28,10 +37,17 @@ export class DesktopLayer {
     _needsLayout = true;
     _layoutLaterId = 0;
     _env;
+    _menu = null;
+    _menuManager = null;
+    _menuGlass = null;
+    _edit = null;
 
-    constructor(path, _settings, logger) {
+    constructor(_path, _settings, _logger, _openPreferences) {
+        this._path = _path;
         this._settings = _settings;
-        this._env = { path, settings: _settings, logger, dropped: (item, x, y) => this._dropped(item, x, y) };
+        this._logger = _logger;
+        this._openPreferences = _openPreferences;
+        this._env = { path: _path, settings: _settings, logger: _logger, menu: (item, x, y) => this._openMenu(item, x, y) };
     }
 
     setup() {
@@ -63,12 +79,13 @@ export class DesktopLayer {
         }
     }
 
-    // Creates and destroys items to match the settings.
     _sync() {
         const wanted = this._wanted();
         for (const [id, item] of this._items) {
             if (wanted.includes(id))
                 continue;
+            if (this._edit?.item === item)
+                this._edit.end();
             item.destroy();
             this._items.delete(id);
         }
@@ -93,28 +110,86 @@ export class DesktopLayer {
         const container = new St.Widget({ name: 'liquid-glass-desktop', x: 0, y: 0 });
         this._container = container;
         Main.layoutManager._backgroundGroup.add_child(container);
-        const relayout = () => this._queueLayout();
+        this._restack();
+        const relayout = () => {
+            this._edit?.end();
+            this._queueLayout();
+        };
         this._signals.push({ target: Main.layoutManager, id: Main.layoutManager.connect('monitors-changed', relayout) });
         this._signals.push({ target: global.display, id: global.display.connect('workareas-changed', relayout) });
+        this._signals.push({ target: Main.overview, id: Main.overview.connect('showing', () => this._edit?.end()) });
+        // Mutter restacks the windows without telling; this runs before every
+        // frame is drawn, so the items are back in place before anyone sees them.
+        this._signals.push({ target: global.stage, id: global.stage.connect('before-update', () => this._restack()) });
         startSyncLoop(this._frameSignalSlot, this._frameSlot, {
             alive: () => !!this._container,
             honourFreeze: true,
             errorTag: 'DesktopLayer',
             step: () => this._step(),
         });
+        const menu = new PopupMenu.PopupMenu(Main.layoutManager.dummyCursor, 0, St.Side.TOP);
+        Main.layoutManager.uiGroup.add_child(menu.actor);
+        menu.actor.hide();
+        this._menu = menu;
+        this._menuManager = new PopupMenu.PopupMenuManager(container);
+        this._menuManager.addMenu(menu);
+        this._menuGlass = new UIManager(this._path, this._settings, this._logger, { menu }, false, 'enable-extra-menu-glass', 'panel-menu', 'menu:desktop', false);
+        this._menuGlass.setup();
     }
 
     _removeContainer() {
+        this._edit?.end();
         stopStageLoop(this._frameSignalSlot, this._frameSlot);
         removeBeforeRedraw(this._layoutLaterId);
         this._layoutLaterId = 0;
         for (const { target, id } of this._signals)
             target.disconnect(id);
         this._signals = [];
+        this._menuGlass?.cleanup();
+        this._menuGlass = null;
+        this._menu?.destroy();
+        this._menu = null;
+        this._menuManager = null;
         const container = this._container;
         this._container = null;
         if (container && isActorValid(container))
             container.destroy();
+    }
+
+    // The topmost window of desktop icons (DING and the like): it covers the
+    // whole desktop and would take every click meant for the items. DING hides
+    // its window from global.get_window_actors(), hence the window group.
+    _desktopWindow() {
+        let top = null;
+        for (const actor of global.window_group.get_children()) {
+            if (!(actor instanceof Meta.WindowActor))
+                continue;
+            const window = actor.get_meta_window();
+            if (window && (window.customJS_ding || window.get_window_type() === Meta.WindowType.DESKTOP))
+                top = actor;
+        }
+        return top;
+    }
+
+    // Right above the desktop icons' window when there is one, so the items
+    // get the pointer; otherwise on top of the wallpaper.
+    _restack() {
+        const container = this._container;
+        if (!container)
+            return;
+        const icons = this._desktopWindow();
+        const parent = icons ? global.window_group : Main.layoutManager._backgroundGroup;
+        if (container.get_parent() !== parent) {
+            container.get_parent()?.remove_child(container);
+            parent.add_child(container);
+        }
+        if (icons) {
+            if (container.get_previous_sibling() !== icons)
+                parent.set_child_above_sibling(container, icons);
+        }
+        else if (container.get_next_sibling()) {
+            parent.set_child_above_sibling(container, null);
+        }
     }
 
     // Lays the items out before the next frame, and makes sure there is one.
@@ -139,6 +214,7 @@ export class DesktopLayer {
             this._needsLayout = false;
             this._layout();
         }
+        this._edit?.sync();
     }
 
     _workArea() {
@@ -151,15 +227,18 @@ export class DesktopLayer {
             : sanitizeAnchor(this._settings.get_string('desktop-widgets-position'));
     }
 
-    // Places every item: where it was dragged, or stacked at its anchor.
+    // Places every item: where it was moved to, or stacked at its anchor.
     _layout() {
         const area = this._workArea();
-        const dragged = parsePositions(this._settings.get_string('desktop-item-positions'));
+        const moved = parsePositions(this._settings.get_string('desktop-item-positions'));
         const stacks = new Map();
         for (const [id, item] of this._items) {
             if (!item.shown)
                 continue;
-            const fraction = dragged[id];
+            // The frame holds the item while it is being dragged.
+            if (this._edit?.dragging && this._edit.item === item)
+                continue;
+            const fraction = moved[id];
             if (fraction) {
                 item.actor.set_position(...placeAtFraction(fraction, area, item.size()));
                 continue;
@@ -175,16 +254,69 @@ export class DesktopLayer {
         }
     }
 
-    _dropped(item, x, y) {
+    _savePosition(item, pos, size) {
         const positions = parsePositions(this._settings.get_string('desktop-item-positions'));
-        positions[item.id] = fractionOf([x, y], this._workArea(), item.size());
+        positions[item.id] = fractionOf(pos, this._workArea(), size);
         this._settings.set_string('desktop-item-positions', JSON.stringify(positions));
+    }
+
+    _resetPosition(item) {
+        const positions = parsePositions(this._settings.get_string('desktop-item-positions'));
+        delete positions[item.id];
+        this._settings.set_string('desktop-item-positions', JSON.stringify(positions));
+    }
+
+    _openMenu(item, x, y) {
+        const menu = this._menu;
+        if (!menu || this._edit)
+            return;
+        menu.removeAll();
+        const clock = item instanceof GlassClock ? item : null;
+        menu.addAction(clock ? 'Move and Resize' : 'Move', () => this._startEdit(item));
+        if (clock?.resized)
+            menu.addAction('Reset Size', () => clock.resetSize());
+        if (item.id in parsePositions(this._settings.get_string('desktop-item-positions')))
+            menu.addAction('Reset Position', () => this._resetPosition(item));
+        menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        menu.addAction('Desktop Settings', () => this._openPreferences());
+        Main.layoutManager.setDummyCursorGeometry(x, y, 0, 0);
+        menu.open(MENU_ANIMATION);
+    }
+
+    _startEdit(item) {
+        if (this._edit || !this._items.has(item.id))
+            return;
+        const clock = item instanceof GlassClock ? item : null;
+        const edit = new EditFrame(item, {
+            moved: (x, y) => this._savePosition(item, [x, y], item.size()),
+            resized: clock ? (from, to) => this._resized(clock, from, to) : undefined,
+            ended: () => {
+                if (this._edit === edit)
+                    this._edit = null;
+            },
+        });
+        this._edit = edit;
+        edit.start();
+    }
+
+    // Keeps the clock's centre where the resized frame's is, as far as the
+    // frame and the clock's shown part differ.
+    _resized(clock, from, to) {
+        const sx = to.width / from.width;
+        const sy = to.height / from.height;
+        const [w, h] = clock.size();
+        const [bx, by, bw, bh] = clock.bounds();
+        const size = [w * sx, h * sy];
+        const centre = [to.x + to.width / 2 + (w / 2 - bx - bw / 2) * sx, to.y + to.height / 2 + (h / 2 - by - bh / 2) * sy];
+        this._savePosition(clock, [centre[0] - size[0] / 2, centre[1] - size[1] / 2], size);
+        clock.resizeBy(sx, sy);
     }
 
     cleanup() {
         for (const id of this._settingsIds)
             this._settings.disconnect(id);
         this._settingsIds = [];
+        this._edit?.end();
         for (const item of this._items.values())
             item.destroy();
         this._items.clear();

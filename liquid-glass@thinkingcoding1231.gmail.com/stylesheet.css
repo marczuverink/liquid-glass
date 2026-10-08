@@ -175,6 +175,31 @@
     text-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
 }
 
+/* The frame a desktop item is moved and resized with. */
+.liquid-glass-edit-frame {
+    border: 2px solid #3584e4;
+    border-radius: 12px;
+    background-color: rgba(53, 132, 228, 0.08);
+}
+
+.liquid-glass-edit-handle {
+    border: 2px solid #3584e4;
+    border-radius: 7px;
+    background-color: #ffffff;
+}
+
+.liquid-glass-edit-done {
+    padding: 6px 18px;
+    border-radius: 99px;
+    color: #ffffff;
+    font-weight: bold;
+    background-color: #3584e4;
+}
+
+.liquid-glass-edit-done:hover {
+    background-color: #4a90e8;
+}
+
 /* The launcher: a search field and its results on one sheet of glass. */
 .liquid-glass-launcher {
     padding: 10px;

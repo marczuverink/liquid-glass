@@ -13,7 +13,7 @@ The extension source is in `liquid-glass@thinkingcoding1231.gmail.com/src`.
 | `quickSettings/toggleStyles.ts` | Toggle discovery, native theme colours, temporary styles and their timer/signal lifetime |
 | `preferences/` | Shared appearance controls, grouped settings writes and application selection; see [Preferences](preferences.md) |
 | `topBarManager.ts` | Glass under the top bar: one pill or one island per box |
-| `desktop/` | The desktop layer (placement, stacking, dragging), the glass cards of the widgets, the glass clock and the distance fields of its digits (`glassText.ts`) |
+| `desktop/` | The desktop layer (placement, stacking, the items' menu), the frame items are moved and resized with (`editFrame.ts`), the glass cards of the widgets, the glass clock and the distance fields of its digits (`glassText.ts`) |
 | `launcher/` | The search launcher and its use of the overview's search providers |
 | `adaptiveText.ts` | Adaptive text colour for surfaces that stay on screen (top bar, desktop, launcher) |
 | `liquidEffect.ts` | Clutter effect lifecycle, frame reuse and the existing interface used by managers |

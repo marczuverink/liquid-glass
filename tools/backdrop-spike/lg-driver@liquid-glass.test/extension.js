@@ -200,6 +200,17 @@ function glassRow(owner) {
   return glassRows().find(r => r.owner === owner) ?? null;
 }
 
+function findActors(root, test) {
+  const out = test(root) ? [root] : [];
+  for (const child of root.get_children())
+    out.push(...findActors(child, test));
+  return out;
+}
+
+function findActor(root, name) {
+  return findActors(root, a => a.get_name() === name)[0] ?? null;
+}
+
 function delta(a, b) {
   if (!a || !b)
     return 'n/a';
@@ -1226,6 +1237,110 @@ export default class LgDriver extends Extension {
     }
   }
 
+  // Moves and resizes the clock through its menu and edit frame, with a
+  // virtual pointer. With Desktop Icons (run-glass.sh with
+  // LG_EXTRA_EXTENSIONS=ding@rastersoft.com) the clock has to be above its window.
+  async _editClock(settings, m) {
+    const clock = findActor(global.window_group, 'liquid-glass-desktop-clock');
+    if (!clock) {
+      log('edit: no clock');
+      return;
+    }
+    // A new pointer starts in the hot corner and would open the overview.
+    new Gio.Settings({schema_id: 'org.gnome.desktop.interface'}).set_boolean('enable-hot-corners', false);
+    await sleep(300);
+    const backend = SHELL_MAJOR >= 48 ? global.stage.context.get_backend() : Clutter.get_default_backend();
+    const pointer = backend.get_default_seat().create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
+    await sleep(300);
+    if (Main.overview.visible) {
+      Main.overview.hide();
+      await sleep(1500);
+    }
+    const t = () => GLib.get_monotonic_time();
+    const move = async (x, y) => {
+      pointer.notify_absolute_motion(t(), x, y);
+      await sleep(60);
+    };
+    const click = async (x, y, button = Clutter.BUTTON_PRIMARY) => {
+      await move(x, y);
+      pointer.notify_button(t(), button, Clutter.ButtonState.PRESSED);
+      await sleep(60);
+      pointer.notify_button(t(), button, Clutter.ButtonState.RELEASED);
+      await sleep(300);
+    };
+    const drag = async ([x, y], [dx, dy]) => {
+      await move(x, y);
+      pointer.notify_button(t(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.PRESSED);
+      for (let i = 1; i <= 10; i++)
+        await move(x + dx * i / 10, y + dy * i / 10);
+      pointer.notify_button(t(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.RELEASED);
+      await sleep(300);
+    };
+    const pickChain = (x, y) => {
+      const chain = [];
+      for (let a = global.stage.get_actor_at_pos(Clutter.PickMode.REACTIVE, x, y); a; a = a.get_parent())
+        chain.push(a.get_name() || a.constructor.name);
+      return chain.slice(0, 4).join(' < ');
+    };
+    const container = clock.get_parent();
+    const below = container.get_previous_sibling();
+    log(`edit: container parent=${container.get_parent().constructor.name} ` +
+      `below=${below?.get_meta_window?.()?.get_title() ?? below?.constructor.name}`);
+
+    const [cx, cy] = clock.get_transformed_position();
+    const [cw, ch] = clock.get_transformed_size();
+    const centre = [cx + cw / 2, cy + ch * 0.7];
+    log(`edit: pick on the clock: ${pickChain(...centre)}`);
+    // A plain drag must not move it.
+    await drag(centre, [-200, 0]);
+    log(`edit: plain drag moved it by ${Math.round(clock.get_transformed_position()[0] - cx)}`);
+
+    await click(...centre, Clutter.BUTTON_SECONDARY);
+    await sleep(500);
+    const menuItems = Main.layoutManager.uiGroup.get_children()
+      .flatMap(c => findActors(c, a => a instanceof PopupMenu.PopupMenuItem && a.mapped));
+    log(`edit: menu items=${menuItems.map(i => i.label.text).join(',')}`);
+    await shot('clock-menu', [m.x, m.y, m.width, m.height]);
+    const editItem = menuItems.find(i => i.label.text === 'Move and Resize');
+    if (!editItem) return;
+    const [ix, iy] = editItem.get_transformed_position();
+    await click(ix + 20, iy + 10);
+    await sleep(500);
+    const layer = Main.layoutManager.uiGroup.get_children().find(c => c.get_name() === 'liquid-glass-edit');
+    log(`edit: frame=${!!layer} modal=${Main.modalCount}`);
+    await shot('clock-edit', [m.x, m.y, m.width, m.height]);
+    if (!layer) return;
+
+    await drag(centre, [-300, -100]);
+    await sleep(800);
+    log(`edit: moved by ${Math.round(clock.get_transformed_position()[0] - cx)},` +
+      `${Math.round(clock.get_transformed_position()[1] - cy)} positions=${settings.get_string('desktop-item-positions')}`);
+
+    // The right edge's handle, then the bottom's.
+    const handles = layer.get_children().filter(c => c.has_style_class_name('liquid-glass-edit-handle'));
+    const handleCentre = h => {
+      const [hx, hy] = h.get_transformed_position();
+      return [hx + h.width / 2, hy + h.height / 2];
+    };
+    const sizeBefore = [settings.get_int('glass-clock-size'), settings.get_double('glass-clock-stretch')];
+    await drag(handleCentre(handles[3]), [200, 0]);
+    await sleep(2500);
+    log(`edit: wider: size,stretch ${sizeBefore} -> ${settings.get_int('glass-clock-size')},` +
+      `${settings.get_double('glass-clock-stretch')}`);
+    await shot('clock-wider', [m.x, m.y, m.width, m.height]);
+    await drag(handleCentre(handles[5]), [0, 120]);
+    await sleep(2500);
+    log(`edit: taller: size,stretch ${settings.get_int('glass-clock-size')},${settings.get_double('glass-clock-stretch')}`);
+    await shot('clock-taller', [m.x, m.y, m.width, m.height]);
+
+    // A click outside ends it.
+    await click(m.x + 40, m.y + m.height - 60);
+    await sleep(500);
+    log(`edit: ended frame=${!!Main.layoutManager.uiGroup.get_children().find(c => c.get_name() === 'liquid-glass-edit')} ` +
+      `modal=${Main.modalCount}`);
+    await shot('clock-edited', [m.x, m.y, m.width, m.height]);
+  }
+
   async _featuresScenario() {
     const parts = (GLib.getenv('LG_DRV_FEATURES') ?? 'morph,topbar,widgets,clock,launcher').split(',');
     const settings = this._lgSettings();
@@ -1263,8 +1378,13 @@ export default class LgDriver extends Extension {
       }
     }
     if (parts.includes('widgets')) {
+      // A town GNOME Weather has no location for.
+      settings.set_value('weather-place', new GLib.Variant('(sdd)', ['喜多方市', 37.65, 139.86667]));
       settings.set_boolean('enable-desktop-widgets', true);
-      await sleep(4000);
+      await sleep(8000);
+      const weather = findActor(global.window_group, 'liquid-glass-desktop-weather');
+      const texts = weather ? findActors(weather, a => a instanceof St.Label).map(l => l.text).filter(Boolean) : [];
+      log(`weather: ${texts.join(' | ').replace(/\n/g, ' / ')}`);
       await shot('widgets', [m.x, m.y, m.width, m.height]);
     }
     if (parts.includes('clock')) {
@@ -1276,49 +1396,7 @@ export default class LgDriver extends Extension {
         await sleep(1500);
         await shot(`clock-${position}`, [m.x, m.y, m.width, m.height]);
       }
-      // Drags the clock 300 px left with a virtual pointer.
-      const clock = Main.layoutManager._backgroundGroup.get_children()
-        .flatMap(c => c.get_children()).find(a => a.get_name() === 'liquid-glass-desktop-clock');
-      if (clock) {
-        // A new pointer starts in the hot corner and would open the overview.
-        new Gio.Settings({schema_id: 'org.gnome.desktop.interface'}).set_boolean('enable-hot-corners', false);
-        await sleep(300);
-        const backend = SHELL_MAJOR >= 48 ? global.stage.context.get_backend() : Clutter.get_default_backend();
-        const seat = backend.get_default_seat();
-        const pointer = seat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
-        await sleep(300);
-        if (Main.overview.visible) {
-          Main.overview.hide();
-          await sleep(1500);
-        }
-        const [cx, cy] = clock.get_transformed_position();
-        const [cw, ch] = clock.get_transformed_size();
-        const t = () => GLib.get_monotonic_time();
-        const x = cx + cw / 2, y = cy + ch * 0.7;
-        pointer.notify_absolute_motion(t(), x, y);
-        await sleep(200);
-        const picked = global.stage.get_actor_at_pos(Clutter.PickMode.REACTIVE, x, y);
-        const [px, py] = global.get_pointer();
-        const chain = [];
-        for (let a = picked; a; a = a.get_parent())
-          chain.push(`${a.get_name() ?? ''}:${a.constructor.name}`);
-        log(`clock pick at ${Math.round(x)},${Math.round(y)}: ${chain.join(' < ')} pointer=${px},${py}`);
-        const og = Main.layoutManager.overviewGroup;
-        log(`overview visible=${Main.overview.visible} group visible=${og.visible} mapped=${og.mapped} ` +
-          `children=${og.get_children().map(c => `${c.get_name()}:${c.constructor.name}:${c.visible}:${c.reactive}`).join(',')} ` +
-          `windowGroup visible=${global.window_group.visible} clock mapped=${clock.mapped} reactive=${clock.reactive}`);
-        clock.connect('button-press-event', () => { log('clock got press'); return false; });
-        pointer.notify_button(t(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.PRESSED);
-        for (let i = 1; i <= 10; i++) {
-          await sleep(30);
-          pointer.notify_absolute_motion(t(), x - i * 30, y);
-        }
-        pointer.notify_button(t(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.RELEASED);
-        await sleep(1000);
-        log(`clock dragged from ${Math.round(cx)} to ${Math.round(clock.get_transformed_position()[0])} ` +
-          `positions=${settings.get_string('desktop-item-positions')}`);
-        await shot('clock-dragged', [m.x, m.y, m.width, m.height]);
-      }
+      await this._editClock(settings, m);
     }
     if (parts.includes('launcher')) {
       settings.set_boolean('enable-launcher', true);

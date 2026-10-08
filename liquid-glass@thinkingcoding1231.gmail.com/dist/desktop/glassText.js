@@ -194,17 +194,18 @@ function layoutFor(cr, font, text) {
     return layout;
 }
 
-// Draws `text` into a temporary PNG and reads its coverage back, with `margin`
-// px of room around it. The coverage is in whole blocks of SUPERSAMPLE.
-async function rasterize(font, text, margin, cancellable) {
+// Draws `text` stretched `stretch` times as wide into a temporary PNG and reads
+// its coverage back, with `margin` px of room around it. The coverage is in
+// whole blocks of SUPERSAMPLE.
+async function rasterize(font, text, stretch, margin, cancellable) {
     const probe = new Cairo.ImageSurface(Cairo.Format.ARGB32, 1, 1);
     const probeCr = new Cairo.Context(probe);
     const b = bounds(layoutFor(probeCr, font, text));
     probeCr.$dispose();
     probe.finish();
-    const x0 = b.x0 - margin;
+    const x0 = Math.floor(b.x0 * stretch) - margin;
     const y0 = b.y0 - margin;
-    const x1 = b.x1 + margin;
+    const x1 = Math.ceil(b.x1 * stretch) + margin;
     const y1 = b.y1 + margin;
     // Whole blocks of SUPERSAMPLE, so the downscaled field keeps its origin.
     const ax = x0 - ((x0 % SUPERSAMPLE) + SUPERSAMPLE) % SUPERSAMPLE;
@@ -214,7 +215,8 @@ async function rasterize(font, text, margin, cancellable) {
     const surface = new Cairo.ImageSurface(Cairo.Format.ARGB32, width, height);
     const cr = new Cairo.Context(surface);
     cr.setSourceRGBA(1, 1, 1, 1);
-    cr.moveTo(-ax, -ay);
+    cr.translate(-ax, -ay);
+    cr.scale(stretch, 1);
     PangoCairo.show_layout(cr, layoutFor(cr, font, text));
     cr.$dispose();
     const [fd, path] = GLib.file_open_tmp('liquid-glass-glyph-XXXXXX.png');
@@ -225,7 +227,6 @@ async function rasterize(font, text, margin, cancellable) {
         surface.finish();
         const bytes = await new Promise((resolve, reject) => {
             file.load_contents_async(cancellable, (_f, res) => {
-                // Throws a GError when the file cannot be read or the read was cancelled.
                 try {
                     resolve(file.load_contents_finish(res)[1]);
                 }
@@ -249,29 +250,34 @@ async function rasterize(font, text, margin, cancellable) {
 }
 
 /**
- * Distance fields of single glyphs in one font, built on first use. `range`
- * is how far (px) from the outline the fields reach.
+ * Distance fields of single glyphs in one font, stretched `stretch` times as
+ * wide, built on first use. `range` is how far (px) from the outline the
+ * fields reach.
  */
 export class GlyphFields {
+    size;
     range;
+    stretch;
     _glyphs = new Map();
     // Cancels the reads still running when the fields are no longer wanted.
     cancellable = new Gio.Cancellable();
     _font;
     _bigFont;
 
-    constructor(fontDescription, sizePx, range) {
+    constructor(fontDescription, size, range, stretch = 1) {
+        this.size = size;
         this.range = range;
+        this.stretch = stretch;
         this._font = Pango.FontDescription.from_string(fontDescription);
-        this._font.set_absolute_size(sizePx * Pango.SCALE);
+        this._font.set_absolute_size(size * Pango.SCALE);
         this._bigFont = this._font.copy();
-        this._bigFont.set_absolute_size(sizePx * SUPERSAMPLE * Pango.SCALE);
+        this._bigFont.set_absolute_size(size * SUPERSAMPLE * Pango.SCALE);
     }
 
     _glyph(ch) {
         let glyph = this._glyphs.get(ch);
         if (!glyph) {
-            glyph = rasterize(this._bigFont, ch, this.range * SUPERSAMPLE, this.cancellable).then(big => {
+            glyph = rasterize(this._bigFont, ch, this.stretch, this.range * SUPERSAMPLE, this.cancellable).then(big => {
                 const field = downsample({ data: signedDistances(big.alpha, big.width, big.height),
                     width: big.width, height: big.height }, SUPERSAMPLE);
                 return { ...field, originX: big.originX / SUPERSAMPLE, originY: big.originY / SUPERSAMPLE };
@@ -299,9 +305,9 @@ export class GlyphFields {
         const layout = layoutFor(probeCr, this._font, text);
         const b = bounds(layout);
         const r = this.range;
-        const x0 = b.x0 - r;
+        const x0 = Math.floor(b.x0 * this.stretch) - r;
         const y0 = b.y0 - r;
-        const width = b.x1 + r - x0;
+        const width = Math.ceil(b.x1 * this.stretch) + r - x0;
         const height = b.y1 + r - y0;
         const data = new Float32Array(width * height).fill(r);
         // Pango indexes the text by UTF-8 byte.
@@ -313,7 +319,7 @@ export class GlyphFields {
             const glyph = glyphs.get(ch);
             if (!glyph)
                 continue;
-            const left = Math.round(pos.x / Pango.SCALE - glyph.originX - x0);
+            const left = Math.round(pos.x / Pango.SCALE * this.stretch - glyph.originX - x0);
             const top = Math.round(-glyph.originY - y0);
             for (let gy = 0; gy < glyph.height; gy++) {
                 const y = top + gy;

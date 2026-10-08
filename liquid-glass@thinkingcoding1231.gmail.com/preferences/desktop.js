@@ -1,6 +1,13 @@
 import Adw from 'gi://Adw';
+import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk';
 import Pango from 'gi://Pango';
+import Soup from 'gi://Soup?version=3.0';
+
+const GEOCODING = 'https://geocoding-api.open-meteo.com/v1/search';
+const USER_AGENT = 'Liquid Glass GNOME Shell extension (https://github.com/ryohsuke1231/liquid-glass)';
+const MAX_PLACES = 8;
 
 const PLACES = [
   ['top-left', 'Top left'],
@@ -11,12 +18,12 @@ const PLACES = [
 ];
 
 const WIDGETS = [
-  ['weather', 'Weather', 'From GNOME Weather, or Open-Meteo for the location below'],
+  ['weather', 'Weather', 'For the place below, or the location set in GNOME Weather'],
   ['events', 'Up next', 'The rest of today and tomorrow from your calendars'],
   ['media', 'Now playing', 'Shown while a music or video player is running'],
 ];
 
-function draggedPositions(settings) {
+function movedPositions(settings) {
   try {
     return JSON.parse(settings.get_value('desktop-item-positions').deep_unpack()) ?? {};
   } catch {
@@ -24,30 +31,30 @@ function draggedPositions(settings) {
   }
 }
 
-// A place on the desktop for `key`. The item `id` may have been dragged
+// A place on the desktop for `key`. The item `id` may have been moved
 // elsewhere, which the row reports; picking a place puts it back there.
 function placeRow(group, controls, title, key, id) {
   const settings = controls.settings;
   const row = new Adw.ComboRow({title,
-    model: Gtk.StringList.new([...PLACES.map(([, name]) => name), 'Where it was dragged'])});
+    model: Gtk.StringList.new([...PLACES.map(([, name]) => name), 'Where it was moved'])});
   group.add(row);
   let syncing = false;
   const refresh = () => {
     syncing = true;
-    const dragged = id ? id in draggedPositions(settings)
-      : Object.keys(draggedPositions(settings)).some(item => item !== 'clock');
+    const moved = id ? id in movedPositions(settings)
+      : Object.keys(movedPositions(settings)).some(item => item !== 'clock');
     const index = PLACES.findIndex(([value]) => value === settings.get_value(key).deep_unpack());
-    row.selected = dragged ? PLACES.length : Math.max(index, 0);
+    row.selected = moved ? PLACES.length : Math.max(index, 0);
     syncing = false;
   };
   row.connect('notify::selected', () => {
     if (syncing) return;
-    // "Where it was dragged" only reports; it cannot be picked.
+    // "Where it was moved" only reports; it cannot be picked.
     if (row.selected >= PLACES.length) {
       refresh();
       return;
     }
-    const positions = draggedPositions(settings);
+    const positions = movedPositions(settings);
     for (const item of Object.keys(positions)) {
       if (id ? item === id : item !== 'clock') delete positions[item];
     }
@@ -100,12 +107,116 @@ function entryRow(group, controls, title, key, {read = v => v, write = v => v, v
   return row;
 }
 
+// The interface's language, as Open-Meteo takes it for place names.
+function language() {
+  const code = (GLib.get_language_names()[0] ?? 'en').split(/[_.@]/)[0];
+  return code === 'C' || code === 'POSIX' ? 'en' : code;
+}
+
+// Open-Meteo matches names in the language it is asked for, so a name
+// typed in another script is looked up again in the languages written in it.
+const SCRIPTS = [[/[\u3040-\u30ff]/, ['ja']], [/[\u4e00-\u9fff]/, ['ja', 'zh']], [/[\uac00-\ud7af]/, ['ko']],
+  [/[\u0400-\u04ff]/, ['ru', 'uk']]];
+
+async function searchPlaces(session, text, cancellable) {
+  const tried = new Set();
+  for (const lang of [language(), ...SCRIPTS.filter(([script]) => script.test(text)).flatMap(([, langs]) => langs)]) {
+    if (tried.has(lang)) continue;
+    tried.add(lang);
+    const places = await searchPlacesIn(session, text, lang, cancellable);
+    if (places.length > 0) return places;
+  }
+  return [];
+}
+
+function searchPlacesIn(session, text, lang, cancellable) {
+  const message = Soup.Message.new('GET', `${GEOCODING}?format=json&count=${MAX_PLACES}` +
+    `&language=${lang}&name=${encodeURIComponent(text)}`);
+  return new Promise((resolve, reject) => {
+    session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, cancellable, (_session, res) => {
+      try {
+        const bytes = session.send_and_read_finish(res);
+        if (message.get_status() !== Soup.Status.OK) throw new Error(`HTTP ${message.get_status()}`);
+        resolve(JSON.parse(new TextDecoder().decode(bytes.get_data())).results ?? []);
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+}
+
+// The weather widget's place: a town or city looked up by name, down to the
+// smallest ones (GNOME Weather knows only the larger cities).
+function weatherPlaceRows(group, controls) {
+  const settings = controls.settings;
+  const hasWeather = Gio.AppInfo.get_all().some(app => app.get_id() === 'org.gnome.Weather.desktop');
+  const current = new Adw.ActionRow({title: 'Weather place'});
+  const reset = new Gtk.Button({icon_name: 'edit-undo-symbolic', valign: Gtk.Align.CENTER, css_classes: ['flat'],
+    tooltip_text: hasWeather ? 'Use the location set in GNOME Weather' : 'Forget the place'});
+  current.add_suffix(reset);
+  group.add(current);
+  const search = new Adw.EntryRow({title: 'Search for a city or town', show_apply_button: true});
+  group.add(search);
+
+  controls.watch(['weather-place'], () => {
+    const [name] = settings.get_value('weather-place').deep_unpack();
+    current.subtitle = name || (hasWeather ? 'The location set in GNOME Weather' : 'None');
+    reset.sensitive = name !== '';
+  });
+  reset.connect('clicked', () => controls.write({'weather-place': ['', 0, 0]}));
+
+  let found = [];
+  let session = null;
+  let cancellable = null;
+  const showFound = rows => {
+    for (const row of found) group.remove(row);
+    found = rows;
+    for (const row of rows) group.add(row);
+  };
+  const run = async text => {
+    cancellable?.cancel();
+    showFound([]);
+    if (!text) return;
+    cancellable = new Gio.Cancellable();
+    session ??= new Soup.Session({user_agent: USER_AGENT, timeout: 20});
+    let places;
+    try {
+      places = await searchPlaces(session, text, cancellable);
+    } catch (error) {
+      if (error instanceof GLib.Error && error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED)) return;
+      showFound([new Adw.ActionRow({title: 'The search failed', subtitle: String(error.message ?? error)})]);
+      return;
+    }
+    if (places.length === 0) {
+      showFound([new Adw.ActionRow({title: `Nothing called “${text}” was found`})]);
+      return;
+    }
+    showFound(places.map(place => {
+      const row = new Adw.ActionRow({title: place.name, activatable: true,
+        subtitle: [place.admin2 !== place.name ? place.admin2 : '', place.admin1, place.country].filter(Boolean).join(', ')});
+      row.connect('activated', () => {
+        controls.write({'weather-place': [place.name, place.latitude, place.longitude]});
+        search.text = '';
+        showFound([]);
+      });
+      return row;
+    }));
+  };
+  search.connect('apply', () => {
+    run(search.text.trim());
+  });
+  group.connect('destroy', () => cancellable?.cancel());
+  return [current, search];
+}
+
 function addClock(page, controls) {
-  const group = controls.group(page, 'Glass clock', 'A large clock whose digits are glass. Drag it to move it.');
+  const group = controls.group(page, 'Glass clock',
+    'A large clock whose digits are glass. Right-click it to move or resize it.');
   const show = controls.toggle(group, 'Show the clock', 'enable-glass-clock');
   const rows = [
     placeRow(group, controls, 'Place', 'glass-clock-position', 'clock'),
     controls.number(group, 'Size', ['glass-clock-size'], 48, 480, 1, '', {slider: true}),
+    controls.number(group, 'Width', ['glass-clock-stretch'], 0.3, 4, 0.01, '', {slider: true}),
     controls.choice(group, 'Time format', [
       {title: 'As in Settings', patch: {'glass-clock-format': 'system'}},
       {title: '24-hour', patch: {'glass-clock-format': '24h'}},
@@ -124,7 +235,7 @@ function addClock(page, controls) {
 function addWidgets(page, controls) {
   const settings = controls.settings;
   const group = controls.group(page, 'Widgets',
-    'Cards of glass on the desktop, below the windows. Drag one to move it.');
+    'Cards of glass on the desktop, below the windows. Right-click one to move it.');
   const show = controls.toggle(group, 'Show widgets', 'enable-desktop-widgets');
   const rows = [];
   for (const [id, title, subtitle] of WIDGETS) {
@@ -146,12 +257,12 @@ function addWidgets(page, controls) {
     rows.push(row);
   }
   rows.push(placeRow(group, controls, 'Place', 'desktop-widgets-position', null));
-  rows.push(entryRow(group, controls, 'Weather location without GNOME Weather', 'weather-location'));
   rows.push(controls.choice(group, 'Temperature', [
     {title: 'Automatic', patch: {'weather-temperature-unit': 'auto'}},
     {title: 'Celsius', patch: {'weather-temperature-unit': 'celsius'}},
     {title: 'Fahrenheit', patch: {'weather-temperature-unit': 'fahrenheit'}},
   ], '', false));
+  rows.push(...weatherPlaceRows(group, controls));
   controls.watch(['enable-desktop-widgets'], () => {
     for (const row of rows) row.sensitive = show.active;
   });

@@ -11,56 +11,36 @@ import { verticalBoxParams } from '../shellVersion.js';
 const SHADER_PADDING = 20;
 // Room around a card for its shadow.
 const SHADOW_MARGIN = 40;
-// How far the pointer moves before a press becomes a drag, px.
-const DRAG_THRESHOLD = 6;
+// A press that moves further than this (px) before it is let go is no click.
+const CLICK_SLOP = 6;
 
 /**
- * Makes `actor` draggable: a press that moves further than a few pixels
- * drags it, anything else is a click.
+ * A left click on `actor` calls `onClick` and a right click opens its menu.
+ * Items move only in the menu's edit mode, so a stray drag does nothing.
  */
-export function makeDraggable(actor, onDrop, onClick) {
-    let grab = null;
+export function connectClicks(actor, onClick, onMenu) {
     let start = null;
-    let origin = [0, 0];
-    let dragging = false;
-    const end = () => {
-        grab?.dismiss();
-        grab = null;
-        start = null;
-    };
     actor.connect('button-press-event', (_a, event) => {
-        if (event.get_button() !== Clutter.BUTTON_PRIMARY)
+        const button = event.get_button();
+        if (button === Clutter.BUTTON_SECONDARY) {
+            onMenu(...event.get_coords());
+            return Clutter.EVENT_STOP;
+        }
+        if (button !== Clutter.BUTTON_PRIMARY)
             return Clutter.EVENT_PROPAGATE;
         start = event.get_coords();
-        origin = [actor.x, actor.y];
-        dragging = false;
-        grab = global.stage.grab(actor);
-        return Clutter.EVENT_STOP;
-    });
-    actor.connect('motion-event', (_a, event) => {
-        if (!start)
-            return Clutter.EVENT_PROPAGATE;
-        const [x, y] = event.get_coords();
-        const dx = x - start[0], dy = y - start[1];
-        if (!dragging && Math.hypot(dx, dy) < DRAG_THRESHOLD)
-            return Clutter.EVENT_STOP;
-        dragging = true;
-        actor.set_position(Math.round(origin[0] + dx), Math.round(origin[1] + dy));
         return Clutter.EVENT_STOP;
     });
     actor.connect('button-release-event', (_a, event) => {
         if (!start || event.get_button() !== Clutter.BUTTON_PRIMARY)
             return Clutter.EVENT_PROPAGATE;
-        const wasDragging = dragging;
-        end();
-        if (wasDragging)
-            onDrop(actor.x, actor.y);
-        else
+        const [x, y] = event.get_coords();
+        const moved = Math.hypot(x - start[0], y - start[1]);
+        start = null;
+        if (moved < CLICK_SLOP)
             onClick();
         return Clutter.EVENT_STOP;
     });
-    // A grab lost to a modal dialog ends the drag where it is.
-    actor.connect('destroy', end);
 }
 
 /**
@@ -92,7 +72,7 @@ export class GlassCard {
         this.actor.add_child(this.glass);
         this.box = new St.BoxLayout({ style_class: 'liquid-glass-desktop-card', width, ...verticalBoxParams() });
         this.actor.add_child(this.box);
-        makeDraggable(this.actor, (x, y) => env.dropped(this, x, y), () => this.activate());
+        connectClicks(this.actor, () => this.activate(), (x, y) => env.menu(this, x, y));
         this._text = new AdaptiveTextColor(() => [this.box], () => [this.glass], env.logger, `desktop ${id}`);
         const watch = (key, fn) => this._settingsIds.push(env.settings.connect(`changed::${key}`, fn));
         for (const key of ['tint-color', 'tint-strength', 'blur-radius', 'corner-radius', 'brightness', 'contrast', 'saturation'])
@@ -103,7 +83,6 @@ export class GlassCard {
         this._syncText();
     }
 
-    // A click on the card.
     activate() {
     }
 
@@ -138,6 +117,10 @@ export class GlassCard {
         const [, natW] = this.box.get_preferred_width(-1);
         const [, natH] = this.box.get_preferred_height(natW);
         return [Math.ceil(Math.max(natW, this.box.width)), Math.ceil(natH)];
+    }
+
+    bounds() {
+        return [0, 0, ...this.size()];
     }
 
     sync() {

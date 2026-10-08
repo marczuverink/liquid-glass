@@ -113,3 +113,30 @@ test('a vertical box uses orientation from GNOME 48 on and vertical before', () 
   assert.deepEqual(shellVersion('48.0', { Clutter }).verticalBoxParams(), { orientation: 1 });
   assert.deepEqual(shellVersion('51.0', { Clutter }).verticalBoxParams(), { orientation: 1 });
 });
+
+test('a menu opens animated with {animate} from GNOME 51 on and PopupAnimation.FULL before', () => {
+  assert.equal(shellVersion('46.0').MENU_ANIMATION, ~0);
+  assert.equal(shellVersion('50.1').MENU_ANIMATION, ~0);
+  assert.deepEqual(shellVersion('51.0').MENU_ANIMATION, { animate: true });
+});
+
+test('a hover cursor is the actor\'s own from GNOME 50 on and the display\'s before', () => {
+  const Clutter = { CursorType: { E_RESIZE: 'clutter-e', MOVE: 'clutter-move' }, EVENT_PROPAGATE: false };
+  const Meta = { Cursor: { EAST_RESIZE: 'meta-e', MOVE_OR_RESIZE_WINDOW: 'meta-move', DEFAULT: 'meta-default' } };
+  for (const version of ['50.1', '51.0']) {
+    const actor = { set_cursor_type(type) { this.type = type; }, connect: () => assert.fail('no signals needed') };
+    shellVersion(version, { Clutter, Meta }).setHoverCursor(actor, 'e');
+    assert.equal(actor.type, 'clutter-e', version);
+  }
+  for (const version of ['46.0', '49.4']) {
+    const set = [];
+    const handlers = {};
+    const actor = { connect: (signal, fn) => { handlers[signal] = fn; } };
+    const v = shellVersion(version, { Clutter, Meta, global: { display: { set_cursor: c => set.push(c) } } });
+    v.setHoverCursor(actor, 'move');
+    handlers['enter-event']();
+    handlers['leave-event']();
+    v.resetHoverCursor();
+    assert.deepEqual(set, ['meta-move', 'meta-default', 'meta-default'], version);
+  }
+});

@@ -50,7 +50,7 @@ export default class LiquidGlassExtension extends Extension {
     this._topBarManager = new TopBarManager(path, this._settings, this._logger);
     this._topBarManager.setup();
 
-    this._desktopLayer = new DesktopLayer(path, this._settings, this._logger);
+    this._desktopLayer = new DesktopLayer(path, this._settings, this._logger, () => this.openPreferences());
     this._desktopLayer.setup();
 
     this._launcher = new Launcher(path, this._settings, this._logger);
