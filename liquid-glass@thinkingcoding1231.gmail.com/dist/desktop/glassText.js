@@ -277,6 +277,14 @@ const BEND_HALF = 0.12;
 // FLAT_START + FLAT_HALF.
 const FLAT_START = 1.5;
 const FLAT_HALF = 1;
+// An edge that moves at least this many px across per row is slanted, and one
+// that bends less than this (as BEND_HALF measures it) is straight. A straight
+// slanted edge stays straight only if every row it passes through grows by the
+// same amount.
+const SLANT_MIN = 0.08;
+const STRAIGHT_MAX = 0.04;
+// How far (px) an edge may move from one row to the next and still be the same edge.
+const EDGE_STEP_MAX = 4;
 // A row whose longest stroke is this many times the glyph's usual stroke runs
 // along a horizontal one (a bar, the top of a bowl), whose thickness is kept.
 const BAR_START = 1.4;
@@ -302,6 +310,62 @@ function rowEdges(alpha, w, y) {
         prev = a;
     }
     return edges;
+}
+
+// The rows [first, last] that each straight slanted edge passes through,
+// given every row's edges (see rowEdges()). An edge is followed from row to
+// row by its nearest match on the next one, so other strokes starting or
+// ending beside it do not break it.
+function slantedSpans(edges, reach) {
+    const chains = [];
+    let open = [];
+    for (let r = 0; r < edges.length; r++) {
+        const next = [];
+        const taken = new Set();
+        for (const edge of edges[r]) {
+            const x = Math.abs(edge);
+            let best = -1;
+            open.forEach((o, i) => {
+                if (taken.has(i) || Math.sign(o.edge) !== Math.sign(edge))
+                    return;
+                const dx = Math.abs(Math.abs(o.edge) - x);
+                if (dx <= EDGE_STEP_MAX && (best < 0 || dx < Math.abs(Math.abs(open[best].edge) - x)))
+                    best = i;
+            });
+            let chain;
+            if (best >= 0) {
+                taken.add(best);
+                chain = open[best].chain;
+                chain.xs.push(x);
+            }
+            else {
+                chain = { start: r, xs: [x] };
+                chains.push(chain);
+            }
+            next.push({ chain, edge });
+        }
+        open = next;
+    }
+    const spans = [];
+    for (const { start, xs } of chains) {
+        let run = -1;
+        for (let i = 0; i <= xs.length; i++) {
+            let straight = false;
+            if (i >= reach && i + reach < xs.length) {
+                const up = (xs[i] - xs[i - reach]) / reach, down = (xs[i + reach] - xs[i]) / reach;
+                straight = Math.abs(up + down) / 2 >= SLANT_MIN && Math.abs(down - up) <= STRAIGHT_MAX;
+            }
+            if (straight && run < 0)
+                run = i;
+            if (!straight && run >= 0) {
+                // The bend is measured `reach` rows each way, so the straight part
+                // reaches that much further than the rows that pass.
+                spans.push([start + Math.max(run - reach, 0), start + Math.min(i - 1 + reach, xs.length - 1)]);
+                run = -1;
+            }
+        }
+    }
+    return spans;
 }
 
 /**
@@ -364,8 +428,34 @@ export function rowShares(alpha, w, top, bottom) {
             weight += g;
         }
         shares[r] = sum / weight + SHARE_FLOOR;
-        total += shares[r];
     }
+    // Rows a straight slanted edge passes through all grow alike, so it stays
+    // straight; edges that cross each other's rows share one rate.
+    const groups = slantedSpans(edges, reach).sort((a, b) => a[0] - b[0]);
+    let group = null;
+    const even = ([first, last]) => {
+        if (last <= first)
+            return;
+        let sum = 0;
+        for (let r = first; r < last; r++)
+            sum += shares[r];
+        for (let r = first; r < last; r++)
+            shares[r] = sum / (last - first);
+    };
+    for (const span of groups) {
+        if (group && span[0] < group[1]) {
+            group[1] = Math.max(group[1], span[1]);
+        }
+        else {
+            if (group)
+                even(group);
+            group = [span[0], span[1]];
+        }
+    }
+    if (group)
+        even(group);
+    for (let r = 0; r < n; r++)
+        total += shares[r];
     for (let r = 0; r < n; r++)
         shares[r] /= total;
     return shares;

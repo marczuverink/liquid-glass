@@ -138,3 +138,37 @@ test('a band that starts and ends between rows is taken to the nearest rows', ()
   const tall = glyphs.tallen(alpha, w, h, 9.6, 30.4, 10);
   assert.equal(coveredRows(tall, w, h + 10, 10).length, 31);
 });
+
+test('a slanted straight stroke stays straight when the glyph grows, whatever starts beside it', () => {
+  // A 4 whose stem starts halfway down its diagonal, as in condensed fonts.
+  const [w, h] = [70, 100];
+  const alpha = coverage(w, h, (x, y) => {
+    const stem = x >= 39.5 && x < 49.5 && y >= 34.5 && y < 89.5;
+    const bar = x >= 9.5 && x < 59.5 && y >= 59.5 && y < 69.5;
+    const left = 40 - (y - 10) * 0.6;
+    const diagonal = y >= 9.5 && y < 60 && x >= left && x < left + 12;
+    return stem || bar || diagonal;
+  });
+  const extra = 40;
+  const tall = glyphs.tallen(alpha, w, h, 10, 90, extra);
+  // The diagonal's left edge, row by row, to a fraction of a pixel.
+  const xs = [], ys = [];
+  for (let y = 0; y < h + extra; y++) {
+    for (let x = 1; x < 39; x++) {
+      const a = tall[y * w + x - 1], b = tall[y * w + x];
+      if (a < 128 && b >= 128) {
+        xs.push(x - 1 + (127.5 - a) / (b - a));
+        ys.push(y);
+        break;
+      }
+    }
+  }
+  // Away from its ends, where it meets the stem's top and the bar.
+  const pts = xs.map((x, i) => [ys[i], x]).filter(([y]) => y > ys[0] + 6 && y < 60 + extra * 0.4);
+  assert.ok(pts.length > 30, `only ${pts.length} rows of the diagonal`);
+  const n = pts.length;
+  const my = pts.reduce((s, [y]) => s + y, 0) / n, mx = pts.reduce((s, [, x]) => s + x, 0) / n;
+  const slope = pts.reduce((s, [y, x]) => s + (y - my) * (x - mx), 0) / pts.reduce((s, [y]) => s + (y - my) ** 2, 0);
+  const worst = Math.max(...pts.map(([y, x]) => Math.abs(mx + slope * (y - my) - x)));
+  assert.ok(worst < 0.5, `the diagonal strays ${worst.toFixed(2)} px from a straight line`);
+});
