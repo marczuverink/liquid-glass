@@ -217,6 +217,8 @@ function addClock(page, controls) {
     placeRow(group, controls, 'Place', 'glass-clock-position', 'clock'),
     controls.number(group, 'Size', ['glass-clock-size'], 48, 480, 1, '', {slider: true}),
     controls.number(group, 'Width', ['glass-clock-stretch'], 0.3, 4, 0.01, '', {slider: true}),
+    controls.number(group, 'Height', ['glass-clock-height'], 1, 3, 0.01,
+      'Lengthens the straight upright strokes; curves keep their shape', {slider: true}),
     controls.choice(group, 'Time format', [
       {title: 'As in Settings', patch: {'glass-clock-format': 'system'}},
       {title: '24-hour', patch: {'glass-clock-format': '24h'}},

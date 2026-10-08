@@ -93,66 +93,277 @@ export function decodePngAlpha(png) {
     return { alpha, width, height };
 }
 
-// Distance transform (Felzenszwalb and Huttenlocher), squared distances
+// Distance transform
 const INF = 1e20;
 
-function transform1d(f, n, d, v, z) {
-    let k = 0;
-    v[0] = 0;
-    z[0] = -INF;
-    z[1] = INF;
-    for (let q = 1; q < n; q++) {
-        let s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
-        while (s <= z[k]) {
-            k--;
-            s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
-        }
-        k++;
-        v[k] = q;
-        z[k] = s;
-        z[k + 1] = INF;
-    }
-    k = 0;
-    for (let q = 0; q < n; q++) {
-        while (z[k + 1] < q)
-            k++;
-        d[q] = (q - v[k]) * (q - v[k]) + f[v[k]];
-    }
+// How far (px) the edge is from a pixel's centre, positive when the centre is
+// outside, from its coverage `a` (0 to 1) and the coverage's gradient: the
+// edge is taken to be straight across the pixel (Gustavson's anti-aliased
+// distance transform).
+function edgeOffset(gx, gy, a) {
+    if (gx === 0 || gy === 0)
+        return 0.5 - a;
+    const len = Math.hypot(gx, gy);
+    let x = Math.abs(gx) / len, y = Math.abs(gy) / len;
+    if (x < y)
+        [x, y] = [y, x];
+    const a1 = 0.5 * y / x;
+    if (a < a1)
+        return 0.5 * (x + y) - Math.sqrt(2 * x * y * a);
+    if (a < 1 - a1)
+        return (0.5 - a) * x;
+    return -0.5 * (x + y) + Math.sqrt(2 * x * y * (1 - a));
 }
 
-// Squared distance from every pixel to the nearest pixel where `feature` is set.
-function squaredDistances(feature, w, h) {
-    const grid = new Float64Array(w * h);
-    for (let i = 0; i < w * h; i++)
-        grid[i] = feature(i) ? 0 : INF;
-    const n = Math.max(w, h);
-    const f = new Float64Array(n), d = new Float64Array(n), z = new Float64Array(n + 1);
-    const v = new Int32Array(n);
-    for (let x = 0; x < w; x++) {
-        for (let y = 0; y < h; y++)
-            f[y] = grid[y * w + x];
-        transform1d(f, h, d, v, z);
-        for (let y = 0; y < h; y++)
-            grid[y * w + x] = d[y];
-    }
-    for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++)
-            f[x] = grid[y * w + x];
-        transform1d(f, w, d, v, z);
-        for (let x = 0; x < w; x++)
-            grid[y * w + x] = d[x];
-    }
-    return grid;
-}
-
-/** Signed distances (px, negative inside) from coverage, with pixel centres on the edge at half coverage. */
+/**
+ * Signed distances (px, negative inside) from coverage (0-255). Every pixel
+ * the outline crosses gets the short piece of edge that crosses it, placed to
+ * a fraction of a pixel from its coverage; every other pixel takes the
+ * nearest of those pieces from its neighbours. Distances to pixel centres
+ * instead would follow the pixels' staircase, which the glass shows as facets
+ * along a curve.
+ */
 export function signedDistances(alpha, w, h) {
-    const inside = (i) => alpha[i] >= 128;
-    const toInside = squaredDistances(inside, w, h);
-    const toOutside = squaredDistances(i => !inside(i), w, h);
+    const n = w * h;
+    const cov = new Float32Array(n);
+    for (let i = 0; i < n; i++)
+        cov[i] = alpha[i] / 255;
+    const at = (x, y) => cov[Math.min(Math.max(y, 0), h - 1) * w + Math.min(Math.max(x, 0), w - 1)];
+    // Each piece of edge: its middle, its normal (into the glyph) and half its length.
+    const ex = new Float32Array(n);
+    const ey = new Float32Array(n);
+    const nx = new Float32Array(n);
+    const ny = new Float32Array(n);
+    const half = new Float32Array(n);
+    const nearest = new Int32Array(n).fill(-1);
+    const dist2 = new Float32Array(n).fill(INF);
+    const squaredDistanceTo = (x, y, e) => {
+        const dx = x - ex[e], dy = y - ey[e];
+        const across = dx * nx[e] + dy * ny[e];
+        const along = Math.max(Math.abs(dy * nx[e] - dx * ny[e]) - half[e], 0);
+        return across * across + along * along;
+    };
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            const i = y * w + x;
+            const a = cov[i];
+            // The edge runs through this pixel, or right between it and a neighbour
+            // covered the other way. A whole pixel next to a partly covered one
+            // says little about where the edge is; the partly covered one does.
+            const other = 1 - a;
+            const crossed = (a > 0 && a < 1) || (x > 0 && cov[i - 1] === other) || (x < w - 1 && cov[i + 1] === other) ||
+                (y > 0 && cov[i - w] === other) || (y < h - 1 && cov[i + w] === other);
+            if (!crossed)
+                continue;
+            // Sobel, pointing into the glyph.
+            const gx = at(x + 1, y - 1) + 2 * at(x + 1, y) + at(x + 1, y + 1) - at(x - 1, y - 1) - 2 * at(x - 1, y) - at(x - 1, y + 1);
+            const gy = at(x - 1, y + 1) + 2 * at(x, y + 1) + at(x + 1, y + 1) - at(x - 1, y - 1) - 2 * at(x, y - 1) - at(x + 1, y - 1);
+            const len = Math.hypot(gx, gy);
+            if (len === 0)
+                continue;
+            const off = edgeOffset(gx, gy, a);
+            nx[i] = gx / len;
+            ny[i] = gy / len;
+            ex[i] = x + nx[i] * off;
+            ey[i] = y + ny[i] * off;
+            half[i] = 0.5 / Math.max(Math.abs(nx[i]), Math.abs(ny[i]));
+            nearest[i] = i;
+            dist2[i] = squaredDistanceTo(x, y, i);
+        }
+    }
+    const take = (i, x, y, j) => {
+        const e = nearest[j];
+        if (e < 0 || e === nearest[i])
+            return;
+        const d = squaredDistanceTo(x, y, e);
+        if (d < dist2[i]) {
+            dist2[i] = d;
+            nearest[i] = e;
+        }
+    };
+    // A sweep down and one back up over the 8 neighbours.
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            const i = y * w + x;
+            if (x > 0)
+                take(i, x, y, i - 1);
+            if (y > 0) {
+                if (x > 0)
+                    take(i, x, y, i - w - 1);
+                take(i, x, y, i - w);
+                if (x < w - 1)
+                    take(i, x, y, i - w + 1);
+            }
+        }
+        for (let x = w - 2; x >= 0; x--)
+            take(y * w + x, x, y, y * w + x + 1);
+    }
+    for (let y = h - 1; y >= 0; y--) {
+        for (let x = w - 1; x >= 0; x--) {
+            const i = y * w + x;
+            if (x < w - 1)
+                take(i, x, y, i + 1);
+            if (y < h - 1) {
+                if (x < w - 1)
+                    take(i, x, y, i + w + 1);
+                take(i, x, y, i + w);
+                if (x > 0)
+                    take(i, x, y, i + w - 1);
+            }
+        }
+        for (let x = 1; x < w; x++)
+            take(y * w + x, x, y, y * w + x - 1);
+    }
     const out = new Float32Array(w * h);
     for (let i = 0; i < w * h; i++)
-        out[i] = inside(i) ? -(Math.sqrt(toOutside[i]) - 0.5) : Math.sqrt(toInside[i]) - 0.5;
+        out[i] = (alpha[i] >= 128 ? -1 : 1) * Math.sqrt(dist2[i]);
+    return out;
+}
+
+// The box widths for three box blurs that together approximate a Gaussian of `sigma`.
+function boxRadii(sigma) {
+    const ideal = Math.sqrt(4 * sigma * sigma + 1);
+    let lower = Math.floor(ideal);
+    if (lower % 2 === 0)
+        lower--;
+    const upper = lower + 2;
+    const m = Math.round((12 * sigma * sigma - 3 * lower * lower - 12 * lower - 9) / (-4 * lower - 4));
+    return [0, 1, 2].map(i => ((i < m ? lower : upper) - 1) / 2);
+}
+
+// One box blur of radius r along rows (step 1) or columns (step w), edges extended.
+function boxBlur(src, dst, w, h, r, alongRows) {
+    const [n, lines, step, lineStep] = alongRows ? [w, h, 1, w] : [h, w, w, 1];
+    const norm = 1 / (2 * r + 1);
+    for (let line = 0; line < lines; line++) {
+        const base = line * lineStep;
+        const v = (k) => src[base + Math.min(Math.max(k, 0), n - 1) * step];
+        let sum = 0;
+        for (let k = -r; k <= r; k++)
+            sum += v(k);
+        for (let k = 0; k < n; k++) {
+            dst[base + k * step] = sum * norm;
+            sum += v(k + r + 1) - v(k - r);
+        }
+    }
+}
+
+/** `field` blurred by about a Gaussian of `sigma` px. */
+export function softened(field, sigma) {
+    const { width: w, height: h } = field;
+    const a = Float32Array.from(field.data);
+    const b = new Float32Array(w * h);
+    if (sigma > 0.3) {
+        for (const r of boxRadii(sigma)) {
+            if (r < 1)
+                continue;
+            boxBlur(a, b, w, h, r, true);
+            boxBlur(b, a, w, h, r, false);
+        }
+    }
+    return { data: a, width: w, height: h };
+}
+
+// Taller glyphs
+// How fast a row stops taking height as its outline slants: at this much
+// horizontal change of the outline per row (summed over the row) it takes half.
+// The change is measured over half a stroke's width up and down, so the middle
+// of a round dot, nearly upright from one row to the next, still counts as
+// curved.
+const SLANT_HALF = 0.12;
+// A row whose longest stroke is this many times the glyph's usual stroke runs
+// along a horizontal one (a bar, the top of a bowl), whose thickness is kept.
+const BAR_START = 1.4;
+const BAR_HALF = 0.3;
+// Rows next to each other take similar shares, over this fraction of the band.
+const SHARE_SPREAD = 0.03;
+// Every row of the band takes at least this share, so a glyph with no
+// upright stroke still grows evenly instead of somewhere arbitrary.
+const SHARE_FLOOR = 0.02;
+
+/**
+ * How much of a glyph's added height each row of coverage `alpha` (0-255,
+ * `w` wide) takes, rows `top` to `bottom`: rows that cross upright strokes,
+ * which look the same however many times they repeat, take most; rows where
+ * the outline curves or slants, or that run along a horizontal stroke, take
+ * little. The shares add up to 1.
+ */
+export function rowShares(alpha, w, top, bottom) {
+    const n = bottom - top;
+    const longest = new Float64Array(n);
+    for (let r = 0; r < n; r++) {
+        let run = 0;
+        for (let x = 0, i = (top + r) * w; x < w; x++, i++) {
+            run = alpha[i] >= 128 ? run + 1 : 0;
+            longest[r] = Math.max(longest[r], run);
+        }
+    }
+    const stroked = Array.from(longest).filter(v => v > 0).sort((a, b) => a - b);
+    const stroke = stroked.length ? stroked[stroked.length >> 1] : 1;
+    const reach = Math.max(Math.round(stroke / 2), 1);
+    const raw = new Float64Array(n);
+    for (let r = 0; r < n; r++) {
+        const above = (top + Math.max(r - reach, 0)) * w;
+        const row = (top + r) * w;
+        const below = (top + Math.min(r + reach, n)) * w;
+        let change = 0;
+        for (let x = 0; x < w; x++)
+            change += Math.abs(alpha[below + x] - alpha[row + x]) + Math.abs(alpha[row + x] - alpha[above + x]);
+        const slant = change / 255 / Math.max((below - above) / w, 1) / SLANT_HALF;
+        const bar = Math.max(longest[r] / stroke - BAR_START, 0) / BAR_HALF;
+        raw[r] = 1 / (1 + slant * slant) / (1 + bar * bar);
+    }
+    // A Gaussian along the rows, so the share changes smoothly.
+    const sigma = Math.max(SHARE_SPREAD * n, 1);
+    const spread = Math.ceil(sigma * 3);
+    const shares = new Float64Array(n);
+    let total = 0;
+    for (let r = 0; r < n; r++) {
+        let sum = 0, weight = 0;
+        for (let k = Math.max(r - spread, 0); k <= Math.min(r + spread, n - 1); k++) {
+            const g = Math.exp(-((k - r) ** 2) / (2 * sigma * sigma));
+            sum += raw[k] * g;
+            weight += g;
+        }
+        shares[r] = sum / weight + SHARE_FLOOR;
+        total += shares[r];
+    }
+    for (let r = 0; r < n; r++)
+        shares[r] /= total;
+    return shares;
+}
+
+/**
+ * Coverage `alpha` (`w` x `h`) made `extra` rows taller between rows `top`
+ * and `bottom`, the extra height spread by rowShares(); the rows above stay
+ * where they are and the rows below move down.
+ */
+export function tallen(alpha, w, h, top, bottom, extra) {
+    top = Math.min(Math.max(top, 0), h - 1);
+    bottom = Math.min(Math.max(bottom, top + 1), h - 1);
+    const shares = rowShares(alpha, w, top, bottom);
+    // Where each source row boundary lands, then each output row's centre
+    // traced back to a fractional source row.
+    const lands = new Float64Array(h + 1);
+    for (let y = 0; y <= h; y++) {
+        const r = y - top;
+        lands[y] = y + (r <= 0 ? 0 : r >= shares.length ? extra : lands[y - 1] - (y - 1) + shares[r - 1] * extra);
+    }
+    const out = new Uint8Array(w * (h + extra));
+    let y = 0;
+    for (let oy = 0; oy < h + extra; oy++) {
+        const centre = oy + 0.5;
+        while (y < h - 1 && lands[y + 1] <= centre)
+            y++;
+        // Rows sample at their centres: a fraction of the way through source row
+        // y, between its centre and the next one's.
+        const t = (centre - lands[y]) / Math.max(lands[y + 1] - lands[y], 1e-9) - 0.5;
+        const y0 = t < 0 ? Math.max(y - 1, 0) : y;
+        const y1 = t < 0 ? y : Math.min(y + 1, h - 1);
+        const f = t < 0 ? t + 1 : t;
+        for (let x = 0; x < w; x++)
+            out[oy * w + x] = Math.round(alpha[y0 * w + x] * (1 - f) + alpha[y1 * w + x] * f);
+    }
     return out;
 }
 
@@ -194,10 +405,10 @@ function layoutFor(cr, font, text) {
     return layout;
 }
 
-// Draws `text` stretched `stretch` times as wide into a temporary PNG and reads
-// its coverage back, with `margin` px of room around it. The coverage is in
-// whole blocks of SUPERSAMPLE.
-async function rasterize(font, text, stretch, margin, cancellable) {
+// Draws `text` stretched `stretch` times as wide (and made taller by `tall`)
+// into a temporary PNG and reads its coverage back, with `margin` px of room
+// around it. The coverage is in whole blocks of SUPERSAMPLE.
+async function rasterize(font, text, stretch, tall, margin, cancellable) {
     const probe = new Cairo.ImageSurface(Cairo.Format.ARGB32, 1, 1);
     const probeCr = new Cairo.Context(probe);
     const b = bounds(layoutFor(probeCr, font, text));
@@ -235,7 +446,11 @@ async function rasterize(font, text, stretch, margin, cancellable) {
                 }
             });
         });
-        return { ...decodePngAlpha(bytes), originX: -ax, originY: -ay };
+        const { alpha, width: w, height: h } = decodePngAlpha(bytes);
+        if (!tall || tall.extra < 1)
+            return { alpha, width: w, height: h, originX: -ax, originY: -ay };
+        return { alpha: tallen(alpha, w, h, tall.top - ay, tall.bottom - ay, tall.extra), width: w,
+            height: h + tall.extra, originX: -ax, originY: -ay };
     }
     finally {
         file.delete_async(GLib.PRIORITY_DEFAULT, null, (_f, res) => {
@@ -251,33 +466,51 @@ async function rasterize(font, text, stretch, margin, cancellable) {
 
 /**
  * Distance fields of single glyphs in one font, stretched `stretch` times as
- * wide, built on first use. `range` is how far (px) from the outline the
- * fields reach.
+ * wide and made `height` times as tall (see tallen()), built on first use.
+ * `range` is how far (px) from the outline the fields reach.
  */
 export class GlyphFields {
     size;
     range;
     stretch;
+    height;
     _glyphs = new Map();
     // Cancels the reads still running when the fields are no longer wanted.
     cancellable = new Gio.Cancellable();
     _font;
     _bigFont;
+    // The rows the digits stand in, from their top to the baseline, and the
+    // px added to them.
+    _tall;
+    /** The digits' height in the font as it is, px. */
+    digitHeight;
 
-    constructor(fontDescription, size, range, stretch = 1) {
+    constructor(fontDescription, size, range, stretch = 1, height = 1) {
         this.size = size;
         this.range = range;
         this.stretch = stretch;
+        this.height = height;
         this._font = Pango.FontDescription.from_string(fontDescription);
         this._font.set_absolute_size(size * Pango.SCALE);
         this._bigFont = this._font.copy();
         this._bigFont.set_absolute_size(size * SUPERSAMPLE * Pango.SCALE);
+        const probe = new Cairo.ImageSurface(Cairo.Format.ARGB32, 1, 1);
+        const probeCr = new Cairo.Context(probe);
+        const digits = layoutFor(probeCr, this._font, '0123456789');
+        const [ink] = digits.get_pixel_extents();
+        const baseline = digits.get_baseline() / Pango.SCALE;
+        this.digitHeight = Math.max(baseline - ink.y, 1);
+        this._tall = { top: ink.y, bottom: baseline, extra: Math.round((height - 1) * this.digitHeight) };
+        probeCr.$dispose();
+        probe.finish();
     }
 
     _glyph(ch) {
         let glyph = this._glyphs.get(ch);
         if (!glyph) {
-            glyph = rasterize(this._bigFont, ch, this.stretch, this.range * SUPERSAMPLE, this.cancellable).then(big => {
+            const tall = { top: this._tall.top * SUPERSAMPLE, bottom: this._tall.bottom * SUPERSAMPLE,
+                extra: this._tall.extra * SUPERSAMPLE };
+            glyph = rasterize(this._bigFont, ch, this.stretch, tall, this.range * SUPERSAMPLE, this.cancellable).then(big => {
                 const field = downsample({ data: signedDistances(big.alpha, big.width, big.height),
                     width: big.width, height: big.height }, SUPERSAMPLE);
                 return { ...field, originX: big.originX / SUPERSAMPLE, originY: big.originY / SUPERSAMPLE };
@@ -308,7 +541,7 @@ export class GlyphFields {
         const x0 = Math.floor(b.x0 * this.stretch) - r;
         const y0 = b.y0 - r;
         const width = Math.ceil(b.x1 * this.stretch) + r - x0;
-        const height = b.y1 + r - y0;
+        const height = b.y1 + this._tall.extra + r - y0;
         const data = new Float32Array(width * height).fill(r);
         // Pango indexes the text by UTF-8 byte.
         const encoder = new TextEncoder();
@@ -338,27 +571,38 @@ export class GlyphFields {
         }
         probeCr.$dispose();
         probe.finish();
-        let maxDepth = 0;
-        for (let i = 0; i < data.length; i++)
-            maxDepth = Math.max(maxDepth, -data[i]);
-        return { data, width, height, maxDepth };
+        return { data, width, height };
     }
 }
 
+/** The deepest point of `field`, px. */
+export function maxDepth(field) {
+    let depth = 0;
+    for (let i = 0; i < field.data.length; i++)
+        depth = Math.max(depth, -field.data[i]);
+    return depth;
+}
+
 /**
- * A texture of `field` for glass.frag's LG_SHAPE_TEXTURE: distances from
- * -range to +range in 16 bits, the high byte in red and the low in green.
- * Throws a GError when the texture cannot be made.
+ * A texture for glass.frag's LG_SHAPE_TEXTURE: `outline` above `lens`, two
+ * fields of the same size, distances from -range to +range in 16 bits, the
+ * high byte in red and the low in green. Throws a GError when the texture
+ * cannot be made.
  */
-export function fieldTexture(field, range) {
-    const { data, width, height } = field;
-    const bytes = new Uint8Array(width * height * 4);
-    for (let i = 0; i < width * height; i++) {
-        const t = Math.min(Math.max((data[i] + range) / (2 * range), 0), 1);
-        const v = Math.round(t * 65535);
-        bytes[i * 4] = v >> 8;
-        bytes[i * 4 + 1] = v & 255;
-        bytes[i * 4 + 3] = 255;
-    }
-    return Cogl.Texture2D.new_from_data(coglContext(), width, height, Cogl.PixelFormat.RGBA_8888, width * 4, bytes);
+export function fieldTexture(outline, lens, range) {
+    const { width, height } = outline;
+    const bytes = new Uint8Array(width * height * 8);
+    const put = (data, offset) => {
+        for (let i = 0; i < width * height; i++) {
+            const t = Math.min(Math.max((data[i] + range) / (2 * range), 0), 1);
+            const v = Math.round(t * 65535);
+            const o = (offset + i) * 4;
+            bytes[o] = v >> 8;
+            bytes[o + 1] = v & 255;
+            bytes[o + 3] = 255;
+        }
+    };
+    put(outline.data, 0);
+    put(lens.data, width * height);
+    return Cogl.Texture2D.new_from_data(coglContext(), width, height * 2, Cogl.PixelFormat.RGBA_8888, width * 4, bytes);
 }

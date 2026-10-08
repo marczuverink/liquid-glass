@@ -125,10 +125,12 @@ uniform float drop_radius;
 uniform float drop_merge; // width of the smooth union, px
 
 #ifdef LG_SHAPE_TEXTURE
-// The outline as a distance field over the dock_* rect, for glass text. The
-// distance is stored in 16 bits, high byte in red and low byte in green: the
-// encoding is linear, so bilinear filtering interpolates the distance itself.
-uniform float shape_range; // px of distance each way the field holds
+// The outline as distance fields over the dock_* rect, for glass text: the
+// outline itself in the texture's top half, and a softened copy the lens is
+// shaped from in its bottom half. The distance is stored in 16 bits, high
+// byte in red and low byte in green: the encoding is linear, so filtering
+// interpolates the distance itself.
+uniform float shape_range; // px of distance each way the fields hold
 uniform float shape_band;  // the lens band, px
 #endif
 
@@ -315,14 +317,48 @@ float sminPoly(float a, float b, float k) {
 }
 
 #ifdef LG_SHAPE_TEXTURE
+float shapeDistanceAt(vec2 texel, vec2 texSize) {
+    vec2 c = texture2D(cogl_sampler2, texel / texSize).rg;
+    return mix(-shape_range, shape_range, (c.r * 65280.0 + c.g * 255.0) / 65535.0);
+}
+
+// The outline's distance at p, bilinear.
 float shapeTextureSD(vec2 p) {
     vec2 size = max(vec2(dock_w, dock_h), vec2(1.0));
     vec2 st = p / size + 0.5;
     // Past the field's rect the distance keeps growing.
     vec2 beyond = max(abs(st - 0.5) - 0.5, 0.0) * size;
-    vec2 c = texture2D(cogl_sampler2, clamp(st, vec2(0.0), vec2(1.0))).rg;
-    float v = (c.r * 65280.0 + c.g * 255.0) / 65535.0;
-    return mix(-shape_range, shape_range, v) + length(beyond);
+    vec2 texel = clamp(st * size, vec2(0.5), size - 0.5);
+    return shapeDistanceAt(texel, size * vec2(1.0, 2.0)) + length(beyond);
+}
+
+// The softened distance at p, as a cubic B-spline of the texels from four
+// bilinear taps: its slope is continuous, where a bilinear one steps at every
+// texel and the lens would show the texels as facets.
+float shapeLensSD(vec2 p) {
+    vec2 size = max(vec2(dock_w, dock_h), vec2(1.0));
+    vec2 st = p / size + 0.5;
+    vec2 beyond = max(abs(st - 0.5) - 0.5, 0.0) * size;
+    vec2 t = clamp(st, vec2(0.0), vec2(1.0)) * size - 0.5;
+    vec2 i = floor(t);
+    vec2 f = t - i;
+    vec2 f2 = f * f;
+    vec2 f3 = f2 * f;
+    vec2 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
+    vec2 w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+    vec2 w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
+    vec2 w3 = f3 / 6.0;
+    vec2 g0 = w0 + w1;
+    vec2 g1 = w2 + w3;
+    // Texel centres of the taps, kept inside the bottom half.
+    vec2 lo = vec2(0.5, size.y + 0.5);
+    vec2 hi = vec2(size.x - 0.5, size.y * 2.0 - 0.5);
+    vec2 h0 = clamp(i - 0.5 + w1 / g0 + vec2(0.0, size.y), lo, hi);
+    vec2 h1 = clamp(i + 1.5 + w3 / g1 + vec2(0.0, size.y), lo, hi);
+    vec2 texSize = size * vec2(1.0, 2.0);
+    float d = g0.y * (g0.x * shapeDistanceAt(h0, texSize) + g1.x * shapeDistanceAt(vec2(h1.x, h0.y), texSize)) +
+              g1.y * (g0.x * shapeDistanceAt(vec2(h0.x, h1.y), texSize) + g1.x * shapeDistanceAt(h1, texSize));
+    return d + length(beyond);
 }
 #endif
 
@@ -349,18 +385,28 @@ vec2 fusedShape(vec2 p, vec2 b, vec2 corner) {
 #endif
 }
 
-// Unit gradient of fusedShape(), by central differences: a smooth union or
+// The outline the lens is shaped from: fusedShape(), or for glass text its
+// softened field.
+vec2 lensShape(vec2 p, vec2 b, vec2 corner) {
+#ifdef LG_SHAPE_TEXTURE
+    return vec2(shapeLensSD(p), max(shape_band, 1.0));
+#else
+    return fusedShape(p, b, corner);
+#endif
+}
+
+// Unit gradient of lensShape(), by central differences: a smooth union or
 // a sampled field has no cheap closed form.
 vec2 fusedDir(vec2 p, vec2 b, vec2 corner) {
     const float e = 0.5;
-    vec2 g = vec2(fusedShape(p + vec2(e, 0.0), b, corner).x - fusedShape(p - vec2(e, 0.0), b, corner).x,
-                  fusedShape(p + vec2(0.0, e), b, corner).x - fusedShape(p - vec2(0.0, e), b, corner).x);
+    vec2 g = vec2(lensShape(p + vec2(e, 0.0), b, corner).x - lensShape(p - vec2(e, 0.0), b, corner).x,
+                  lensShape(p + vec2(0.0, e), b, corner).x - lensShape(p - vec2(0.0, e), b, corner).x);
     float len = length(g);
     return len > 1.0e-5 ? g / len : vec2(1.0, 0.0);
 }
 
 float getHeightFused(vec2 p, vec2 b, vec2 corner, float zScale) {
-    vec2 s = fusedShape(p, b, corner);
+    vec2 s = lensShape(p, b, corner);
     float smoothZone = max(edge_smoothing, 1.0);
     if (s.x > smoothZone)
         return 0.0;

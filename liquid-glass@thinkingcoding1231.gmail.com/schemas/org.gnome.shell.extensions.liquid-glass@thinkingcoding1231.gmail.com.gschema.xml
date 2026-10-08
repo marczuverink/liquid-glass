@@ -917,6 +917,12 @@
       <default>1.0</default>
       <summary>Width of the glass clock's digits, relative to their height</summary>
     </key>
+    <key name="glass-clock-height" type="d">
+      <range min="1.0" max="3.0"/>
+      <default>1.0</default>
+      <summary>Height of the glass clock's digits, relative to the font</summary>
+      <description>Above 1 the digits are made taller by lengthening their straight upright parts, while curves and horizontal strokes keep their shape.</description>
+    </key>
     <key name="glass-clock-format" type="s">
       <default>"system"</default>
       <summary>Time format</summary>

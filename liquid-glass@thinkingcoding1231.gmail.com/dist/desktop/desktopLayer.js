@@ -14,6 +14,10 @@ import { EventsWidget } from './events.js';
 import { MediaWidget } from './media.js';
 import { GlassClock } from './clock.js';
 export const WIDGET_IDS = ['weather', 'events', 'media'];
+const ANCHOR_NAMES = [
+    ['top-left', 'Top Left'], ['top-right', 'Top Right'], ['bottom-left', 'Bottom Left'], ['bottom-right', 'Bottom Right'],
+    ['center', 'Centre'],
+];
 
 /**
  * The glass clock and the desktop widgets, above the wallpaper and below
@@ -260,10 +264,15 @@ export class DesktopLayer {
         this._settings.set_string('desktop-item-positions', JSON.stringify(positions));
     }
 
-    _resetPosition(item) {
+    _resetPosition(id) {
         const positions = parsePositions(this._settings.get_string('desktop-item-positions'));
-        delete positions[item.id];
+        delete positions[id];
         this._settings.set_string('desktop-item-positions', JSON.stringify(positions));
+    }
+
+    _placeClock(anchor) {
+        this._settings.set_string('glass-clock-position', anchor);
+        this._resetPosition('clock');
     }
 
     _openMenu(item, x, y) {
@@ -275,8 +284,19 @@ export class DesktopLayer {
         menu.addAction(clock ? 'Move and Resize' : 'Move', () => this._startEdit(item));
         if (clock?.resized)
             menu.addAction('Reset Size', () => clock.resetSize());
-        if (item.id in parsePositions(this._settings.get_string('desktop-item-positions')))
-            menu.addAction('Reset Position', () => this._resetPosition(item));
+        const moved = item.id in parsePositions(this._settings.get_string('desktop-item-positions'));
+        if (clock) {
+            const position = new PopupMenu.PopupSubMenuMenuItem('Position', false);
+            const current = this._anchorOf(clock.id);
+            for (const [anchor, name] of ANCHOR_NAMES) {
+                const entry = position.menu.addAction(name, () => this._placeClock(anchor));
+                entry.setOrnament(!moved && anchor === current ? PopupMenu.Ornament.DOT : PopupMenu.Ornament.NONE);
+            }
+            menu.addMenuItem(position);
+        }
+        else if (moved) {
+            menu.addAction('Reset Position', () => this._resetPosition(item.id));
+        }
         menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         menu.addAction('Desktop Settings', () => this._openPreferences());
         Main.layoutManager.setDummyCursorGeometry(x, y, 0, 0);

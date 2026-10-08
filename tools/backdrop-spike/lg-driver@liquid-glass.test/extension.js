@@ -1330,7 +1330,8 @@ export default class LgDriver extends Extension {
     await shot('clock-wider', [m.x, m.y, m.width, m.height]);
     await drag(handleCentre(handles[5]), [0, 120]);
     await sleep(2500);
-    log(`edit: taller: size,stretch ${settings.get_int('glass-clock-size')},${settings.get_double('glass-clock-stretch')}`);
+    log(`edit: taller: size,stretch,height ${settings.get_int('glass-clock-size')},` +
+      `${settings.get_double('glass-clock-stretch')},${settings.get_double('glass-clock-height')}`);
     await shot('clock-taller', [m.x, m.y, m.width, m.height]);
 
     // A click outside ends it.
@@ -1339,6 +1340,29 @@ export default class LgDriver extends Extension {
     log(`edit: ended frame=${!!Main.layoutManager.uiGroup.get_children().find(c => c.get_name() === 'liquid-glass-edit')} ` +
       `modal=${Main.modalCount}`);
     await shot('clock-edited', [m.x, m.y, m.width, m.height]);
+
+    // Position > Top Left puts it back at a corner.
+    const [ex, ey] = clock.get_transformed_position();
+    const [ew, eh] = clock.get_transformed_size();
+    await click(ex + ew / 2, ey + eh * 0.7, Clutter.BUTTON_SECONDARY);
+    await sleep(500);
+    const items = () => Main.layoutManager.uiGroup.get_children()
+      .flatMap(c => findActors(c, a => a instanceof PopupMenu.PopupBaseMenuItem && a.mapped));
+    const label = i => i.label?.text ?? '';
+    const sub = items().find(i => label(i) === 'Position');
+    if (!sub) return;
+    const [sx, sy] = sub.get_transformed_position();
+    await click(sx + 20, sy + 10);
+    await sleep(600);
+    await shot('clock-position-menu', [m.x, m.y, m.width, m.height]);
+    const topLeft = items().find(i => label(i) === 'Top Left');
+    log(`edit: position items=${items().map(label).join(',')}`);
+    if (!topLeft) return;
+    const [tx, ty] = topLeft.get_transformed_position();
+    await click(tx + 20, ty + 10);
+    await sleep(1500);
+    log(`edit: placed position=${settings.get_string('glass-clock-position')} ` +
+      `moved=${settings.get_string('desktop-item-positions')} at=${clock.get_transformed_position().map(Math.round)}`);
   }
 
   async _featuresScenario() {
@@ -1363,6 +1387,73 @@ export default class LgDriver extends Extension {
       await this._timedShots('morph-close', [m.x + m.width / 4, m.y, m.width / 2, 700], [100, 600, 1300, 2200, 3500]);
       await sleep(2000);
       await this._slowJelly(1);
+    }
+    if (parts.includes('morphtrace')) {
+      // Every frame of the calendar's glass at full speed: where it heads and where it is.
+      const {Jelly} = await this._lgModule('animation/jelly.js');
+      const step = Jelly.prototype.step;
+      const t0 = GLib.get_monotonic_time();
+      Jelly.prototype.step = function (nowUs) {
+        const moving = step.call(this, nowUs);
+        const r = n => n.map(v => v.toFixed(1)).join(',');
+        log(`trace t=${((nowUs - t0) / 1000).toFixed(0)} mark=${r(this._mark)} rect=${r(this.rect)}`);
+        return moving;
+      };
+      const dateMenu = Main.panel.statusArea.dateMenu.menu;
+      dateMenu.open(true);
+      await sleep(2500);
+      dateMenu.close(true);
+      await sleep(1500);
+      Jelly.prototype.step = step;
+    }
+    if (parts.includes('qssub')) {
+      // A Quick Settings submenu stays centred under the panel when the shell
+      // moves it after the last frame that would have noticed.
+      const qs = Main.panel.statusArea.quickSettings.menu;
+      qs.open(true);
+      // The shell reads the submenus' offset with the panel's opening scale on it.
+      await sleep(60);
+      log(`qssub: panel scale while opening ${qs.box.scale_x.toFixed(2)}`);
+      qs._grid.notify('x');
+      await sleep(1500);
+      const toggle = qs._grid.get_children().find(c => c.menu?.actor && c.visible && c.reactive);
+      const centres = () => {
+        const sub = toggle.menu.box;
+        const [bx] = qs.box.get_transformed_position();
+        const [sx] = sub.get_transformed_position();
+        return `${Math.round(sx + sub.get_transformed_size()[0] / 2 - bx - qs.box.get_transformed_size()[0] / 2)}`;
+      };
+      if (toggle) {
+        toggle.menu.open(true);
+        await sleep(1500);
+        const before = centres();
+        const xConstraint = qs._overlay.get_constraints().find(c => c.coordinate === Clutter.BindCoordinate.X);
+        xConstraint.offset += 30;
+        await sleep(1000);
+        log(`qssub: ${toggle.constructor.name} submenu off centre by ${before}, after the shell moved it by 30: ${centres()}`);
+        await shot('qs-submenu', [m.x + m.width - 700, m.y, 700, 900]);
+        xConstraint.offset -= 30;
+        toggle.menu.close(false);
+      } else {
+        log('qssub: no toggle with a submenu');
+      }
+      qs.close(false);
+      await sleep(1000);
+    }
+    if (parts.includes('clockshot')) {
+      // The clock alone, large, for a close look at its glass ($LG_DRV_CLOCK_SIZE,
+      // $LG_DRV_CLOCK_HEIGHT, $LG_DRV_CLOCK_FONT).
+      settings.set_string('glass-clock-position', 'center');
+      settings.set_int('glass-clock-size', Number(GLib.getenv('LG_DRV_CLOCK_SIZE') ?? 240));
+      settings.set_double('glass-clock-height', Number(GLib.getenv('LG_DRV_CLOCK_HEIGHT') ?? 1));
+      settings.set_string('glass-clock-font', GLib.getenv('LG_DRV_CLOCK_FONT') ?? '');
+      settings.set_boolean('glass-clock-show-date', false);
+      settings.set_boolean('enable-glass-clock', true);
+      await sleep(4000);
+      const clock = findActor(global.window_group, 'liquid-glass-desktop-clock');
+      const [x, y] = clock.get_transformed_position();
+      const [w, h] = clock.get_transformed_size();
+      await shot('clock-alone', [x, y, w, h]);
     }
     if (parts.includes('topbar')) {
       for (const style of ['pill', 'islands']) {

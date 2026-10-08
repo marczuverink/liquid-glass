@@ -98,7 +98,7 @@ The effect can be enabled or disabled per UI element on the **Effects** page. In
 | --- | --- |
 | **Top Bar** | The bar itself, as **one pill** across the screen or **three pills** behind its groups of buttons (activities, clock, status icons), chosen on the Effects page. Off by default. Supports **adaptive text coloring**. |
 | **Dash to Dock** | Glass behind the dock. Adds a bottom margin control so the dock can float above the screen edge. Works with the Dash to Dock / Ubuntu Dock extension. |
-| **Calendar & Other Top Bar Menus** | Glass behind the calendar (clock) menu and behind the menus of the other top bar indicators — the keyboard layout and accessibility menus, and the indicators other extensions add, including [ArcMenu](https://gitlab.com/arcmenu/ArcMenu)'s menu and its right-click menu. Each detected menu can be switched off on its own. Menus **grow out of their button**: the glass pulls out of the button like a drop of liquid and stretches and wobbles into the menu, carrying the menu's items with it, and draws back into the button when the menu closes. Only its shape changes; nothing fades (Appearance → Behavior → "Menus grow from their button"). With that off, a **custom spring animation** (stiffness / damping / mass) scales the menu instead. Also supports **adaptive text coloring**. |
+| **Calendar & Other Top Bar Menus** | Glass behind the calendar (clock) menu and behind the menus of the other top bar indicators — the keyboard layout and accessibility menus, and the indicators other extensions add, including [ArcMenu](https://gitlab.com/arcmenu/ArcMenu)'s menu and its right-click menu. Each detected menu can be switched off on its own. Menus **grow out of their button**: the glass pulls out of the button like a drop of liquid and stretches into the menu, carrying the menu's items with it, and draws back into the button when the menu closes. Only its shape changes; nothing fades (Appearance → Behavior → "Menus grow from their button"). With that off, a **custom spring animation** (stiffness / damping / mass) scales the menu instead. Also supports **adaptive text coloring**. |
 | **Notifications** | Glass behind notification banners. Supports **adaptive text coloring** and a hide safety margin to avoid flicker while the banner is dismissed. |
 | **Quick Settings** | Two modes: **Whole menu** applies one sheet of glass behind the whole panel, and **Individual buttons** turns every toggle button into its own piece of glass, keeping each toggle's own accent color (see "Button base colour"). Also supports spring animation and adaptive text coloring. |
 | **OSD** | Glass behind the on-screen displays (volume, brightness, and so on), with adaptive text coloring. |
@@ -124,7 +124,7 @@ The **Desktop** page of the preferences adds glass that is not part of GNOME's o
 
 ### Glass Clock
 
-A large clock whose digits are themselves glass, like the clock on the iPhone's lock screen, with the date above it. It sits on the desktop below the windows. Pick a place for it (one of the four corners or the centre), or right-click it and choose **Move and Resize**: a frame appears round it, to drag it anywhere and to stretch its digits by the handles, wider or taller on their own. It stays where it was moved until you pick a place again. The font, the size, the width, the time format (as in Settings, 24-hour or 12-hour), the date, the blur and the tint can be changed. Without a font of your own it uses the interface font in bold.
+A large clock whose digits are themselves glass, like the clock on the iPhone's lock screen, with the date above it. It sits on the desktop below the windows. Pick a place for it (one of the four corners or the centre) in the preferences or from its right-click menu (**Position**), or right-click it and choose **Move and Resize**: a frame appears round it, to drag it anywhere and to resize it by the handles. The side handles make the digits wider; the top and bottom ones make them taller the way the iPhone's tall clock does, by lengthening their straight upright strokes while curves, bars and the colon's dots keep their shape; the corners scale the whole clock. It stays where it was moved until you pick a place again. The font, the size, the width, the height, the time format (as in Settings, 24-hour or 12-hour), the date, the blur and the tint can be changed. Without a font of your own it uses the interface font in bold; a condensed font suits a tall clock.
 
 ### Desktop Widgets
 
@@ -253,6 +253,7 @@ A significant part of this codebase was written with the help of AI coding assis
 - [x] Grow menus out of their top bar button
 - [x] Add a glass clock, desktop widgets (weather, up next, now playing) and a search launcher
 - [x] Move and resize the clock and the widgets from their right-click menu
+- [x] Tall clock digits that grow along their upright strokes, with smoother glass on glyph corners and curves
 
 ### Next
 - [ ] Publish to extensions.gnome.org (not approved yet)
