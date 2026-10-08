@@ -132,7 +132,8 @@ export class Launcher {
     panel.connect('button-press-event', () => Clutter.EVENT_STOP);
     const entry = new St.Entry({ style_class: 'lg-launcher-entry', hint_text: 'Search', can_focus: true, x_expand: true,
       primary_icon: new St.Icon({ icon_name: 'edit-find-symbolic', style_class: 'lg-launcher-entry-icon' }) });
-    const list = new St.BoxLayout({ style_class: 'lg-launcher-list', ...verticalBoxParams() } as any);
+    // Hidden while empty, so the panel's spacing does not add room below the field.
+    const list = new St.BoxLayout({ style_class: 'lg-launcher-list', visible: false, ...verticalBoxParams() } as any);
     panel.add_child(entry);
     panel.add_child(list);
     root.add_child(panel);
@@ -351,6 +352,7 @@ export class Launcher {
       list.add_child(row);
       return row;
     });
+    list.visible = this._rows.length > 0;
     this._select(Math.min(this._selected, Math.max(this._rows.length - 1, 0)));
     this._text.invalidate();
   }
