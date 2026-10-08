@@ -1,13 +1,10 @@
 // A rectangle hung on springs, one per edge: the glass that travels between
 // two shapes (a menu growing out of its button). The edge in front is a
 // little stiffer than the one behind, so the glass stretches as it moves and
-// settles back into shape, like the jelly of glass-lib. Like a drop of
-// liquid, it also narrows across the way it is moving fastest.
+// settles back into shape, like the jelly of glass-lib.
 
 const STEP_S = 0.002;
 const MAX_FRAME_S = 0.05;
-// Edge speed (px/s) at which the narrowing is about three quarters of `squash`.
-const SQUASH_SPEED = 1500;
 
 export interface JellySpec {
   omega: number;
@@ -18,15 +15,13 @@ export interface JellySpec {
   // it started from, when the glass is changing size).
   minStretch: number;
   maxStretch: number;
-  // How much narrower (as a fraction) the glass gets across its fastest way.
-  squash: number;
 }
 
 // liquid_glass_widgets' morph spring (stiffness 120, damping 16), a little
-// stiffer because the edges add their own lag, and a little less damped so
-// the glass wobbles as it settles.
+// stiffer because the edges add their own lag. Damped enough that a large
+// menu does not bounce once it has arrived.
 export const JELLY_TRAVEL: JellySpec = {
-  omega: 16, zeta: 0.55, lead: 0.45, minStretch: 0.55, maxStretch: 1.9, squash: 0.22,
+  omega: 16, zeta: 0.9, lead: 0.45, minStretch: 0.55, maxStretch: 1.9,
 };
 
 // [x0, y0, x1, y1]
@@ -140,24 +135,9 @@ export class Jelly {
     return Math.min(Math.max(1 - left / total, 0), 1);
   }
 
-  // The edges' speed along each axis, px/s.
-  private _speed(axis: number): number {
-    return Math.max(Math.abs(this._vel[axis]), Math.abs(this._vel[axis + 2]));
-  }
-
   /** The glass now, [x, y, w, h]. */
   get rect(): number[] {
-    const e = [...this._edge] as Edges;
-    for (let a = 0; a < 2; a++) {
-      const faster = this._speed(1 - a) - this._speed(a);
-      if (faster <= 0) continue;
-      const keep = 1 - this._spec.squash * Math.tanh(faster / SQUASH_SPEED);
-      const c = (e[a] + e[a + 2]) / 2;
-      const half = (e[a + 2] - e[a]) / 2 * keep;
-      e[a] = c - half;
-      e[a + 2] = c + half;
-    }
-    return edgesToRect(e);
+    return edgesToRect(this._edge);
   }
 
   /** How far it has come, 0 to 1; it never goes back. */

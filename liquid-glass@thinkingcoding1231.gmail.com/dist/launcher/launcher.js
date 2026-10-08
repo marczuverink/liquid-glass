@@ -12,7 +12,7 @@ import { ensureGlassAllocated } from '../actors/allocation.js';
 import { isActorValid } from '../actors/lifecycle.js';
 import { startSyncLoop, stopStageLoop } from '../animation/frameLoops.js';
 import { hexToColorArray } from '../animation/colors.js';
-import { Jelly } from '../animation/jelly.js';
+import { RectTween } from '../animation/tween.js';
 import { AdaptiveTextColor } from '../adaptiveText.js';
 import { sanitizeColorPreference } from '../contrastSampler.js';
 import { verticalBoxParams } from '../shellVersion.js';
@@ -28,6 +28,7 @@ const SHADOW_MARGIN = 60;
 const FADE_MS = 150;
 // The glass opens from this much larger, like SwiftUI's materialize.
 const OPEN_SCALE = 1.06;
+const SHAPE_MS = 220;
 
 function isCancelled(e) {
     return e instanceof GLib.Error && e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED);
@@ -55,8 +56,8 @@ export class Launcher {
     _list = null;
     _glass = null;
     _grab = null;
-    _jelly = new Jelly();
-    _jellyStarted = false;
+    _shape = new RectTween(SHAPE_MS);
+    _shapeStarted = false;
     _frameSyncId = 0;
     _frameSignalId = 0;
     _searchId = 0;
@@ -147,8 +148,7 @@ export class Launcher {
         entry.clutter_text.connect('key-press-event', (_a, event) => this._onKey(event));
         this._grab = Main.pushModal(root, { actionMode: Shell.ActionMode.POPUP });
         global.stage.set_key_focus(entry.clutter_text);
-        this._jelly = new Jelly();
-        this._jellyStarted = false;
+        this._shapeStarted = false;
         startSyncLoop(this._frameSignalSlot, this._frameSlot, {
             alive: () => !!this._root,
             honourFreeze: true,
@@ -208,8 +208,8 @@ export class Launcher {
         glass.setSaturation(s.get_double('launcher-saturation'));
     }
 
-    // Every frame: the glass follows the field and its results on the jelly,
-    // and the results are cut off where the glass ends.
+    // Every frame: the glass eases to the field and its results, which are cut
+    // off where the glass ends.
     _sync() {
         const glass = this._glass;
         const panel = this._panel;
@@ -218,16 +218,14 @@ export class Launcher {
         if (!(w >= 1) || !(h >= 1))
             return;
         const rest = [panel.x, panel.y, w, h];
-        if (!this._jellyStarted) {
-            this._jellyStarted = true;
+        const now = GLib.get_monotonic_time();
+        if (!this._shapeStarted) {
+            this._shapeStarted = true;
             const grow = (OPEN_SCALE - 1) / 2;
-            this._jelly.start([rest[0] - w * grow, rest[1] - h * grow, w * OPEN_SCALE, h * OPEN_SCALE]);
+            this._shape.start([rest[0] - w * grow, rest[1] - h * grow, w * OPEN_SCALE, h * OPEN_SCALE], rest, now);
         }
-        this._jelly.setMark(rest);
-        // At rest it starts over from there, ready for the next change of size.
-        if (!this._jelly.step(GLib.get_monotonic_time()))
-            this._jelly.start(rest);
-        const [x, y, gw, gh] = this._jelly.rect;
+        this._shape.setTarget(rest, now);
+        const [x, y, gw, gh] = this._shape.rect(now);
         const p = SHADER_PADDING;
         glass.set_position(0, 0);
         glass.set_size(root.width, root.height);
