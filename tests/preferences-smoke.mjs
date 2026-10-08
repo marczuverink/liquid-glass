@@ -100,6 +100,24 @@ if (settings.get_int('menu-blur-radius') !== 17 || settings.get_int('dock-blur-r
   throw Error('Individual blur changed the wrong surface');
 find('Settings view').selected = 0;
 if (!find('Blur').subtitle.includes('Custom')) throw Error('Simple view lost individual differences');
+const fontRow = find('Font'), weightRow = find('Weight');
+if (settings.get_string('glass-clock-font') !== 'Sofia Sans Extra Condensed SemiBold' || !weightRow.visible ||
+  weightRow.selected !== 2) throw Error('The default clock font is not shown as Sofia Sans SemiBold');
+fontRow.selected = 0;
+weightRow.selected = 3;
+if (settings.get_string('glass-clock-font') !== 'Antonio Bold') throw Error(`Picked ${settings.get_string('glass-clock-font')}`);
+fontRow.selected = 4;
+if (settings.get_string('glass-clock-font') !== '' || weightRow.visible) throw Error('The interface font was not picked');
+settings.set_string('glass-clock-font', 'Barlow Condensed Light');
+if (fontRow.selected !== 1 || weightRow.selected !== 0) throw Error('A bundled font set elsewhere is not shown');
+settings.set_string('glass-clock-font', 'Cantarell Bold');
+if (fontRow.selected !== 5 || weightRow.visible) throw Error('An installed font is not shown as one');
+const widgetPlace = rows.filter(row => row.title === 'Place')[1];
+settings.set_string('desktop-widget-anchors', '{"weather":"bottom-left"}');
+if (widgetPlace.selected !== 5) throw Error('A widget placed on its own is not reported');
+widgetPlace.selected = 0;
+if (settings.get_string('desktop-widget-anchors') !== '{}' || settings.get_string('desktop-widgets-position') !== 'top-left')
+  throw Error('Picking a place for the widgets kept a widget\'s own place');
 controls.dispose();
 window.destroy();
 print(JSON.stringify({nativeGtk: 'passed', rows: rows.length, openingWrites: 0, sharedBlur: 'passed', smoothMotion: 'passed', advanced: 'passed'}));

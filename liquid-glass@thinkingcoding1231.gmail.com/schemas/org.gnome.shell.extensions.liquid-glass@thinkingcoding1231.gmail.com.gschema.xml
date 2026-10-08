@@ -811,15 +811,15 @@
     </key>
     <key name="top-bar-enable-adaptive-text-color" type="b">
       <default>true</default>
-      <summary>Adapt the top bar's text colour to what is behind it</summary>
+      <summary>Adapt the top bar's text color to what is behind it</summary>
     </key>
     <key name="top-bar-sample-interval-ms" type="i">
       <default>1000</default>
-      <summary>How often the top bar's text colour is checked (ms)</summary>
+      <summary>How often the top bar's text color is checked (ms)</summary>
     </key>
     <key name="top-bar-adaptive-text-preference" type="s">
       <default>"auto"</default>
-      <summary>Preferred text colour</summary>
+      <summary>Preferred text color</summary>
       <description>"light" or "dark" decides when both are equally readable; "auto" favours neither.</description>
     </key>
 
@@ -837,10 +837,15 @@
       <summary>Where the widgets are stacked</summary>
       <description>"top-left", "top-right", "bottom-left", "bottom-right" or "center" of the primary monitor. A widget that was dragged stays where it was dropped.</description>
     </key>
+    <key name="desktop-widget-anchors" type="s">
+      <default>"{}"</default>
+      <summary>Where single widgets are stacked instead</summary>
+      <description>JSON: widget id to "top-left", "top-right", "bottom-left", "bottom-right" or "center", for the widgets put somewhere other than desktop-widgets-position from their menu.</description>
+    </key>
     <key name="desktop-item-positions" type="s">
       <default>"{}"</default>
       <summary>Where desktop items were dragged</summary>
-      <description>JSON: item id to the fraction [x, y] of the work area its centre was dropped at.</description>
+      <description>JSON: item id to the fraction [x, y] of the work area its center was dropped at.</description>
     </key>
     <key name="weather-place" type="(sdd)">
       <default>("", 0.0, 0.0)</default>
@@ -882,15 +887,15 @@
     </key>
     <key name="desktop-widget-enable-adaptive-text-color" type="b">
       <default>true</default>
-      <summary>Adapt the desktop items' text colour to what is behind them</summary>
+      <summary>Adapt the desktop items' text color to what is behind them</summary>
     </key>
     <key name="desktop-widget-sample-interval-ms" type="i">
       <default>2000</default>
-      <summary>How often the desktop items' text colour is checked (ms)</summary>
+      <summary>How often the desktop items' text color is checked (ms)</summary>
     </key>
     <key name="desktop-widget-adaptive-text-preference" type="s">
       <default>"auto"</default>
-      <summary>Preferred text colour</summary>
+      <summary>Preferred text color</summary>
       <description>"light" or "dark" decides when both are equally readable; "auto" favours neither.</description>
     </key>
     <key name="enable-glass-clock" type="b">
@@ -903,9 +908,9 @@
       <description>"top-left", "top-right", "bottom-left", "bottom-right" or "center" of the primary monitor, unless it was dragged.</description>
     </key>
     <key name="glass-clock-font" type="s">
-      <default>""</default>
+      <default>"Sofia Sans Extra Condensed SemiBold"</default>
       <summary>Font of the glass clock</summary>
-      <description>A Pango font description without a size, such as "Cantarell Bold". Empty uses the interface font in bold.</description>
+      <description>A font description without a size, such as "Cantarell Bold": one of the fonts the extension ships (Antonio, Barlow Condensed, Saira Extra Condensed, Sofia Sans Extra Condensed) with a weight (Light, Regular, SemiBold, Bold), or any installed font. Empty uses the interface font in bold.</description>
     </key>
     <key name="glass-clock-size" type="i">
       <range min="48" max="480"/>
@@ -996,15 +1001,15 @@
     </key>
     <key name="launcher-enable-adaptive-text-color" type="b">
       <default>true</default>
-      <summary>Adapt the launcher's text colour to what is behind it</summary>
+      <summary>Adapt the launcher's text color to what is behind it</summary>
     </key>
     <key name="launcher-sample-interval-ms" type="i">
       <default>600</default>
-      <summary>How often the launcher's text colour is checked (ms)</summary>
+      <summary>How often the launcher's text color is checked (ms)</summary>
     </key>
     <key name="launcher-adaptive-text-preference" type="s">
       <default>"auto"</default>
-      <summary>Preferred text colour</summary>
+      <summary>Preferred text color</summary>
       <description>"light" or "dark" decides when both are equally readable; "auto" favours neither.</description>
     </key>
 

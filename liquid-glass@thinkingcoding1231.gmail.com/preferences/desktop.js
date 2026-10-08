@@ -5,6 +5,8 @@ import Gtk from 'gi://Gtk';
 import Pango from 'gi://Pango';
 import Soup from 'gi://Soup?version=3.0';
 
+import {BUNDLED_FAMILIES} from '../dist/desktop/bundledFonts.js';
+
 const GEOCODING = 'https://geocoding-api.open-meteo.com/v1/search';
 const USER_AGENT = 'Liquid Glass GNOME Shell extension (https://github.com/ryohsuke1231/liquid-glass)';
 const MAX_PLACES = 8;
@@ -14,7 +16,7 @@ const PLACES = [
   ['top-right', 'Top right'],
   ['bottom-left', 'Bottom left'],
   ['bottom-right', 'Bottom right'],
-  ['center', 'Centre'],
+  ['center', 'Center'],
 ];
 
 const WIDGETS = [
@@ -23,33 +25,40 @@ const WIDGETS = [
   ['media', 'Now playing', 'Shown while a music or video player is running'],
 ];
 
-function movedPositions(settings) {
+function jsonSetting(settings, key) {
   try {
-    return JSON.parse(settings.get_value('desktop-item-positions').deep_unpack()) ?? {};
+    return JSON.parse(settings.get_value(key).deep_unpack()) ?? {};
   } catch {
     return {};
   }
 }
 
+const movedPositions = settings => jsonSetting(settings, 'desktop-item-positions');
+
 // A place on the desktop for `key`. The item `id` may have been moved
 // elsewhere, which the row reports; picking a place puts it back there.
+// A place on the desktop for `key`: the clock's (`id` "clock") or the one
+// the widgets share (`id` null). Moved items, and widgets given a place of
+// their own from their menu, are reported; picking a place puts them back.
 function placeRow(group, controls, title, key, id) {
   const settings = controls.settings;
   const row = new Adw.ComboRow({title,
-    model: Gtk.StringList.new([...PLACES.map(([, name]) => name), 'Where it was moved'])});
+    model: Gtk.StringList.new([...PLACES.map(([, name]) => name), id ? 'Where it was moved' : 'Where each was put'])});
   group.add(row);
   let syncing = false;
   const refresh = () => {
     syncing = true;
+    const value = settings.get_value(key).deep_unpack();
+    const own = id ? false : Object.values(jsonSetting(settings, 'desktop-widget-anchors')).some(anchor => anchor !== value);
     const moved = id ? id in movedPositions(settings)
       : Object.keys(movedPositions(settings)).some(item => item !== 'clock');
-    const index = PLACES.findIndex(([value]) => value === settings.get_value(key).deep_unpack());
-    row.selected = moved ? PLACES.length : Math.max(index, 0);
+    const index = PLACES.findIndex(([place]) => place === value);
+    row.selected = moved || own ? PLACES.length : Math.max(index, 0);
     syncing = false;
   };
   row.connect('notify::selected', () => {
     if (syncing) return;
-    // "Where it was moved" only reports; it cannot be picked.
+    // The last entry only reports; it cannot be picked.
     if (row.selected >= PLACES.length) {
       refresh();
       return;
@@ -58,29 +67,66 @@ function placeRow(group, controls, title, key, id) {
     for (const item of Object.keys(positions)) {
       if (id ? item === id : item !== 'clock') delete positions[item];
     }
-    controls.write({[key]: PLACES[row.selected][0], 'desktop-item-positions': JSON.stringify(positions)});
+    controls.write({[key]: PLACES[row.selected][0], 'desktop-item-positions': JSON.stringify(positions),
+      ...id ? {} : {'desktop-widget-anchors': '{}'}});
   });
-  controls.watch([key, 'desktop-item-positions'], refresh);
+  controls.watch([key, 'desktop-item-positions', 'desktop-widget-anchors'], refresh);
   return row;
 }
 
-function fontRow(group, controls) {
+const WEIGHTS = ['Light', 'Regular', 'SemiBold', 'Bold'];
+
+// The weight in a description such as "Antonio SemiBold" after `family`, as an index into WEIGHTS.
+function weightIndex(description, family) {
+  const weight = Pango.FontDescription.from_string(`Sans${description.slice(family.length)}`).get_weight();
+  const values = [300, 400, 600, 700];
+  return values.reduce((best, v, i) => Math.abs(v - weight) < Math.abs(values[best] - weight) ? i : best, 0);
+}
+
+// The clock's font: one the extension ships, in one of its weights, the
+// interface font in bold, or any installed font.
+function fontRows(group, controls) {
   const settings = controls.settings;
-  const row = new Adw.ActionRow({title: 'Font', subtitle: 'The interface font in bold unless you pick one'});
+  const families = Object.keys(BUNDLED_FAMILIES);
+  const row = new Adw.ComboRow({title: 'Font',
+    model: Gtk.StringList.new([...families, 'Interface font', 'Installed font'])});
   const button = new Gtk.FontDialogButton({valign: Gtk.Align.CENTER, level: Gtk.FontLevel.FACE,
     dialog: new Gtk.FontDialog({title: 'Clock Font'})});
-  const reset = new Gtk.Button({icon_name: 'edit-undo-symbolic', valign: Gtk.Align.CENTER,
-    tooltip_text: 'Use the interface font', css_classes: ['flat']});
   row.add_suffix(button);
-  row.add_suffix(reset);
+  const weight = new Adw.ComboRow({title: 'Weight', model: Gtk.StringList.new(WEIGHTS)});
   group.add(row);
+  group.add(weight);
+  const interfaceIndex = families.length;
   let syncing = false;
+  const familyOf = value => families.find(name => value === name || value.startsWith(`${name} `));
   controls.watch(['glass-clock-font'], () => {
     syncing = true;
     const value = settings.get_value('glass-clock-font').deep_unpack();
-    button.font_desc = Pango.FontDescription.from_string(value || 'Sans Bold');
-    reset.sensitive = value !== '';
+    const family = familyOf(value);
+    row.selected = family ? families.indexOf(family) : value === '' ? interfaceIndex : interfaceIndex + 1;
+    weight.visible = !!family;
+    if (family) weight.selected = weightIndex(value, family);
+    button.visible = !family && value !== '';
+    if (button.visible) button.font_desc = Pango.FontDescription.from_string(value);
     syncing = false;
+  });
+  const writeBundled = () => controls.write({
+    'glass-clock-font': `${families[row.selected]} ${WEIGHTS[weight.selected]}`,
+  });
+  row.connect('notify::selected', () => {
+    if (syncing) return;
+    if (row.selected < families.length) {
+      writeBundled();
+    } else if (row.selected === interfaceIndex) {
+      controls.write({'glass-clock-font': ''});
+    } else {
+      // Kept until a font is picked with the button.
+      button.visible = true;
+      weight.visible = false;
+    }
+  });
+  weight.connect('notify::selected', () => {
+    if (!syncing && row.selected < families.length) writeBundled();
   });
   button.connect('notify::font-desc', () => {
     if (syncing || !button.font_desc) return;
@@ -88,7 +134,7 @@ function fontRow(group, controls) {
     desc.unset_fields(Pango.FontMask.SIZE);
     controls.write({'glass-clock-font': desc.to_string()});
   });
-  reset.connect('clicked', () => controls.write({'glass-clock-font': ''}));
+  return [row, weight];
 }
 
 function entryRow(group, controls, title, key, {read = v => v, write = v => v, valid = () => true} = {}) {
@@ -227,8 +273,8 @@ function addClock(page, controls) {
     controls.toggle(group, 'Show the date', 'glass-clock-show-date'),
     controls.number(group, 'Blur', ['glass-clock-blur-radius'], 0, 30, 1, '', {slider: true}),
     controls.number(group, 'Tint strength', ['glass-clock-tint-strength'], 0, 1, 0.01, '', {slider: true}),
+    ...fontRows(group, controls),
   ];
-  fontRow(group, controls);
   controls.watch(['enable-glass-clock'], () => {
     for (const row of rows) row.sensitive = show.active;
   });

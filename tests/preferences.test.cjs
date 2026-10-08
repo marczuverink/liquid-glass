@@ -79,7 +79,9 @@ function fixture(overrides = {}, dbusResponses = [], blurMyShell = null) {
     StringList: {new: titles => titles}, Align: {CENTER: 0}, SelectionMode: {NONE: 0},
     FontDialogButton: Widget, FontDialog: Widget, FontLevel: {FACE: 2},
     accelerator_parse: text => [text.length > 0, text.length > 0 ? 1 : 0, 0]};
-  const fontDescription = text => ({copy() { return fontDescription(text); }, unset_fields() {}, to_string: () => text});
+  const WEIGHTS = {Light: 300, Regular: 400, SemiBold: 600, Bold: 700};
+  const fontDescription = text => ({copy() { return fontDescription(text); }, unset_fields() {}, to_string: () => text,
+    get_weight: () => WEIGHTS[text.split(' ').pop()] ?? 400});
   const Pango = {FontDescription: {from_string: fontDescription}, FontMask: {SIZE: 1}};
   const dbusCalls = [];
   const bmsSchemas = '/home/test/.local/share/gnome-shell/extensions/blur-my-shell@aunetx/schemas';
@@ -275,7 +277,7 @@ test('a fresh install shows the default shadow as the Soft preset, not Custom', 
 test('the preferred text colour writes only its own surface key, and the dump shortcut has a switch', () => {
   const f = fixture({'preferences-advanced': true});
   f.row('Surface').selected = 1;
-  const row = f.row('Preferred text colour');
+  const row = f.row('Preferred text color');
   assert.ok(row, 'calendar shows the preferred text colour');
   const before = f.writes.length;
   row.selected = 2;

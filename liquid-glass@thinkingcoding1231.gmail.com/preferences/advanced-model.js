@@ -30,7 +30,7 @@ export const LAYOUT = {
     ['y-offset', 'Vertical offset', -50, 100, 1], ['scale', 'Menu scale', 0.5, 1, 0.01]],
   notification: [['glass-expand', 'Glass expansion', 0, 50, 1], ['y-offset', 'Vertical offset', 0, 100, 1]],
   'quick-settings': [['glass-expand', 'Glass expansion', 0, 50, 1], ['x-offset', 'Horizontal offset', -100, 100, 1],
-    ['y-offset', 'Vertical offset', -100, 100, 1], ['toggle-tint-strength', 'Button base colour', 0, 1, 0.01],
+    ['y-offset', 'Vertical offset', -100, 100, 1], ['toggle-tint-strength', 'Button base color', 0, 1, 0.01],
     ['toggle-corner-radius', 'Button corners', 0, 60, 1]],
   osd: [['glass-expand', 'Glass expansion', 0, 50, 1], ['y-offset', 'Vertical offset', -100, 100, 1]],
   application: [],
@@ -53,7 +53,7 @@ export const OPTICS = [
   ['glass-edge-smoothing', 'Edge smoothing', 0, 10, 0.1],
   ['glass-profile-shape-n', 'Surface curvature', 1, 20, 0.1],
   ['glass-ior', 'Index of refraction', 1, 4, 0.01],
-  ['glass-chroma-strength', 'Colour separation', 0, 1, 0.01],
+  ['glass-chroma-strength', 'Color separation', 0, 1, 0.01],
   ['glass-corner-smoothing', 'Corner smoothing', 0, 1, 0.01],
 ];
 
@@ -64,7 +64,7 @@ export const LIGHTING = [
   ['glass-rim-intensity', 'Edge light', 0, 5, 0.1],
   ['glass-rim-directional-power', 'Edge directionality', 0, 10, 0.1],
   ['glass-rim-power', 'Edge falloff', 0, 20, 0.1],
-  ['glass-rim-light-color-intensity', 'Edge colour strength', 0, 5, 0.1],
+  ['glass-rim-light-color-intensity', 'Edge color strength', 0, 5, 0.1],
   ['glass-sheen-intensity', 'Sheen', 0, 2, 0.01],
   ['glass-light-angle-deg', 'Light angle', 0, 360, 1],
 ];

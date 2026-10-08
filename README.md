@@ -98,20 +98,20 @@ The effect can be enabled or disabled per UI element on the **Effects** page. In
 | --- | --- |
 | **Top Bar** | The bar itself, as **one pill** across the screen or **three pills** behind its groups of buttons (activities, clock, status icons), chosen on the Effects page. Off by default. Supports **adaptive text coloring**. |
 | **Dash to Dock** | Glass behind the dock. Adds a bottom margin control so the dock can float above the screen edge. Works with the Dash to Dock / Ubuntu Dock extension. |
-| **Calendar & Other Top Bar Menus** | Glass behind the calendar (clock) menu and behind the menus of the other top bar indicators — the keyboard layout and accessibility menus, and the indicators other extensions add, including [ArcMenu](https://gitlab.com/arcmenu/ArcMenu)'s menu and its right-click menu. Each detected menu can be switched off on its own. Menus **grow out of their button**: the glass pulls out of the button like a drop of liquid and stretches into the menu, carrying the menu's items with it, and draws back into the button when the menu closes. Only its shape changes; nothing fades (Appearance → Behavior → "Menus grow from their button"). With that off, a **custom spring animation** (stiffness / damping / mass) scales the menu instead. Also supports **adaptive text coloring**. |
+| **Calendar & Other Top Bar Menus** | Glass behind the calendar (clock) menu and behind the menus of the other top bar indicators — the keyboard layout and accessibility menus, and the indicators other extensions add, including [ArcMenu](https://gitlab.com/arcmenu/ArcMenu)'s menu and its right-click menu. Each detected menu can be switched off on its own. Menus **grow out of their button**: the glass pulls out of the button's highlight like a drop of liquid and stretches into the menu, carrying the menu's items with it, and draws back into the button when the menu closes. Only its shape changes; nothing fades (Appearance → Behavior → "Menus grow from their button"). With that off, a **custom spring animation** (stiffness / damping / mass) scales the menu instead. Also supports **adaptive text coloring**. |
 | **Notifications** | Glass behind notification banners. Supports **adaptive text coloring** and a hide safety margin to avoid flicker while the banner is dismissed. |
-| **Quick Settings** | Two modes: **Whole menu** applies one sheet of glass behind the whole panel, and **Individual buttons** turns every toggle button into its own piece of glass, keeping each toggle's own accent color (see "Button base colour"). Also supports spring animation and adaptive text coloring. |
+| **Quick Settings** | Two modes: **Whole menu** applies one sheet of glass behind the whole panel, and **Individual buttons** turns every toggle button into its own piece of glass, keeping each toggle's own accent color (see "Button base color"). Also supports spring animation and adaptive text coloring. |
 | **OSD** | Glass behind the on-screen displays (volume, brightness, and so on), with adaptive text coloring. |
 | **Application Windows** | Glass behind application windows, with a **window content opacity** slider so the glass shows through the window itself. Applies either to selected applications, or to all windows minus exclusions. Both lists are filled from a live picker of your currently open windows, so there is no need to look up `WM_CLASS` values by hand. |
 
 ### Adaptive Text Coloring
 
-Where it is supported, the extension samples the brightness of what is behind the UI and adjusts the text color so labels stay readable on both bright and dark wallpapers. A **Preferred text colour** (Automatic / Light / Dark) decides the cases where the background favours neither. The sample interval is configurable; a shorter interval reacts faster but costs more CPU.
+Where it is supported, the extension samples the brightness of what is behind the UI and adjusts the text color so labels stay readable on both bright and dark wallpapers. A **Preferred text color** (Automatic / Light / Dark) decides the cases where the background favors neither. The sample interval is configurable; a shorter interval reacts faster but costs more CPU.
 
 ### Quick Settings: Whole menu vs. Individual buttons
 
 - **Whole menu** applies the glass as one continuous sheet behind the whole quick settings panel. Corner radius, X/Y offset and the spring animation apply to that sheet.
-- **Individual buttons** gives each toggle button its own glass shape, tracked individually. "Button corners" sets the roundness of each shape, and "Button base colour" controls how much of the toggle's own original color (for example the blue of an active toggle) is kept, independently of the custom tint color.
+- **Individual buttons** gives each toggle button its own glass shape, tracked individually. "Button corners" sets the roundness of each shape, and "Button base color" controls how much of the toggle's own original color (for example the blue of an active toggle) is kept, independently of the custom tint color.
 
 
 ### Using it with Blur my Shell
@@ -124,11 +124,11 @@ The **Desktop** page of the preferences adds glass that is not part of GNOME's o
 
 ### Glass Clock
 
-A large clock whose digits are themselves glass, like the clock on the iPhone's lock screen, with the date above it. It sits on the desktop below the windows. Pick a place for it (one of the four corners or the centre) in the preferences or from its right-click menu (**Position**), or right-click it and choose **Move and Resize**: a frame appears round it, to drag it anywhere and to resize it by the handles. The side handles make the digits wider; the top and bottom ones make them taller the way the iPhone's tall clock does, by lengthening their straight upright strokes while curves, bars and the colon's dots keep their shape; the corners scale the whole clock. It stays where it was moved until you pick a place again. The font, the size, the width, the height, the time format (as in Settings, 24-hour or 12-hour), the date, the blur and the tint can be changed. Without a font of your own it uses the interface font in bold; a condensed font suits a tall clock.
+A large clock whose digits are themselves glass, like the clock on the iPhone's lock screen, with the date above it. It sits on the desktop below the windows. Pick a place for it (one of the four corners or the center) in the preferences or from its right-click menu (**Position**), or right-click it and choose **Move and Resize**: a frame appears round it, to drag it anywhere and to resize it by the handles. The side handles make the digits wider; the top and bottom ones make them taller the way the iPhone's tall clock does, by lengthening their straight upright strokes while curves, bars and the colon's dots keep their shape; the corners scale the whole clock. It stays where it was moved until you pick a place again. The font, the size, the width, the height, the time format (as in Settings, 24-hour or 12-hour), the date, the blur and the tint can be changed. Four condensed fonts that suit a tall clock come with the extension, each in Light, Regular, SemiBold and Bold: [Antonio](https://fonts.google.com/specimen/Antonio), [Barlow Condensed](https://fonts.google.com/specimen/Barlow+Condensed), [Saira Extra Condensed](https://fonts.google.com/specimen/Saira+Extra+Condensed) and [Sofia Sans Extra Condensed](https://fonts.google.com/specimen/Sofia+Sans+Extra+Condensed), all under the SIL Open Font License (`fonts/`); Sofia Sans Extra Condensed SemiBold is the default. The interface font or any installed font can be picked instead.
 
 ### Desktop Widgets
 
-Cards of glass on the desktop, stacked in a corner or the centre of the primary monitor. Right-click one and choose **Move** to put it anywhere else:
+Cards of glass on the desktop, stacked in a corner or the center of the primary monitor. Right-click one to put it in another corner on its own (**Position**), or choose **Move** to put it anywhere else:
 
 - **Weather** — the current weather and the next hours, for a city or town searched for in the preferences, down to small towns that GNOME Weather has no location for; without one, for the location set in [GNOME Weather](https://apps.gnome.org/Weather/), as the calendar menu shows it. With GNOME Weather installed the forecast comes from libgweather (MET Norway), as in GNOME Weather; without it, from [Open-Meteo](https://open-meteo.com/). The card names its source. Click the card to open GNOME Weather.
 - **Up next** — the rest of today's events and tomorrow's, from the calendars the calendar menu shows. Click it to open GNOME Calendar.
@@ -167,7 +167,7 @@ The **Rendering** page controls the shader itself. These settings are global and
 - **Edge smoothing** - Feathering width of the glass silhouette, used as geometry anti-aliasing.
 - **Surface curvature** - The superellipse exponent describing the cross-section of the glass. Low values give a soft, dome-like surface; high values give a flat top with a sharp roll-off at the edge.
 - **Index of refraction** - Optical density of the material. Real glass is roughly 1.5 to 2.4.
-- **Colour separation** - RGB separation (chromatic aberration) in the refracted image, as a fraction of the refraction: the colours part only where the glass bends the background, and most where it bends it most. `0` by default: macOS's glass shows none.
+- **Color separation** - RGB separation (chromatic aberration) in the refracted image, as a fraction of the refraction: the colors part only where the glass bends the background, and most where it bends it most. `0` by default: macOS's glass shows none.
 - **Corner smoothing** - Continuous (squircle-like) corners, as on macOS and iOS. `0` gives circular arcs; higher values start the curve earlier, up to (1 + value) times the corner radius from the corner, so it meets the straight edges without a visible crease. The corner's midpoint stays where the circular one would be, so the corner radius keeps its meaning. Corners with no room to grow, such as pill-shaped buttons, stay circular, and application windows always keep circular corners to match the window. `0.6` by default.
 
 The lens acts over a fixed band (22 px) along the edge, whatever the corner radius or the size of the element, as measured on macOS; the settings above shape the lens inside that band. An element thinner than the band gets the same lens scaled down.
@@ -177,10 +177,10 @@ The lens acts over a fixed band (22 px) along the edge, whatever the corner radi
 - **Edge light width** / **Edge light** - Size and brightness of the light band along the edges.
 - **Edge directionality** - How strongly the virtual light direction shapes the edge light (higher values concentrate it on the lit side).
 - **Edge falloff** - Falloff of the Fresnel term for the edge light.
-- **Edge colour strength** - Multiplier for the edge light color.
+- **Edge color strength** - Multiplier for the edge light color.
 - **Sheen** - A broad sheen spread across the surface, sampled from the background. `0` by default.
 - **Light angle** - Direction of the virtual light source, in degrees.
-- **Colour from backdrop** - The edge light, highlights and sheen take the colour of what is behind the glass instead of plain white, at the same brightness. On by default.
+- **Color from backdrop** - The edge light, highlights and sheen take the color of what is behind the glass instead of plain white, at the same brightness. On by default.
 
 ### Shadows
 The drop shadow anchors the glass on light backgrounds (a white wallpaper, for example) so it does not visually disappear.
@@ -247,13 +247,14 @@ A significant part of this codebase was written with the help of AI coding assis
 - [x] Improve performance (blur reuse, region-limited blur, reading the backdrop from the stage)
 - [x] Support GNOME 51
 - [x] Support GNOME 46, 47, 48 and 49
-- [x] Continuous corners, refraction-proportional colour separation and backdrop-coloured highlights
+- [x] Continuous corners, refraction-proportional color separation and backdrop-colored highlights
 - [x] Add ArcMenu support
 - [x] Add top bar glass (one pill or three pills)
 - [x] Grow menus out of their top bar button
 - [x] Add a glass clock, desktop widgets (weather, up next, now playing) and a search launcher
 - [x] Move and resize the clock and the widgets from their right-click menu
 - [x] Tall clock digits that grow along their upright strokes, with smoother glass on glyph corners and curves
+- [x] Ship four condensed clock fonts, and give every desktop item a Position menu
 
 ### Next
 - [ ] Publish to extensions.gnome.org (not approved yet)

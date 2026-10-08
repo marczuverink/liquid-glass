@@ -2,9 +2,9 @@
 // shape is the text itself (the glass clock).
 //
 // GJS cannot read a Cairo surface's pixels or a texture's back, so each glyph
-// is drawn with Pango into a Cairo surface that is written to a PNG and
-// decoded here. Glyphs are measured once per font and kept: a new time only
-// places the cached fields side by side.
+// is drawn (with Pango, or from a font file the extension ships) into a Cairo
+// surface that is written to a PNG and decoded here. Glyphs are measured once
+// per font and kept: a new time only places the cached fields side by side.
 import Cogl from 'gi://Cogl';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
@@ -13,6 +13,7 @@ import PangoCairo from 'gi://PangoCairo';
 import Cairo from 'cairo';
 
 import { coglContext } from '../shellVersion.js';
+import { type TrueTypeFont, traceGlyph } from './trueType.js';
 
 // Glyphs are drawn this many times larger and their fields scaled down, for
 // sub-pixel accurate edges.
@@ -266,12 +267,17 @@ export function softened(field: DistanceField, sigma: number): DistanceField {
 
 // Taller glyphs
 
-// How fast a row stops taking height as its outline slants: at this much
-// horizontal change of the outline per row (summed over the row) it takes half.
-// The change is measured over half a stroke's width up and down, so the middle
-// of a round dot, nearly upright from one row to the next, still counts as
-// curved.
-const SLANT_HALF = 0.12;
+// How fast a row stops taking height as the outline bends through it: at this
+// much change of an edge's slope (horizontal px per row) between half a
+// stroke above and half a stroke below, it takes half. A straight edge, upright
+// or slanted, does not bend, and stays straight however its rows are spaced;
+// a curve would be drawn out of shape, and a round dot would no longer be round.
+const BEND_HALF = 0.12;
+// Edges flatter than this many px across per row change their angle visibly
+// when their rows spread out; past it the row takes less, by half at
+// FLAT_START + FLAT_HALF.
+const FLAT_START = 1.5;
+const FLAT_HALF = 1;
 // A row whose longest stroke is this many times the glyph's usual stroke runs
 // along a horizontal one (a bar, the top of a bowl), whose thickness is kept.
 const BAR_START = 1.4;
@@ -282,17 +288,38 @@ const SHARE_SPREAD = 0.03;
 // upright stroke still grows evenly instead of somewhere arbitrary.
 const SHARE_FLOOR = 0.02;
 
+// Where the outline crosses row y of coverage `alpha` (`w` wide): x to a
+// fraction of a pixel, positive where the row enters the glyph and negative
+// where it leaves (the sign is the direction, the magnitude x + 1).
+function rowEdges(alpha: Uint8Array, w: number, y: number): number[] {
+  const edges: number[] = [];
+  let prev = 0;
+  for (let x = 0; x <= w; x++) {
+    const a = x < w ? alpha[y * w + x] : 0;
+    if ((prev < 128) !== (a < 128)) {
+      const at = x - 1 + (127.5 - prev) / (a - prev);
+      edges.push(a >= 128 ? at + 1 : -(at + 1));
+    }
+    prev = a;
+  }
+  return edges;
+}
+
 /**
  * How much of a glyph's added height each row of coverage `alpha` (0-255,
- * `w` wide) takes, rows `top` to `bottom`: rows that cross upright strokes,
- * which look the same however many times they repeat, take most; rows where
- * the outline curves or slants, or that run along a horizontal stroke, take
- * little. The shares add up to 1.
+ * `w` wide) takes, rows `top` to `bottom`. Rows where every edge runs
+ * straight take most: they look the same however far apart they are drawn.
+ * Rows where an edge bends or lies nearly flat take little, and so do rows
+ * near where strokes begin, end or meet (the edges there do not continue up
+ * and down), and rows that run along a horizontal stroke. The shares add up
+ * to 1.
  */
 export function rowShares(alpha: Uint8Array, w: number, top: number, bottom: number): Float64Array {
   const n = bottom - top;
-  const longest = new Float64Array(n);
-  for (let r = 0; r < n; r++) {
+  const edges: number[][] = [];
+  const longest = new Float64Array(n + 1);
+  for (let r = 0; r <= n; r++) {
+    edges.push(rowEdges(alpha, w, top + r));
     let run = 0;
     for (let x = 0, i = (top + r) * w; x < w; x++, i++) {
       run = alpha[i] >= 128 ? run + 1 : 0;
@@ -301,19 +328,29 @@ export function rowShares(alpha: Uint8Array, w: number, top: number, bottom: num
   }
   const stroked = Array.from(longest).filter(v => v > 0).sort((a, b) => a - b);
   const stroke = stroked.length ? stroked[stroked.length >> 1] : 1;
-
   const reach = Math.max(Math.round(stroke / 2), 1);
+
   const raw = new Float64Array(n);
   for (let r = 0; r < n; r++) {
-    const above = (top + Math.max(r - reach, 0)) * w;
-    const row = (top + r) * w;
-    const below = (top + Math.min(r + reach, n)) * w;
-    let change = 0;
-    for (let x = 0; x < w; x++)
-      change += Math.abs(alpha[below + x] - alpha[row + x]) + Math.abs(alpha[row + x] - alpha[above + x]);
-    const slant = change / 255 / Math.max((below - above) / w, 1) / SLANT_HALF;
+    const ra = Math.max(r - reach, 0), rb = Math.min(r + reach, n);
+    const [above, here, below] = [edges[ra], edges[r], edges[rb]];
+    let share = 0;
+    if (above.length === here.length && below.length === here.length &&
+      here.every((e, j) => Math.sign(e) === Math.sign(above[j]) && Math.sign(e) === Math.sign(below[j]))) {
+      let bend = 0, flat = 0;
+      for (let j = 0; j < here.length; j++) {
+        const [xa, x, xb] = [Math.abs(above[j]), Math.abs(here[j]), Math.abs(below[j])];
+        const up = r > ra ? (x - xa) / (r - ra) : null;
+        const down = rb > r ? (xb - x) / (rb - r) : null;
+        if (up !== null && down !== null) bend = Math.max(bend, Math.abs(down - up));
+        flat = Math.max(flat, Math.abs((xb - xa) / Math.max(rb - ra, 1)));
+      }
+      const b = bend / BEND_HALF;
+      const f = Math.max(flat - FLAT_START, 0) / FLAT_HALF;
+      share = 1 / (1 + b * b) / (1 + f * f);
+    }
     const bar = Math.max(longest[r] / stroke - BAR_START, 0) / BAR_HALF;
-    raw[r] = 1 / (1 + slant * slant) / (1 + bar * bar);
+    raw[r] = share / (1 + bar * bar);
   }
   // A Gaussian along the rows, so the share changes smoothly.
   const sigma = Math.max(SHARE_SPREAD * n, 1);
@@ -340,8 +377,8 @@ export function rowShares(alpha: Uint8Array, w: number, top: number, bottom: num
  * where they are and the rows below move down.
  */
 export function tallen(alpha: Uint8Array, w: number, h: number, top: number, bottom: number, extra: number): Uint8Array {
-  top = Math.min(Math.max(top, 0), h - 1);
-  bottom = Math.min(Math.max(bottom, top + 1), h - 1);
+  top = Math.min(Math.max(Math.round(top), 0), h - 1);
+  bottom = Math.min(Math.max(Math.round(bottom), top + 1), h - 1);
   const shares = rowShares(alpha, w, top, bottom);
   // Where each source row boundary lands, then each output row's centre
   // traced back to a fractional source row.
@@ -386,15 +423,23 @@ function downsample(field: DistanceField, factor: number): DistanceField {
   return { data, width, height };
 }
 
-// The union of a layout's ink and logical rects, px.
-function bounds(layout: Pango.Layout): { x0: number, y0: number, x1: number, y1: number } {
-  const [ink, logical] = layout.get_pixel_extents();
-  return {
-    x0: Math.floor(Math.min(ink!.x, logical!.x)),
-    y0: Math.floor(Math.min(ink!.y, logical!.y)),
-    x1: Math.ceil(Math.max(ink!.x + ink!.width, logical!.x + logical!.width)),
-    y1: Math.ceil(Math.max(ink!.y + ink!.height, logical!.y + logical!.height)),
-  };
+interface Box {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/** A font the digits are cut from, at one size. */
+export interface TextFace {
+  /** The union of the ink and the line of `text` at `scale` times the size, px from the line's top left. */
+  bounds(text: string, scale: number): Box;
+  /** Where each character of `text` starts, px. */
+  offsets(text: string): number[];
+  /** The top of the digits and the baseline, px from the line's top. */
+  digitBand(): [number, number];
+  /** Fills `text` on `cr` at `scale` times the size, the line's top left at the origin. */
+  draw(cr: any, text: string, scale: number): void;
 }
 
 function layoutFor(cr: any, font: Pango.FontDescription, text: string): Pango.Layout {
@@ -404,6 +449,97 @@ function layoutFor(cr: any, font: Pango.FontDescription, text: string): Pango.La
   return layout;
 }
 
+// Runs `fn` with a Cairo context that draws nowhere, for measuring.
+function measuring<T>(fn: (cr: any) => T): T {
+  const probe = new Cairo.ImageSurface(Cairo.Format.ARGB32, 1, 1);
+  const cr = new Cairo.Context(probe);
+  const result = fn(cr);
+  cr.$dispose();
+  probe.finish();
+  return result;
+}
+
+/** An installed font, through Pango: a description such as "Cantarell Bold" at `size` px. */
+export function pangoFace(description: string, size: number): TextFace {
+  const fontAt = (scale: number) => {
+    const font = Pango.FontDescription.from_string(description);
+    font.set_absolute_size(size * scale * Pango.SCALE);
+    return font;
+  };
+  const font = fontAt(1);
+  return {
+    bounds: (text, scale) => measuring(cr => {
+      const [ink, logical] = layoutFor(cr, scale === 1 ? font : fontAt(scale), text).get_pixel_extents();
+      return {
+        x0: Math.floor(Math.min(ink!.x, logical!.x)),
+        y0: Math.floor(Math.min(ink!.y, logical!.y)),
+        x1: Math.ceil(Math.max(ink!.x + ink!.width, logical!.x + logical!.width)),
+        y1: Math.ceil(Math.max(ink!.y + ink!.height, logical!.y + logical!.height)),
+      };
+    }),
+    offsets: text => measuring(cr => {
+      const layout = layoutFor(cr, font, text);
+      // Pango indexes the text by UTF-8 byte.
+      const encoder = new TextEncoder();
+      let byteIndex = 0;
+      return Array.from(text, ch => {
+        const x = layout.index_to_pos(byteIndex).x / Pango.SCALE;
+        byteIndex += encoder.encode(ch).length;
+        return x;
+      });
+    }),
+    digitBand: () => measuring(cr => {
+      const digits = layoutFor(cr, font, '0123456789');
+      const [ink] = digits.get_pixel_extents();
+      return [ink!.y, digits.get_baseline() / Pango.SCALE] as [number, number];
+    }),
+    draw: (cr, text, scale) => PangoCairo.show_layout(cr, layoutFor(cr, fontAt(scale), text)),
+  };
+}
+
+/** A font file the extension ships with, at `size` px. */
+export function fileFace(font: TrueTypeFont, size: number): TextFace {
+  const unit = size / font.unitsPerEm;
+  const glyphs = (text: string) => Array.from(text, ch => font.glyph(ch.codePointAt(0)!));
+  const ascent = font.ascender * unit;
+  return {
+    bounds: (text, scale) => {
+      const s = unit * scale;
+      let pen = 0;
+      const box = { x0: 0, y0: 0, x1: 0, y1: (font.ascender - font.descender) * s };
+      for (const g of glyphs(text)) {
+        if (g.contours.length) {
+          box.x0 = Math.min(box.x0, pen + g.xMin * s);
+          box.x1 = Math.max(box.x1, pen + g.xMax * s);
+          box.y0 = Math.min(box.y0, (font.ascender - g.yMax) * s);
+          box.y1 = Math.max(box.y1, (font.ascender - g.yMin) * s);
+        }
+        pen += g.advance * s;
+      }
+      box.x1 = Math.max(box.x1, pen);
+      return { x0: Math.floor(box.x0), y0: Math.floor(box.y0), x1: Math.ceil(box.x1), y1: Math.ceil(box.y1) };
+    },
+    offsets: text => {
+      let pen = 0;
+      return glyphs(text).map(g => {
+        const x = pen;
+        pen += g.advance * unit;
+        return x;
+      });
+    },
+    digitBand: () => [Math.min(...glyphs('0123456789').map(g => ascent - g.yMax * unit)), ascent],
+    draw: (cr, text, scale) => {
+      const s = unit * scale;
+      let pen = 0;
+      for (const g of glyphs(text)) {
+        traceGlyph(cr, g, pen, font.ascender * s, s);
+        pen += g.advance * s;
+      }
+      cr.fill();
+    },
+  };
+}
+
 // Rows `top` to `bottom` of a layout (px) made `extra` px taller.
 interface Tallness {
   top: number;
@@ -411,17 +547,13 @@ interface Tallness {
   extra: number;
 }
 
-// Draws `text` stretched `stretch` times as wide (and made taller by `tall`)
-// into a temporary PNG and reads its coverage back, with `margin` px of room
-// around it. The coverage is in whole blocks of SUPERSAMPLE.
-async function rasterize(font: Pango.FontDescription, text: string, stretch: number, tall: Tallness | null,
+// Draws `text` at SUPERSAMPLE times the size, stretched `stretch` times as wide
+// (and made taller by `tall`, in px at that size) into a temporary PNG and reads
+// its coverage back, with `margin` px of room around it. The coverage is in
+// whole blocks of SUPERSAMPLE.
+async function rasterize(face: TextFace, text: string, stretch: number, tall: Tallness | null,
   margin: number, cancellable: Gio.Cancellable): Promise<{ alpha: Uint8Array, width: number, height: number, originX: number, originY: number }> {
-  const probe = new Cairo.ImageSurface(Cairo.Format.ARGB32, 1, 1);
-  const probeCr = new Cairo.Context(probe);
-  const b = bounds(layoutFor(probeCr, font, text));
-  probeCr.$dispose();
-  probe.finish();
-
+  const b = face.bounds(text, SUPERSAMPLE);
   const x0 = Math.floor(b.x0 * stretch) - margin;
   const y0 = b.y0 - margin;
   const x1 = Math.ceil(b.x1 * stretch) + margin;
@@ -437,7 +569,7 @@ async function rasterize(font: Pango.FontDescription, text: string, stretch: num
   cr.setSourceRGBA(1, 1, 1, 1);
   cr.translate(-ax, -ay);
   cr.scale(stretch, 1);
-  PangoCairo.show_layout(cr, layoutFor(cr, font, text));
+  face.draw(cr, text, SUPERSAMPLE);
   cr.$dispose();
 
   const [fd, path] = GLib.file_open_tmp('liquid-glass-glyph-XXXXXX.png');
@@ -471,7 +603,7 @@ async function rasterize(font: Pango.FontDescription, text: string, stretch: num
 }
 
 /**
- * Distance fields of single glyphs in one font, stretched `stretch` times as
+ * Distance fields of single glyphs of `face`, stretched `stretch` times as
  * wide and made `height` times as tall (see tallen()), built on first use.
  * `range` is how far (px) from the outline the fields reach.
  */
@@ -479,30 +611,16 @@ export class GlyphFields {
   private _glyphs = new Map<string, Promise<GlyphField>>();
   // Cancels the reads still running when the fields are no longer wanted.
   readonly cancellable = new Gio.Cancellable();
-  private _font: Pango.FontDescription;
-  private _bigFont: Pango.FontDescription;
   // The rows the digits stand in, from their top to the baseline, and the
   // px added to them.
   private _tall: Tallness;
   /** The digits' height in the font as it is, px. */
   readonly digitHeight: number;
 
-  constructor(fontDescription: string, readonly size: number, readonly range: number, readonly stretch = 1,
-    readonly height = 1) {
-    this._font = Pango.FontDescription.from_string(fontDescription);
-    this._font.set_absolute_size(size * Pango.SCALE);
-    this._bigFont = this._font.copy()!;
-    this._bigFont.set_absolute_size(size * SUPERSAMPLE * Pango.SCALE);
-
-    const probe = new Cairo.ImageSurface(Cairo.Format.ARGB32, 1, 1);
-    const probeCr = new Cairo.Context(probe);
-    const digits = layoutFor(probeCr, this._font, '0123456789');
-    const [ink] = digits.get_pixel_extents();
-    const baseline = digits.get_baseline() / Pango.SCALE;
-    this.digitHeight = Math.max(baseline - ink!.y, 1);
-    this._tall = { top: ink!.y, bottom: baseline, extra: Math.round((height - 1) * this.digitHeight) };
-    probeCr.$dispose();
-    probe.finish();
+  constructor(private _face: TextFace, readonly range: number, readonly stretch = 1, readonly height = 1) {
+    const [top, baseline] = _face.digitBand();
+    this.digitHeight = Math.max(baseline - top, 1);
+    this._tall = { top, bottom: baseline, extra: Math.round((height - 1) * this.digitHeight) };
   }
 
   private _glyph(ch: string): Promise<GlyphField> {
@@ -510,7 +628,7 @@ export class GlyphFields {
     if (!glyph) {
       const tall = { top: this._tall.top * SUPERSAMPLE, bottom: this._tall.bottom * SUPERSAMPLE,
         extra: this._tall.extra * SUPERSAMPLE };
-      glyph = rasterize(this._bigFont, ch, this.stretch, tall, this.range * SUPERSAMPLE, this.cancellable).then(big => {
+      glyph = rasterize(this._face, ch, this.stretch, tall, this.range * SUPERSAMPLE, this.cancellable).then(big => {
         const field = downsample({ data: signedDistances(big.alpha, big.width, big.height),
           width: big.width, height: big.height }, SUPERSAMPLE);
         return { ...field, originX: big.originX / SUPERSAMPLE, originY: big.originY / SUPERSAMPLE };
@@ -533,10 +651,8 @@ export class GlyphFields {
       if (!/\s/.test(ch)) glyphs.set(ch, await this._glyph(ch));
     }
 
-    const probe = new Cairo.ImageSurface(Cairo.Format.ARGB32, 1, 1);
-    const probeCr = new Cairo.Context(probe);
-    const layout = layoutFor(probeCr, this._font, text);
-    const b = bounds(layout);
+    const b = this._face.bounds(text, 1);
+    const offsets = this._face.offsets(text);
     const r = this.range;
     const x0 = Math.floor(b.x0 * this.stretch) - r;
     const y0 = b.y0 - r;
@@ -544,15 +660,10 @@ export class GlyphFields {
     const height = b.y1 + this._tall.extra + r - y0;
     const data = new Float32Array(width * height).fill(r);
 
-    // Pango indexes the text by UTF-8 byte.
-    const encoder = new TextEncoder();
-    let byteIndex = 0;
-    for (const ch of text) {
-      const pos = layout.index_to_pos(byteIndex);
-      byteIndex += encoder.encode(ch).length;
+    Array.from(text).forEach((ch, index) => {
       const glyph = glyphs.get(ch);
-      if (!glyph) continue;
-      const left = Math.round(pos.x / Pango.SCALE * this.stretch - glyph.originX - x0);
+      if (!glyph) return;
+      const left = Math.round(offsets[index] * this.stretch - glyph.originX - x0);
       const top = Math.round(-glyph.originY - y0);
       for (let gy = 0; gy < glyph.height; gy++) {
         const y = top + gy;
@@ -565,10 +676,7 @@ export class GlyphFields {
           if (v < data[i]) data[i] = v;
         }
       }
-    }
-    probeCr.$dispose();
-    probe.finish();
-
+    });
     return { data, width, height };
   }
 }

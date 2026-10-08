@@ -54,11 +54,11 @@ function addSurface(page, controls, surface, title) {
     controls.toggle(group, 'Automatic text contrast', key);
     const row = controls.number(group, 'Contrast interval (ms)', [`${surface}-sample-interval-ms`], 100, 2000, 50);
     const preferenceKey = `${surface}-adaptive-text-preference`;
-    const preference = controls.choice(group, 'Preferred text colour', [
+    const preference = controls.choice(group, 'Preferred text color', [
       {title: 'Automatic', patch: {[preferenceKey]: 'auto'}},
       {title: 'Light', patch: {[preferenceKey]: 'light'}},
       {title: 'Dark', patch: {[preferenceKey]: 'dark'}},
-    ], 'Decides only when both colours are equally readable', false);
+    ], 'Decides only when both colors are equally readable', false);
     controls.watch([key], () => {
       row.visible = controls.settings.get_boolean(key);
       preference.visible = row.visible;
@@ -82,8 +82,8 @@ function addRendering(page, controls) {
     const group = controls.group(page, title);
     addNumbers(group, controls, specs);
     if (specs === LIGHTING) {
-      controls.toggle(group, 'Colour from backdrop', 'glass-backdrop-highlights',
-        'Light takes the colour of what is behind the glass instead of white');
+      controls.toggle(group, 'Color from backdrop', 'glass-backdrop-highlights',
+        'Light takes the color of what is behind the glass instead of white');
     }
     groups.push(group);
   }

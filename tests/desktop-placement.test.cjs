@@ -31,3 +31,8 @@ test('a moved item keeps its centre as a fraction of the work area', () => {
   assert.deepEqual(placement.placeAtFraction(fraction, area, [200, 100]), [860, 500]);
   assert.deepEqual(placement.placeAtFraction([1, 1], area, [200, 100]), [1720, 980]);
 });
+
+test('widget anchors keep only known places', () => {
+  assert.deepEqual(placement.parseAnchors('{"weather":"bottom-left","events":"middle","media":3}'), { weather: 'bottom-left' });
+  assert.deepEqual(placement.parseAnchors('not json'), {});
+});

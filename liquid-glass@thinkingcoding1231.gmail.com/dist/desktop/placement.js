@@ -89,3 +89,22 @@ export function parsePositions(json) {
     }
     return out;
 }
+
+/** The JSON of desktop-widget-anchors as id → anchor, skipping anything that is not one. */
+export function parseAnchors(json) {
+    let parsed;
+    try {
+        parsed = JSON.parse(json || '{}');
+    }
+    catch {
+        return {};
+    }
+    const out = {};
+    if (!parsed || typeof parsed !== 'object')
+        return out;
+    for (const [id, value] of Object.entries(parsed)) {
+        if (typeof value === 'string' && ANCHORS.includes(value))
+            out[id] = value;
+    }
+    return out;
+}

@@ -95,3 +95,19 @@ export function parsePositions(json: string): Record<string, [number, number]> {
   }
   return out;
 }
+
+/** The JSON of desktop-widget-anchors as id → anchor, skipping anything that is not one. */
+export function parseAnchors(json: string): Record<string, Anchor> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json || '{}');
+  } catch {
+    return {};
+  }
+  const out: Record<string, Anchor> = {};
+  if (!parsed || typeof parsed !== 'object') return out;
+  for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (typeof value === 'string' && (ANCHORS as readonly string[]).includes(value)) out[id] = value as Anchor;
+  }
+  return out;
+}

@@ -8,7 +8,7 @@ import { addBeforeRedraw, removeBeforeRedraw, startSyncLoop, stopStageLoop } fro
 import { MENU_ANIMATION } from '../shellVersion.js';
 import { UIManager } from '../uiManager.js';
 import { EditFrame } from './editFrame.js';
-import { parsePositions, placeAtFraction, fractionOf, sanitizeAnchor, stackAt } from './placement.js';
+import { parseAnchors, parsePositions, placeAtFraction, fractionOf, sanitizeAnchor, stackAt } from './placement.js';
 import { WeatherWidget } from './weather.js';
 import { EventsWidget } from './events.js';
 import { MediaWidget } from './media.js';
@@ -16,7 +16,7 @@ import { GlassClock } from './clock.js';
 export const WIDGET_IDS = ['weather', 'events', 'media'];
 const ANCHOR_NAMES = [
     ['top-left', 'Top Left'], ['top-right', 'Top Right'], ['bottom-left', 'Bottom Left'], ['bottom-right', 'Bottom Right'],
-    ['center', 'Centre'],
+    ['center', 'Center'],
 ];
 
 /**
@@ -58,7 +58,7 @@ export class DesktopLayer {
         const watch = (key, fn) => this._settingsIds.push(this._settings.connect(`changed::${key}`, fn));
         for (const key of ['enable-desktop-widgets', 'desktop-widgets', 'enable-glass-clock'])
             watch(key, () => this._sync());
-        for (const key of ['desktop-widgets-position', 'glass-clock-position', 'desktop-item-positions'])
+        for (const key of ['desktop-widgets-position', 'glass-clock-position', 'desktop-item-positions', 'desktop-widget-anchors'])
             watch(key, () => this._queueLayout());
         this._sync();
     }
@@ -226,9 +226,10 @@ export class DesktopLayer {
     }
 
     _anchorOf(id) {
-        return id === 'clock'
-            ? sanitizeAnchor(this._settings.get_string('glass-clock-position'), 'center')
-            : sanitizeAnchor(this._settings.get_string('desktop-widgets-position'));
+        if (id === 'clock')
+            return sanitizeAnchor(this._settings.get_string('glass-clock-position'), 'center');
+        return parseAnchors(this._settings.get_string('desktop-widget-anchors'))[id] ??
+            sanitizeAnchor(this._settings.get_string('desktop-widgets-position'));
     }
 
     // Places every item: where it was moved to, or stacked at its anchor.
@@ -270,9 +271,18 @@ export class DesktopLayer {
         this._settings.set_string('desktop-item-positions', JSON.stringify(positions));
     }
 
-    _placeClock(anchor) {
-        this._settings.set_string('glass-clock-position', anchor);
-        this._resetPosition('clock');
+    // Puts an item back in the stack at `anchor`. A widget alone gets its own
+    // anchor; the others keep the one they share.
+    _placeAt(id, anchor) {
+        if (id === 'clock') {
+            this._settings.set_string('glass-clock-position', anchor);
+        }
+        else {
+            const anchors = parseAnchors(this._settings.get_string('desktop-widget-anchors'));
+            anchors[id] = anchor;
+            this._settings.set_string('desktop-widget-anchors', JSON.stringify(anchors));
+        }
+        this._resetPosition(id);
     }
 
     _openMenu(item, x, y) {
@@ -285,18 +295,13 @@ export class DesktopLayer {
         if (clock?.resized)
             menu.addAction('Reset Size', () => clock.resetSize());
         const moved = item.id in parsePositions(this._settings.get_string('desktop-item-positions'));
-        if (clock) {
-            const position = new PopupMenu.PopupSubMenuMenuItem('Position', false);
-            const current = this._anchorOf(clock.id);
-            for (const [anchor, name] of ANCHOR_NAMES) {
-                const entry = position.menu.addAction(name, () => this._placeClock(anchor));
-                entry.setOrnament(!moved && anchor === current ? PopupMenu.Ornament.DOT : PopupMenu.Ornament.NONE);
-            }
-            menu.addMenuItem(position);
+        const position = new PopupMenu.PopupSubMenuMenuItem('Position', false);
+        const current = this._anchorOf(item.id);
+        for (const [anchor, name] of ANCHOR_NAMES) {
+            const entry = position.menu.addAction(name, () => this._placeAt(item.id, anchor));
+            entry.setOrnament(!moved && anchor === current ? PopupMenu.Ornament.DOT : PopupMenu.Ornament.NONE);
         }
-        else if (moved) {
-            menu.addAction('Reset Position', () => this._resetPosition(item.id));
-        }
+        menu.addMenuItem(position);
         menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         menu.addAction('Desktop Settings', () => this._openPreferences());
         Main.layoutManager.setDummyCursorGeometry(x, y, 0, 0);

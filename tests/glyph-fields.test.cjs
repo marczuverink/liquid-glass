@@ -111,3 +111,30 @@ test('a round dot keeps its shape and the space round it takes the height', () =
   // Each dot is still about 16 rows tall.
   assert.ok(Math.abs(rows.filter(y => y < 60).length - 16) <= 1, String(rows.filter(y => y < 60).length));
 });
+
+test('a 4 grows along its slanted upper part as well as its stem', () => {
+  // A 4: a diagonal from the top of the stem down to the bar, the stem in
+  // columns 40-49 from row 10 to 90, and the bar across rows 60-69.
+  const [w, h] = [70, 100];
+  const alpha = coverage(w, h, (x, y) => {
+    const stem = x >= 39.5 && x < 49.5 && y >= 9.5 && y < 89.5;
+    const bar = x >= 9.5 && x < 59.5 && y >= 59.5 && y < 69.5;
+    // The diagonal's left edge runs from (40, 10) to (10, 60), 12 px wide.
+    const left = 40 - (y - 10) * 0.6;
+    const diagonal = y >= 9.5 && y < 60 && x >= left && x < left + 12;
+    return stem || bar || diagonal;
+  });
+  const shares = glyphs.rowShares(alpha, w, 10, 90);
+  const perRow = (a, b) => shares.slice(a - 10, b - 10).reduce((s, v) => s + v, 0) / (b - a);
+  const upper = perRow(25, 50), lower = perRow(75, 88);
+  assert.ok(upper > lower * 0.6, `upper ${upper.toFixed(4)} lower ${lower.toFixed(4)}`);
+  // The bar keeps its thickness.
+  assert.ok(perRow(61, 68) < lower * 0.2, `bar ${perRow(61, 68).toFixed(4)}`);
+});
+
+test('a band that starts and ends between rows is taken to the nearest rows', () => {
+  const [w, h] = [20, 40];
+  const alpha = coverage(w, h, (x, y) => x >= 7.5 && x < 12.5 && y >= 9.5 && y < 30.5);
+  const tall = glyphs.tallen(alpha, w, h, 9.6, 30.4, 10);
+  assert.equal(coveredRows(tall, w, h + 10, 10).length, 31);
+});

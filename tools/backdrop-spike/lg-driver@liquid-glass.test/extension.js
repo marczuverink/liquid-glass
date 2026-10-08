@@ -1363,6 +1363,26 @@ export default class LgDriver extends Extension {
     await sleep(1500);
     log(`edit: placed position=${settings.get_string('glass-clock-position')} ` +
       `moved=${settings.get_string('desktop-item-positions')} at=${clock.get_transformed_position().map(Math.round)}`);
+
+    // A widget goes to a corner of its own the same way.
+    const weather = findActor(global.window_group, 'liquid-glass-desktop-weather');
+    if (!weather?.mapped) return;
+    const [wx, wy] = weather.get_transformed_position();
+    await click(wx + 40, wy + 40, Clutter.BUTTON_SECONDARY);
+    await sleep(500);
+    const wsub = items().find(i => label(i) === 'Position');
+    if (!wsub) return;
+    const [wsx, wsy] = wsub.get_transformed_position();
+    await click(wsx + 20, wsy + 10);
+    await sleep(600);
+    const bottomLeft = items().find(i => label(i) === 'Bottom Left');
+    if (!bottomLeft) return;
+    const [bx, by] = bottomLeft.get_transformed_position();
+    await click(bx + 20, by + 10);
+    await sleep(1500);
+    log(`edit: weather placed anchors=${settings.get_string('desktop-widget-anchors')} ` +
+      `at=${weather.get_transformed_position().map(Math.round)}`);
+    await shot('widget-position', [m.x, m.y, m.width, m.height]);
   }
 
   async _featuresScenario() {
@@ -1400,6 +1420,8 @@ export default class LgDriver extends Extension {
         return moving;
       };
       const dateMenu = Main.panel.statusArea.dateMenu.menu;
+      const clock = Main.panel.statusArea.dateMenu._clockDisplay;
+      log(`trace clock label at ${clock.get_transformed_position().map(Math.round)} size ${clock.get_transformed_size().map(Math.round)}`);
       dateMenu.open(true);
       await sleep(2500);
       dateMenu.close(true);
@@ -1442,15 +1464,21 @@ export default class LgDriver extends Extension {
     }
     if (parts.includes('clockshot')) {
       // The clock alone, large, for a close look at its glass ($LG_DRV_CLOCK_SIZE,
-      // $LG_DRV_CLOCK_HEIGHT, $LG_DRV_CLOCK_FONT).
+      // $LG_DRV_CLOCK_HEIGHT, $LG_DRV_CLOCK_FONT, $LG_DRV_CLOCK_TEXT).
+      settings.set_boolean('output-logs', true);
       settings.set_string('glass-clock-position', 'center');
       settings.set_int('glass-clock-size', Number(GLib.getenv('LG_DRV_CLOCK_SIZE') ?? 240));
       settings.set_double('glass-clock-height', Number(GLib.getenv('LG_DRV_CLOCK_HEIGHT') ?? 1));
-      settings.set_string('glass-clock-font', GLib.getenv('LG_DRV_CLOCK_FONT') ?? '');
+      const font = GLib.getenv('LG_DRV_CLOCK_FONT');
+      if (font !== null) settings.set_string('glass-clock-font', font);
       settings.set_boolean('glass-clock-show-date', false);
+      // $LG_DRV_CLOCK_TEXT shows that instead of the time.
+      const text = GLib.getenv('LG_DRV_CLOCK_TEXT');
+      if (text) (await this._lgModule('desktop/clock.js')).GlassClock.prototype._timeText = () => text;
       settings.set_boolean('enable-glass-clock', true);
-      await sleep(4000);
+      await sleep(Number(GLib.getenv('LG_DRV_CLOCK_WAIT') ?? 4000));
       const clock = findActor(global.window_group, 'liquid-glass-desktop-clock');
+      log(`clockshot: font=${settings.get_string('glass-clock-font')} size=${clock.get_transformed_size()}`);
       const [x, y] = clock.get_transformed_position();
       const [w, h] = clock.get_transformed_size();
       await shot('clock-alone', [x, y, w, h]);

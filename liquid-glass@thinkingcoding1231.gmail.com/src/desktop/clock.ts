@@ -10,7 +10,9 @@ import { hexToColorArray } from '../animation/colors.js';
 import { AdaptiveTextColor } from '../adaptiveText.js';
 import { sanitizeColorPreference } from '../contrastSampler.js';
 import { connectClicks, type DesktopItem, type ItemEnv } from './desktopItem.js';
-import { GlyphFields, fieldTexture, maxDepth, softened } from './glassText.js';
+import { bundledFontFile } from './bundledFonts.js';
+import { GlyphFields, type TextFace, fieldTexture, fileFace, maxDepth, pangoFace, softened } from './glassText.js';
+import { TrueTypeFont } from './trueType.js';
 
 // How far (px) the distance field reaches past the outline: room for the
 // drop shadow, whose reach stays a little inside it.
@@ -18,9 +20,9 @@ const FIELD_RANGE = 48;
 const SHADOW_REACH = 40;
 // The lens rises over at most this much of a stroke (px), as on any glass.
 const MAX_BAND = 22;
-// The lens follows the outline softened by this fraction of its band, so its
-// slope turns smoothly in a corner instead of folding along the corner's
-// bisector.
+// The lens's slope points the way of the outline softened by this fraction of
+// its band, so it turns smoothly in a corner instead of folding along the
+// corner's bisector.
 const LENS_SOFTNESS = 0.35;
 // Font changes are applied once the preferences stop changing them.
 const FONT_DELAY_MS = 300;
@@ -52,7 +54,10 @@ export class GlassClock implements DesktopItem {
   private _date: St.Label;
   private _glyphs: GlyphFields | null = null;
   private _text = '';
-  private _font = '';
+  private _fontKey = '';
+  // The shipped fonts by file: read, being read (undefined), or unreadable (null).
+  private _fontFiles = new Map<string, TrueTypeFont | null | undefined>();
+  private _fontCancellable = new Gio.Cancellable();
   private _fieldSize: [number, number] = [1, 1];
   private _size: [number, number] = [1, 1];
   private _bounds: [number, number, number, number] = [0, 0, 1, 1];
@@ -125,6 +130,34 @@ export class GlassClock implements DesktopItem {
     return `${ui.get_family() ?? 'Sans'} Bold`;
   }
 
+  // One of the fonts the extension ships with, or an installed one. Null
+  // while a shipped font is still being read; the font is loaded again then.
+  private _face(font: string, size: number): TextFace | null {
+    const file = bundledFontFile(this._env.path, font);
+    if (!file) return pangoFace(font, size);
+    const read = this._fontFiles.get(file);
+    if (read) return fileFace(read, size);
+    // Unreadable, the description falls through to whatever Pango makes of it.
+    if (read === null) return pangoFace(font, size);
+    if (this._fontFiles.has(file)) return null;
+    this._fontFiles.set(file, undefined);
+    const gfile = Gio.File.new_for_path(file);
+    gfile.load_contents_async(this._fontCancellable, (_f, res) => {
+      try {
+        this._fontFiles.set(file, new TrueTypeFont(gfile.load_contents_finish(res)[1]));
+      } catch (e) {
+        if (e instanceof GLib.Error && e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED)) {
+          this._fontFiles.delete(file);
+          return;
+        }
+        this._env.logger.error(`[Liquid Glass] Could not read the clock's font ${file}: ${e}`);
+        this._fontFiles.set(file, null);
+      }
+      this._loadFont();
+    });
+    return null;
+  }
+
   private _queueFont(): void {
     if (this._fontTimerId) GLib.Source.remove(this._fontTimerId);
     this._fontTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, FONT_DELAY_MS, () => {
@@ -140,12 +173,13 @@ export class GlassClock implements DesktopItem {
     const size = s.get_int('glass-clock-size');
     const stretch = s.get_double('glass-clock-stretch');
     const height = s.get_double('glass-clock-height');
-    const glyphs = this._glyphs;
-    if (glyphs && font === this._font && size === glyphs.size && stretch === glyphs.stretch && height === glyphs.height)
-      return;
-    glyphs?.cancellable.cancel();
-    this._font = font;
-    this._glyphs = new GlyphFields(font, size, FIELD_RANGE, stretch, height);
+    const key = `${font}|${size}|${stretch}|${height}`;
+    if (this._glyphs && key === this._fontKey) return;
+    const face = this._face(font, size);
+    if (!face) return;
+    this._glyphs?.cancellable.cancel();
+    this._fontKey = key;
+    this._glyphs = new GlyphFields(face, FIELD_RANGE, stretch, height);
     this._date.set_style(`font-size: ${Math.max(11, Math.round(size * 0.13))}px;`);
     this._text = '';
     this._tick();
@@ -216,9 +250,8 @@ export class GlassClock implements DesktopItem {
     try {
       field = await glyphs.fieldFor(text);
       if (glyphs !== this._glyphs || text !== this._text) return;
-      const lens = softened(field, Math.min(Math.max(maxDepth(field), 2), MAX_BAND) * LENS_SOFTNESS);
-      band = Math.min(Math.max(maxDepth(lens), 2), MAX_BAND);
-      texture = fieldTexture(field, lens, FIELD_RANGE);
+      band = Math.min(Math.max(maxDepth(field), 2), MAX_BAND);
+      texture = fieldTexture(field, softened(field, band * LENS_SOFTNESS), FIELD_RANGE);
     } catch (e) {
       if (!(e instanceof GLib.Error && e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED)))
         this._env.logger.error(`[Liquid Glass] Could not draw the clock's digits: ${e}`);
@@ -293,6 +326,7 @@ export class GlassClock implements DesktopItem {
     this._adaptive.clear();
     this._glyphs?.cancellable.cancel();
     this._glyphs = null;
+    this._fontCancellable.cancel();
     this._glass.cleanup();
     if (isActorValid(this.actor)) this.actor.destroy();
   }
