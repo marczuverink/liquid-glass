@@ -24,6 +24,9 @@ export interface ItemEnv {
   logger: Logger;
   // A right click on the item at (x, y), in stage coordinates.
   menu: (item: DesktopItem, x: number, y: number) => void;
+  // The item changed size or was shown or hidden: lay the items out on the
+  // next frame, and make sure there is one.
+  relayout: () => void;
 }
 
 /** Something the desktop layer places and stacks, and the user can move. */
@@ -55,6 +58,9 @@ export function connectClicks(actor: St.Widget, onClick: () => void, onMenu: (x:
       return Clutter.EVENT_STOP;
     }
     if (button !== Clutter.BUTTON_PRIMARY) return Clutter.EVENT_PROPAGATE;
+    // A button inside gets the press: stopping it here would also cancel the
+    // button's click gesture.
+    if (global.stage.get_event_actor(event) !== actor) return Clutter.EVENT_PROPAGATE;
     start = event.get_coords() as [number, number];
     return Clutter.EVENT_STOP;
   });
@@ -81,7 +87,7 @@ export abstract class GlassCard implements DesktopItem {
   private _lastSize = '';
   private _lastShown = false;
   private _text: AdaptiveTextColor;
-  shown = true;
+  private _shown = true;
 
   constructor(readonly id: string, env: ItemEnv, width: number) {
     this.env = env;
@@ -111,6 +117,16 @@ export abstract class GlassCard implements DesktopItem {
   protected activate(): void {
   }
 
+  get shown(): boolean {
+    return this._shown;
+  }
+
+  set shown(shown: boolean) {
+    if (shown === this._shown) return;
+    this._shown = shown;
+    this.env.relayout();
+  }
+
   private _applyMaterial(): void {
     const s = this.env.settings;
     const g = this.glass;
@@ -137,6 +153,7 @@ export abstract class GlassCard implements DesktopItem {
   // The content changed; measure the text colour again.
   protected contentChanged(): void {
     this._text.invalidate();
+    this.env.relayout();
   }
 
   size(): [number, number] {

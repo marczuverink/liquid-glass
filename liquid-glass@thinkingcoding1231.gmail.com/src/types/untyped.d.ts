@@ -8,3 +8,8 @@ declare module 'gi://GWeather' {
   const GWeather: any;
   export default GWeather;
 }
+
+declare module 'gi://Gst?version=1.0' {
+  const Gst: any;
+  export default Gst;
+}

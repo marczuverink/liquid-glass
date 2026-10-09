@@ -36,9 +36,6 @@ interface CustomBannerActor extends St.Widget {
 
 const MIN_MENU_SCALE = 0.5;
 
-// The menu's glass and the button's are fused over this width (px), as
-// liquid-dom's showcase spaces them.
-const DROP_MERGE = 37;
 // Frames to wait for an opening menu to get its size before it just appears.
 const MORPH_WAIT_FRAMES = 30;
 // The menu's own open and close animations, which the morph replaces; it keeps
@@ -1436,7 +1433,7 @@ export class UIManager {
     if (!m.motion) {
       if (!menu) {
         // Not laid out yet: hold the glass on the button for a few frames.
-        this._placeMorph({ body: m.button, bodyRadius: m.button[3] / 2, button: m.button, contentScale: 1,
+        this._placeMorph({ body: m.button, bodyRadius: m.button[3] / 2, contentScale: 1,
           contentOpacity: 0, lens: 0, glassOpacity: 1, done: false });
         if (++m.waitFrames < MORPH_WAIT_FRAMES) return true;
         this._morphTickId = 0;
@@ -1466,8 +1463,7 @@ export class UIManager {
     return false;
   }
 
-  // Draws the travelling glass: the menu's body fused with the button's
-  // capsule (stage coordinates), and the menu's items in it.
+  // Draws the travelling glass (stage coordinates) and the menu's items in it.
   private _placeMorph(f: MorphFrame): void {
     const glass = this.glass!;
     const monitor = this._getMenuMonitorGeometry();
@@ -1480,8 +1476,6 @@ export class UIManager {
     this._applyGlassBounds(glass, body[0] - p, body[1] - p, body[2] + p * 2, body[3] + p * 2,
       mx, my, Math.max(1, monitor?.width ?? 1), Math.max(1, monitor?.height ?? 1));
     applyGlassScale(glass, f.bodyRadius, 1, 1);
-    const b = f.button;
-    glass.setDrop([b[0] - mx, b[1] - my, b[2], b[3]], b[3] / 2, DROP_MERGE);
     this._placeContent(f);
     glass.syncSources();
   }
@@ -1521,7 +1515,6 @@ export class UIManager {
     this._stopMorphTicker();
     if (!this._morph) return;
     this._morph = null;
-    this.glass?.setDrop(null);
     if (!this._actorDestroyed && this.animActor) {
       this.animActor.remove_effect_by_name(CONTENT_LENS);
       this.animActor.remove_clip();

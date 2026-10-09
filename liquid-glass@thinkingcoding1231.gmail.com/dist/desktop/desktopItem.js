@@ -28,6 +28,10 @@ export function connectClicks(actor, onClick, onMenu) {
         }
         if (button !== Clutter.BUTTON_PRIMARY)
             return Clutter.EVENT_PROPAGATE;
+        // A button inside gets the press: stopping it here would also cancel the
+        // button's click gesture.
+        if (global.stage.get_event_actor(event) !== actor)
+            return Clutter.EVENT_PROPAGATE;
         start = event.get_coords();
         return Clutter.EVENT_STOP;
     });
@@ -57,7 +61,7 @@ export class GlassCard {
     _lastSize = '';
     _lastShown = false;
     _text;
-    shown = true;
+    _shown = true;
 
     constructor(id, env, width) {
         this.id = id;
@@ -86,6 +90,17 @@ export class GlassCard {
     activate() {
     }
 
+    get shown() {
+        return this._shown;
+    }
+
+    set shown(shown) {
+        if (shown === this._shown)
+            return;
+        this._shown = shown;
+        this.env.relayout();
+    }
+
     _applyMaterial() {
         const s = this.env.settings;
         const g = this.glass;
@@ -111,6 +126,7 @@ export class GlassCard {
     // The content changed; measure the text colour again.
     contentChanged() {
         this._text.invalidate();
+        this.env.relayout();
     }
 
     size() {

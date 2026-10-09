@@ -193,8 +193,9 @@ export class GlassClock implements DesktopItem {
 
   /**
    * Makes the clock `sx` times as wide and `sy` times as tall, as far as the
-   * settings allow: taller alone lengthens the digits' upright strokes, wider
-   * alone stretches them, and both scale the font.
+   * settings allow: taller alone makes the digits taller with their strokes
+   * as thick (see keepStrokeWidths()), wider alone stretches them, and both
+   * scale the font.
    */
   resizeBy(sx: number, sy: number): void {
     const s = this._env.settings;

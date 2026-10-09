@@ -20,7 +20,8 @@
 //   features   the top bar, menus growing out of their buttons, the desktop
 //              widgets, the glass clock and the launcher, on a photo wallpaper
 //              ($LG_DRV_WALLPAPER); LG_DRV_FEATURES picks parts (comma
-//              separated: morph, topbar, widgets, clock, launcher; default all)
+//              separated: morph, topbar, widgets, clock, launcher; default all;
+//              also morphtrace, qssub, clockshot, media)
 //   bench      global._lgBench.run() (run-glass.sh with LG_BENCH=1); LG_DRV_BENCH
 //              picks scenarios (comma separated, default all), LG_DRV_BENCH_SECONDS
 //              the seconds per scenario (default 3), LG_DRV_BENCH_AB=1 adds a run without UI glass
@@ -1396,11 +1397,11 @@ export default class LgDriver extends Extension {
       const dateMenu = Main.panel.statusArea.dateMenu.menu;
       dateMenu.open(true);
       await this._timedShots('morph-open', [m.x + m.width / 4, m.y, m.width / 2, 700],
-        [150, 600, 1200, 2000, 3000, 4500, 7000, 9500]);
+        [150, 700, 1300, 1800, 2400, 3000, 4500, 7000, 9500]);
       await sleep(1000);
       dateMenu.close(true);
       await this._timedShots('morph-close', [m.x + m.width / 4, m.y, m.width / 2, 700],
-        [150, 800, 1600, 2600, 4000, 6000, 9000]);
+        [150, 1600, 3000, 4500, 6000, 7000, 8000, 9000, 10000, 11500]);
       await sleep(2000);
       await this._slowMorph(1);
     }
@@ -1460,6 +1461,75 @@ export default class LgDriver extends Extension {
       }
       qs.close(false);
       await sleep(1000);
+    }
+    if (parts.includes('media')) {
+      // A player of our own on the session bus, and its card's buttons clicked
+      // with a virtual pointer.
+      const calls = [];
+      const xml = `<node><interface name="org.mpris.MediaPlayer2.Player">
+        <method name="Previous"/><method name="PlayPause"/><method name="Next"/>
+        <property name="PlaybackStatus" type="s" access="read"/>
+        <property name="Metadata" type="a{sv}" access="read"/></interface></node>`;
+      const player = Gio.DBusExportedObject.wrapJSObject(xml, {
+        Previous: () => calls.push('Previous'),
+        PlayPause: () => calls.push('PlayPause'),
+        Next: () => calls.push('Next'),
+        get PlaybackStatus() { return 'Playing'; },
+        get Metadata() {
+          return {'xesam:title': new GLib.Variant('s', 'Driver Song'),
+            'xesam:artist': new GLib.Variant('as', ['Driver']),
+            'mpris:artUrl': new GLib.Variant('s', `file://${GLib.getenv('LG_DRV_WALLPAPER') ?? '/usr/share/pixmaps/debian-logo.png'}`)};
+        },
+      });
+      player.export(Gio.DBus.session, '/org/mpris/MediaPlayer2');
+      let owner = 0;
+      await new Promise(resolve => {
+        owner = Gio.bus_own_name_on_connection(Gio.DBus.session, 'org.mpris.MediaPlayer2.lgdrv',
+          Gio.BusNameOwnerFlags.NONE, resolve, null);
+      });
+      settings.set_boolean('output-logs', true);
+      settings.set_strv('desktop-widgets', ['media']);
+      settings.set_boolean('enable-desktop-widgets', true);
+      let card = null;
+      for (let i = 0; i < 40 && !card?.mapped; i++) {
+        await sleep(250);
+        card = findActor(global.window_group, 'liquid-glass-desktop-media');
+      }
+      log(`media: card shown=${card?.visible} mapped=${card?.mapped}`);
+      if (card?.mapped) {
+        new Gio.Settings({schema_id: 'org.gnome.desktop.interface'}).set_boolean('enable-hot-corners', false);
+        const backend = SHELL_MAJOR >= 48 ? global.stage.context.get_backend() : Clutter.get_default_backend();
+        const pointer = backend.get_default_seat().create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
+        await sleep(300);
+        if (Main.overview.visible) {
+          Main.overview.hide();
+          await sleep(1500);
+        }
+        const t = () => GLib.get_monotonic_time();
+        const buttons = findActors(card, a => a instanceof St.Button);
+        for (const button of buttons) {
+          const [bx, by] = button.get_transformed_position();
+          const [bw, bh] = button.get_transformed_size();
+          pointer.notify_absolute_motion(t(), bx + bw / 2, by + bh / 2);
+          await sleep(100);
+          pointer.notify_button(t(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.PRESSED);
+          await sleep(60);
+          pointer.notify_button(t(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.RELEASED);
+          await sleep(500);
+        }
+        log(`media: ${buttons.length} buttons clicked, the player got: ${calls.join(',') || 'nothing'}`);
+        const [cx, cy] = card.get_transformed_position();
+        const [cw, ch] = card.get_transformed_size();
+        // With PULSE_SERVER set to a running sound server, the bars follow what it plays.
+        for (let i = 0; i < 4; i++) {
+          await shot(`media-${i}`, [cx - 20, cy - 20, cw + 40, ch + 40]);
+          await sleep(350);
+        }
+      }
+      settings.set_boolean('enable-desktop-widgets', false);
+      Gio.bus_unown_name(owner);
+      player.unexport();
+      await sleep(500);
     }
     if (parts.includes('clockshot')) {
       // The clock alone, large, for a close look at its glass ($LG_DRV_CLOCK_SIZE,

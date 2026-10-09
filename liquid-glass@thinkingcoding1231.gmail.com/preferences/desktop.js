@@ -304,6 +304,8 @@ function addWidgets(page, controls) {
     });
     rows.push(row);
   }
+  rows.push(controls.toggle(group, 'Sound bars', 'media-visualizer',
+    'On Now playing. GNOME shows the microphone indicator while they listen'));
   rows.push(placeRow(group, controls, 'Place', 'desktop-widgets-position', null));
   rows.push(controls.choice(group, 'Temperature', [
     {title: 'Automatic', patch: {'weather-temperature-unit': 'auto'}},

@@ -130,13 +130,14 @@ function edgeOffset(gx: number, gy: number, a: number): number {
 
 // Signed distances (px, negative inside) from coverage (0-255), the piece of
 // edge each pixel is nearest (the index of the pixel it crosses, or -1), and
-// each piece's row and normal (into the glyph). Every pixel the outline crosses gets the short piece of edge that
-// crosses it, placed to a fraction of a pixel from its coverage; every other
+// each piece's normal (into the glyph). Every pixel the outline crosses gets
+// the short piece of edge that crosses it, placed to a fraction of a pixel
+// from its coverage; every other
 // pixel takes the nearest of those pieces from its neighbours. Distances to
 // pixel centres instead would follow the pixels' staircase, which the glass
 // shows as facets along a curve.
 function edgeField(alpha: Uint8Array, w: number, h: number):
-  { signed: Float32Array, nearest: Int32Array, ey: Float32Array, nx: Float32Array, ny: Float32Array } {
+  { signed: Float32Array, nearest: Int32Array, nx: Float32Array, ny: Float32Array } {
   const n = w * h;
   const cov = new Float32Array(n);
   for (let i = 0; i < n; i++) cov[i] = alpha[i] / 255;
@@ -221,98 +222,12 @@ function edgeField(alpha: Uint8Array, w: number, h: number):
 
   const signed = new Float32Array(w * h);
   for (let i = 0; i < w * h; i++) signed[i] = (alpha[i] >= 128 ? -1 : 1) * Math.sqrt(dist2[i]);
-  return { signed, nearest, ey, nx, ny };
+  return { signed, nearest, nx, ny };
 }
 
 /** Signed distances (px, negative inside) from coverage (0-255); see edgeField(). */
 export function signedDistances(alpha: Uint8Array, w: number, h: number): Float32Array {
   return edgeField(alpha, w, h).signed;
-}
-
-/**
- * For every pixel of coverage `alpha` (`w` x `h`) near the glyph, the row
- * (fractional, rows' tops at whole numbers) of the middle of the stroke it
- * belongs to or lies beside, NaN for the pixels too far from the glyph to
- * matter: straight in from its nearest edge by half the stroke's width.
- * Where a stroke is cut off that would be a point inside the cut, not in the
- * stroke's middle: the cut end of a flat stroke (no taller than `across` px)
- * takes the middle halfway down it, and the cut end of an upright one (no
- * wider than that) the pixel's own row, as the rest of the stroke does.
- */
-export function strokeMiddles(alpha: Uint8Array, w: number, h: number, across: number): Float32Array {
-  const out = new Float32Array(w * h).fill(NaN);
-  // Only round the ink, for speed.
-  let x0 = w, x1 = -1, y0 = h, y1 = -1;
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      if (alpha[y * w + x] === 0) continue;
-      x0 = Math.min(x0, x);
-      x1 = Math.max(x1, x);
-      y0 = Math.min(y0, y);
-      y1 = Math.max(y1, y);
-    }
-  }
-  if (x1 < 0) return out;
-  const pad = 4;
-  x0 = Math.max(x0 - pad, 0);
-  y0 = Math.max(y0 - pad, 0);
-  x1 = Math.min(x1 + pad, w - 1);
-  y1 = Math.min(y1 + pad, h - 1);
-  const cw = x1 - x0 + 1, ch = y1 - y0 + 1;
-  const crop = new Uint8Array(cw * ch);
-  for (let y = 0; y < ch; y++) crop.set(alpha.subarray((y0 + y) * w + x0, (y0 + y) * w + x0 + cw), y * cw);
-
-  // The runs of ink (anti-aliased ends included) through each pixel: how
-  // wide across its row, and how tall down its column with its middle.
-  const wide = new Float32Array(cw * ch);
-  const tall = new Float32Array(cw * ch);
-  const halfway = new Float32Array(cw * ch);
-  for (let y = 0; y < ch; y++) {
-    for (let x = 0; x < cw;) {
-      if (crop[y * cw + x] === 0) {
-        x++;
-        continue;
-      }
-      const start = x;
-      while (x < cw && crop[y * cw + x] > 0) x++;
-      wide.fill(x - start, y * cw + start, y * cw + x);
-    }
-  }
-  for (let x = 0; x < cw; x++) {
-    for (let y = 0; y < ch;) {
-      if (crop[y * cw + x] === 0) {
-        y++;
-        continue;
-      }
-      const start = y;
-      while (y < ch && crop[y * cw + x] > 0) y++;
-      for (let r = start; r < y; r++) {
-        tall[r * cw + x] = y - start;
-        halfway[r * cw + x] = (start + y) / 2;
-      }
-    }
-  }
-
-  const { signed, nearest, ey, nx, ny } = edgeField(crop, cw, ch);
-  const deepest = new Float32Array(cw * ch);
-  for (let i = 0; i < cw * ch; i++) {
-    const e = nearest[i];
-    if (signed[i] < 0 && e >= 0) deepest[e] = Math.max(deepest[e], -signed[i]);
-  }
-  for (let y = 0; y < ch; y++) {
-    for (let x = 0; x < cw; x++) {
-      const i = y * cw + x;
-      const e = nearest[i];
-      if (e < 0) continue;
-      // Where strokes meet, the ink straight in from an edge reaches past the
-      // middle of its stroke into the other one.
-      let mid = ey[e] + ny[e] * Math.min(deepest[e], across * MIDDLE_DEPTH_MAX) + 0.5;
-      if (crop[i] > 0 && Math.abs(nx[e]) > CUT_NORMAL && tall[i] <= across) mid = halfway[i];
-      else if (crop[i] > 0 && Math.abs(ny[e]) > CUT_NORMAL && wide[i] <= across) mid = y + 0.5;
-      out[(y0 + y) * w + x0 + x] = y0 + mid;
-    }
-  }
-  return out;
 }
 
 // The box widths for three box blurs that together approximate a Gaussian of `sigma`.
@@ -360,340 +275,383 @@ export function softened(field: DistanceField, sigma: number): DistanceField {
 
 // Taller glyphs
 //
-// A glyph grows taller by spacing its rows of coverage further apart, more
-// in some rows than in others. Each row has a cost for growing (an edge that
-// bends or lies flat through it would be drawn out of shape) and takes in
-// inverse to it; neighbouring rows that an edge slants or curves through are
-// tied to grow alike, or the edge would bend there. So upright straight
-// strokes take the height, curves and slanted strokes grow evenly, and a
-// glyph with nothing upright grows evenly all over. Each stroke is then moved
-// as a whole along its middle (see tallen()), so it keeps its width.
+// A glyph is made taller by drawing it that much taller, evenly, which also
+// thickens its strokes: a flat one by the whole factor, an upright one not
+// at all, a slanted or curved one in between. Its outline is then pulled
+// back into the ink by what the stretch added on each side, as if the
+// stretched strokes had been drawn with the font's own pen: an ellipse as
+// wide as its upright strokes and as tall as its flat ones. Every piece of
+// the outline moves along its normal by an amount that depends only on which
+// way it faces, and neighbouring pieces meet where their moved lines cross,
+// so corners stay sharp and curves stay smooth.
 
-// How fast a row's cost rises as the outline bends through it: at this much
-// change of an edge's slope (horizontal px per row) between half a stroke
-// above and half a stroke below, it costs twice what a straight row does.
-const BEND_HALF = 0.12;
-// Edges flatter than this many px across per row change their angle visibly
-// when their rows spread out; past it the row costs more, twice as much at
-// FLAT_START + FLAT_HALF.
-const FLAT_START = 1.5;
-const FLAT_HALF = 1;
-// A row whose longest stroke is this many times the glyph's usual stroke runs
-// along a horizontal one (a bar, the top of a bowl), whose thickness is kept;
-// fully past BAR_START + BAR_SPAN.
-const BAR_START = 1.4;
-const BAR_SPAN = 0.3;
-// No row costs more than BEND_COST_MAX for bending, so the sharpest rows of a
-// curve do not stand out from the rest. Rows within half a stroke of where an
-// edge starts or ends cost END_COST more: the pixels there move with
-// different strokes' middles, and the end of a stroke, or where strokes meet,
-// keeps its shape only if its rows do not grow. Rows that must not grow at
-// all cost HOLD: those along a bar, and those where an edge is there for that
-// row only or nothing is covered past half (the tip of a curve).
-const BEND_COST_MAX = 30;
-const HOLD = 1e4;
-const END_COST = 1000;
-// Neighbouring rows an edge slants through by this many px per row, or
-// bends through by this much (as BEND_HALF measures it), may differ in growth
-// over about as many rows as the band has; the reach grows with the squares,
-// so straight upright edges barely tie their rows, and slanted or curved ones
-// make them grow as one.
-const SLOPE_TIE = 0.03;
-const BEND_TIE = 0.03;
+// Pieces of edge whose normal is this close to across (down) the rows are
+// on the side of an upright (flat) stroke.
+const SIDE_NORMAL = 0.9;
+// How far (px) the traced outline may stray from the pixels' edge.
+const TRACE_TOLERANCE = 0.2;
+// Corners rounded off by less than this many strokes are made sharp (see sharpenCorners()).
+const CORNER_SIZE = 0.3;
+// A corner whose moved lines meet further out than this many times the move
+// is too sharp to keep; it is cut off between them instead.
+const MITER_LIMIT = 6;
 
-// The Gaussian the pixels' moves are smoothed by, in strokes.
-const MOVE_SMOOTHING = 0.25;
-// Ink no taller (wider) than this many strokes is a flat (upright) stroke,
-// and an edge whose normal is this close to across (down) the rows is where
-// such a stroke is cut off (see strokeMiddles()).
-const FLAT_RUN = 1.5;
-const CUT_NORMAL = 0.95;
-// The middle of a stroke is at most this many times `across` in from its edge.
-const MIDDLE_DEPTH_MAX = 0.4;
-
-// Where the outline crosses row y of coverage `alpha` (`w` wide): x to a
-// fraction of a pixel, positive where the row enters the glyph and negative
-// where it leaves (the sign is the direction, the magnitude x + 1).
-function rowEdges(alpha: Uint8Array, w: number, y: number): number[] {
-  const edges: number[] = [];
-  let prev = 0;
-  for (let x = 0; x <= w; x++) {
-    const a = x < w ? alpha[y * w + x] : 0;
-    if ((prev < 128) !== (a < 128)) {
-      const at = x - 1 + (127.5 - prev) / (a - prev);
-      edges.push(a >= 128 ? at + 1 : -(at + 1));
-    }
-    prev = a;
-  }
-  return edges;
-}
-
-// The rows of a band, top to bottom: their edges (see rowEdges()), and the
-// slope (px across per row) and bend of each edge there, NaN for an edge
-// that is there for that row only.
-interface BandRows {
-  edges: number[][];
-  slopes: number[][];
-  bends: number[][];
-  // How many rows each edge has before it starts or after it ends, whichever
-  // is fewer.
-  ends: number[][];
-  // Which edges go on into the next row, as the index of the edge they
-  // become there (or -1).
-  next: number[][];
-  longest: Float64Array;
-  // Whether anything is drawn in the row at all.
-  inked: boolean[];
-  stroke: number;
-}
-
-// The usual width of the strokes: the median of the rows' longest runs.
-function medianStroke(longest: Float64Array): number {
-  const stroked = Array.from(longest).filter(v => v > 0).sort((a, b) => a - b);
-  return stroked.length ? stroked[stroked.length >> 1] : 1;
-}
-
-// Follows each edge from row to row, nearest matches first, so strokes that
-// start or end beside it do not break it.
-function bandRows(alpha: Uint8Array, w: number, top: number, bottom: number): BandRows {
-  const n = bottom - top;
-  const edges: number[][] = [];
-  const longest = new Float64Array(n + 1);
-  const inked: boolean[] = [];
-  for (let r = 0; r <= n; r++) {
-    edges.push(rowEdges(alpha, w, top + r));
-    let run = 0, ink = false;
-    for (let x = 0, i = (top + r) * w; x < w; x++, i++) {
-      run = alpha[i] >= 128 ? run + 1 : 0;
-      longest[r] = Math.max(longest[r], run);
-      ink ||= alpha[i] > 0;
-    }
-    inked.push(ink);
-  }
-  const stroke = medianStroke(longest);
-  const reach = Math.max(Math.round(stroke / 2), 1);
-
-  const next: number[][] = edges.map(row => row.map(() => -1));
-  const chains: { start: number, xs: number[] }[] = [];
-  const chainOf: number[][] = [];
-  for (let r = 0; r <= n; r++) {
-    const ids = edges[r].map(() => -1);
-    if (r > 0) {
-      const pairs: [number, number, number][] = [];
-      edges[r - 1].forEach((a, i) => edges[r].forEach((b, j) => {
-        const d = Math.abs(Math.abs(a) - Math.abs(b));
-        if (Math.sign(a) === Math.sign(b) && d <= reach) pairs.push([d, i, j]);
-      }));
-      pairs.sort((p, q) => p[0] - q[0]);
-      for (const [, i, j] of pairs) {
-        if (next[r - 1][i] >= 0 || ids[j] >= 0) continue;
-        next[r - 1][i] = j;
-        ids[j] = chainOf[r - 1][i];
-        chains[ids[j]].xs.push(Math.abs(edges[r][j]));
-      }
-    }
-    edges[r].forEach((e, j) => {
-      if (ids[j] >= 0) return;
-      ids[j] = chains.length;
-      chains.push({ start: r, xs: [Math.abs(e)] });
-    });
-    chainOf.push(ids);
-  }
-
-  const slopes = edges.map(row => row.map(() => NaN));
-  const bends = edges.map(row => row.map(() => 0));
-  const ends = edges.map(row => row.map(() => 0));
-  for (let r = 0; r <= n; r++) {
-    chainOf[r].forEach((c, j) => {
-      const { start, xs } = chains[c];
-      const i = r - start;
-      ends[r][j] = Math.min(i, xs.length - 1 - i);
-      if (xs.length < 2) return;
-      const a = Math.max(i - reach, 0), b = Math.min(i + reach, xs.length - 1);
-      const up = i > a ? (xs[i] - xs[a]) / (i - a) : null;
-      const down = b > i ? (xs[b] - xs[i]) / (b - i) : null;
-      slopes[r][j] = (xs[b] - xs[a]) / (b - a);
-      if (up !== null && down !== null) bends[r][j] = Math.abs(down - up);
-    });
-  }
-  return { edges, slopes, bends, ends, next, longest, inked, stroke };
-}
-
-// Solves the tridiagonal system with `diag` on the diagonal, -off[i] between
-// i and i + 1, and `rhs` on the right.
-function solveTridiagonal(diag: Float64Array, off: Float64Array, rhs: Float64Array): Float64Array {
-  const n = diag.length;
-  const c = new Float64Array(n);
-  const d = new Float64Array(n);
-  for (let i = 0; i < n; i++) {
-    const below = i > 0 ? off[i - 1] : 0;
-    const m = diag[i] + (i > 0 ? below * c[i - 1] : 0);
-    c[i] = i < n - 1 ? -off[i] / m : 0;
-    d[i] = (rhs[i] + (i > 0 ? below * d[i - 1] : 0)) / m;
-  }
-  for (let i = n - 2; i >= 0; i--) d[i] -= c[i] * d[i + 1];
-  return d;
-}
-
-function bandShares(rows: BandRows): Float64Array {
-  const n = rows.edges.length - 1;
-  // The room above and below the glyph grows as the band does, so the glyph
-  // stays where it was in it; the rest of the height goes to the rows between.
-  let first = 0, last = n - 1;
-  while (first < n && !rows.inked[first]) first++;
-  while (last >= first && !rows.inked[last]) last--;
-  const shares = new Float64Array(n).fill(1 / n);
-  const m = last - first + 1;
-  if (m <= 0) return shares;
-
-  const cost = new Float64Array(m);
-  const along = new Float64Array(m);
-  for (let r = first; r <= last; r++) {
-    let bend = 0, flat = 0, end = false;
-    // Drawn but never covered past half: the tip of a curve.
-    let lone = rows.inked[r] && rows.edges[r].length === 0;
-    rows.edges[r].forEach((_e, j) => {
-      if (rows.ends[r][j] < rows.stroke / 2) end = true;
-      const slope = rows.slopes[r][j];
-      if (Number.isNaN(slope)) lone = true;
-      else flat = Math.max(flat, Math.abs(slope));
-      bend = Math.max(bend, rows.bends[r][j]);
-    });
-    const b = bend / BEND_HALF;
-    const f = Math.max(flat - FLAT_START, 0) / FLAT_HALF;
-    const bar = Math.min(Math.max(rows.longest[r] / rows.stroke - BAR_START, 0) / BAR_SPAN, 1);
-    along[r - first] = bar;
-    const bending = Math.min((1 + b * b) * (1 + f * f), BEND_COST_MAX) + (end ? END_COST : 0);
-    cost[r - first] = bending + HOLD * (bar * bar + (lone ? 1 : 0));
-  }
-  // Ties between rows r and r + 1, through the edges that run on.
-  const tie = new Float64Array(m);
-  for (let r = first; r < last; r++) {
-    let pull = 0;
-    rows.next[r].forEach((j, i) => {
-      if (j < 0) return;
-      const a = rows.slopes[r][i], b = rows.slopes[r + 1][j];
-      if (Number.isNaN(a) || Number.isNaN(b)) return;
-      const slope = Math.abs(a + b) / 2, bend = (rows.bends[r][i] + rows.bends[r + 1][j]) / 2;
-      pull = Math.max(pull, (slope / SLOPE_TIE) ** 2 + (bend / BEND_TIE) ** 2);
-    });
-    // Not into a bar, which keeps its thickness however the edges that
-    // run into it grow.
-    const reach = n * pull * (1 - along[r - first]) * (1 - along[r + 1 - first]);
-    tie[r - first] = reach * reach;
-  }
-  // Each row takes in inverse to its cost, then the ties even that out:
-  // minimising sum((k - 1 / cost)^2) + sum(tie * (k[r + 1] - k[r])^2), so
-  // rows tied together take the mean of what they would alone.
-  const diag = new Float64Array(m);
-  for (let i = 0; i < m; i++) diag[i] = 1 + (i > 0 ? tie[i - 1] : 0) + tie[i];
-  const k = solveTridiagonal(diag, tie, cost.map(c => 1 / c));
-  let total = 0;
-  for (let i = 0; i < m; i++) total += k[i];
-  for (let i = 0; i < m; i++) shares[first + i] = k[i] / total * m / n;
-  return shares;
+// The mean of the middle half of `values`: one side of a stroke may reach
+// its middle and the other not, and joins and ends are far off either way.
+function middleMean(values: number[]): number {
+  values.sort((a, b) => a - b);
+  const middle = values.slice(values.length >> 2, values.length - (values.length >> 2));
+  return middle.length ? middle.reduce((sum, v) => sum + v, 0) / middle.length : 0;
 }
 
 /**
- * How much of a glyph's added height each row of coverage `alpha` (0-255,
- * `w` wide) takes, rows `top` to `bottom` (see the top of this section). The
- * shares add up to 1.
+ * How thick the strokes of coverage `alpha` (`w` x `h`) are, px: across
+ * the upright ones and across the flat ones. A stroke is as thick as the
+ * largest circle that touches its edge from inside.
  */
-export function rowShares(alpha: Uint8Array, w: number, top: number, bottom: number): Float64Array {
-  return bandShares(bandRows(alpha, w, top, bottom));
+export function strokeWidths(alpha: Uint8Array, w: number, h: number): [number, number] {
+  const { signed, nearest, nx, ny } = edgeField(alpha, w, h);
+  const deepest = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    const e = nearest[i];
+    if (signed[i] < 0 && e >= 0) deepest[e] = Math.max(deepest[e], -signed[i]);
+  }
+  const upright: number[] = [], flat: number[] = [];
+  for (let e = 0; e < w * h; e++) {
+    if (nearest[e] !== e || deepest[e] === 0) continue;
+    // The pixel centres on the two sides of a stroke stop short of its
+    // middle by a pixel between them.
+    const width = 2 * deepest[e] + 1;
+    if (Math.abs(nx[e]) > SIDE_NORMAL) upright.push(width);
+    else if (Math.abs(ny[e]) > SIDE_NORMAL) flat.push(width);
+  }
+  const across = middleMean(upright) || middleMean(flat) || 1;
+  return [across, middleMean(flat) || across];
 }
 
 /**
- * Coverage `alpha` (`w` x `h`) made `extra` rows taller between rows `top`
- * and `bottom`, the extra height spread by rowShares(); the rows above stay
- * where they are and the rows below move down. It is the middles of the
- * strokes that are spread out: every pixel moves down as far as the middle
- * of its stroke does, so strokes keep their width whichever way they run.
+ * How wide and how tall the widest and tallest runs of ink in coverage
+ * `alpha` (`w` x `h`) are, px: a dot's size.
  */
-export function tallen(alpha: Uint8Array, w: number, h: number, top: number, bottom: number, extra: number): Uint8Array {
-  top = Math.min(Math.max(Math.round(top), 0), h - 1);
-  bottom = Math.min(Math.max(Math.round(bottom), top + 1), h - 1);
-  const rows = bandRows(alpha, w, top, bottom);
-  const shares = bandShares(rows);
-  // Where each row boundary lands.
-  const lands = new Float64Array(h + 1);
-  for (let y = 0; y <= h; y++) {
-    const r = y - top;
-    lands[y] = y + (r <= 0 ? 0 : r >= shares.length ? extra : lands[y - 1] - (y - 1) + shares[r - 1] * extra);
-  }
-  const land = (y: number) => {
-    if (y <= 0) return y;
-    if (y >= h) return y + extra;
-    const i = Math.floor(y);
-    return lands[i] + (y - i) * (lands[i + 1] - lands[i]);
-  };
-
-  // How far each pixel moves down. The middle of a stroke is found a pixel
-  // at a time, so the moves are smoothed, or neighbouring columns would part
-  // along a flat edge: weighted by the ink, so the room beside a stroke,
-  // which may move with another, does not pull at its edge.
-  const stroke = rows.stroke;
-  const middles = strokeMiddles(alpha, w, h, stroke * FLAT_RUN);
-  const sigma = MOVE_SMOOTHING * stroke;
-  // Away from the ink every pixel moves with its row.
-  const move = new Float32Array(w * h);
-  for (let y = 0; y < h; y++) move.fill(land(y + 0.5) - y - 0.5, y * w, y * w + w);
-  let x0 = w, x1 = -1, y0 = h, y1 = -1;
+export function dotSize(alpha: Uint8Array, w: number, h: number): [number, number] {
+  let wide = 0, tall = 0;
   for (let y = 0; y < h; y++) {
+    let run = 0;
     for (let x = 0; x < w; x++) {
-      if (alpha[y * w + x] === 0) continue;
-      x0 = Math.min(x0, x);
-      x1 = Math.max(x1, x);
-      y0 = Math.min(y0, y);
-      y1 = Math.max(y1, y);
+      run = alpha[y * w + x] ? run + alpha[y * w + x] / 255 : 0;
+      wide = Math.max(wide, run);
     }
   }
-  if (x1 >= 0) {
-    const pad = Math.ceil(sigma * 3) + 2;
-    x0 = Math.max(x0 - pad, 0);
-    y0 = Math.max(y0 - pad, 0);
-    x1 = Math.min(x1 + pad, w - 1);
-    y1 = Math.min(y1 + pad, h - 1);
-    const cw = x1 - x0 + 1, ch = y1 - y0 + 1;
-    const weighted = new Float32Array(cw * ch);
-    const weights = new Float32Array(cw * ch);
-    for (let y = 0; y < ch; y++) {
-      for (let x = 0; x < cw; x++) {
-        const i = (y0 + y) * w + x0 + x;
-        const mid = Number.isNaN(middles[i]) ? y0 + y + 0.5 : middles[i];
-        weights[y * cw + x] = alpha[i] / 255 + 1e-3;
-        weighted[y * cw + x] = (land(mid) - mid) * weights[y * cw + x];
+  for (let x = 0; x < w; x++) {
+    let run = 0;
+    for (let y = 0; y < h; y++) {
+      run = alpha[y * w + x] ? run + alpha[y * w + x] / 255 : 0;
+      tall = Math.max(tall, run);
+    }
+  }
+  return [wide, tall];
+}
+
+/**
+ * Where coverage `alpha` (`w` x `h`) crosses half, as closed loops of
+ * points [x0, y0, x1, y1, ...], pixel (x, y) covering x to x + 1, each loop
+ * running with the ink on its left.
+ */
+export function traceOutlines(alpha: Uint8Array, w: number, h: number): number[][] {
+  const inside = (i: number) => alpha[i] >= 128;
+  // Edges between neighbouring pixel centres: 2i to the right of pixel i, 2i + 1 below it.
+  const points = new Map<number, [number, number]>();
+  const next = new Map<number, number>();
+  const cross = (edge: number, i: number, j: number, x: number, y: number, dx: number, dy: number) => {
+    if (!points.has(edge)) {
+      const t = (127.5 - alpha[i]) / (alpha[j] - alpha[i]);
+      points.set(edge, [x + 0.5 + t * dx, y + 0.5 + t * dy]);
+    }
+    return edge;
+  };
+  for (let y = 0; y < h - 1; y++) {
+    for (let x = 0; x < w - 1; x++) {
+      const tl = y * w + x, tr = tl + 1, bl = tl + w, br = bl + 1;
+      const corners = [tl, tr, br, bl];
+      const ins = corners.map(inside);
+      if (ins.every(v => v === ins[0])) continue;
+      // Round the cell clockwise: top, right, bottom, left.
+      const sides = [
+        () => cross(2 * tl, tl, tr, x, y, 1, 0),
+        () => cross(2 * tr + 1, tr, br, x + 1, y, 0, 1),
+        () => cross(2 * bl, bl, br, x, y + 1, 1, 0),
+        () => cross(2 * tl + 1, tl, bl, x, y, 0, 1),
+      ];
+      const entries: number[] = [], exits: number[] = [];
+      for (let k = 0; k < 4; k++) {
+        if (ins[k] === ins[(k + 1) % 4]) continue;
+        (ins[k] ? exits : entries).push(k);
+      }
+      if (entries.length === 1) {
+        next.set(sides[entries[0]](), sides[exits[0]]());
+        continue;
+      }
+      // A saddle: the ink joins across the middle if the middle is covered.
+      const middle = corners.reduce((sum, c) => sum + alpha[c], 0) / 4 >= 127.5;
+      for (const k of entries) {
+        const exit = middle ? (k + 3) % 4 : (k + 1) % 4;
+        next.set(sides[k](), sides[exit]());
       }
     }
-    const num = softened({ data: weighted, width: cw, height: ch }, sigma).data;
-    const den = softened({ data: weights, width: cw, height: ch }, sigma).data;
-    for (let y = 0; y < ch; y++)
-      for (let x = 0; x < cw; x++) move[(y0 + y) * w + x0 + x] = num[y * cw + x] / den[y * cw + x];
   }
 
-  const out = new Uint8Array(w * (h + extra));
-  // Where each pixel centre of a column lands, never above the one before.
-  const z = new Float64Array(h);
-  for (let x = 0; x < w; x++) {
-    for (let y = 0; y < h; y++) {
-      z[y] = y + 0.5 + move[y * w + x];
-      if (y > 0) z[y] = Math.max(z[y], z[y - 1]);
+  const loops: number[][] = [];
+  for (const start of next.keys()) {
+    if (!points.has(start)) continue;
+    const loop: number[] = [];
+    let edge: number | undefined = start;
+    while (edge !== undefined && points.has(edge)) {
+      loop.push(...points.get(edge)!);
+      points.delete(edge);
+      edge = next.get(edge);
     }
-    let y = 0;
-    for (let oy = 0; oy < h + extra; oy++) {
-      const o = oy + 0.5;
-      while (y < h - 1 && z[y + 1] <= o) y++;
-      let v;
-      if (o <= z[0]) v = alpha[x];
-      else if (y >= h - 1) v = alpha[(h - 1) * w + x];
-      else {
-        const f = Math.min((o - z[y]) / Math.max(z[y + 1] - z[y], 1e-9), 1);
-        v = alpha[y * w + x] * (1 - f) + alpha[(y + 1) * w + x] * f;
+    if (loop.length >= 6) loops.push(loop);
+  }
+  return loops;
+}
+
+// Keeps the points of a closed loop that it cannot do without to stay
+// within `tolerance` px (Douglas-Peucker).
+function simplify(loop: number[], tolerance: number): number[] {
+  const n = loop.length / 2;
+  const far = (from: number) => {
+    let best = from, bestD = -1;
+    for (let i = 0; i < n; i++) {
+      const d = Math.hypot(loop[2 * i] - loop[2 * from], loop[2 * i + 1] - loop[2 * from + 1]);
+      if (d > bestD) [best, bestD] = [i, d];
+    }
+    return best;
+  };
+  const a = far(0), b = far(a);
+  const keep = new Uint8Array(n);
+  keep[a] = keep[b] = 1;
+  const stack = [[a, b], [b, a]];
+  while (stack.length) {
+    const [i, j] = stack.pop()!;
+    const count = (j - i + n) % n;
+    if (count < 2) continue;
+    const [x0, y0, x1, y1] = [loop[2 * i], loop[2 * i + 1], loop[2 * j], loop[2 * j + 1]];
+    const len = Math.hypot(x1 - x0, y1 - y0) || 1;
+    let worst = -1, worstD = tolerance;
+    for (let k = 1; k < count; k++) {
+      const m = (i + k) % n;
+      const d = Math.abs((x1 - x0) * (y0 - loop[2 * m + 1]) - (x0 - loop[2 * m]) * (y1 - y0)) / len;
+      if (d > worstD) [worst, worstD] = [m, d];
+    }
+    if (worst < 0) continue;
+    keep[worst] = 1;
+    stack.push([i, worst], [worst, j]);
+  }
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) if (keep[i]) out.push(loop[2 * i], loop[2 * i + 1]);
+  return out;
+}
+
+// A corner that is rounded off a little (by the font, or by anti-aliasing)
+// would have its few short pieces moved by amounts between those of the two
+// sides, and come out as a bevel. Short pieces adding up to less than
+// `limit` px between two at least twice as long, which turn by more than
+// CORNER_TURN, are put back to the corner where the long ones' lines cross,
+// when that is about where the short ones are.
+const CORNER_TURN = 0.5;
+
+function sharpenCorners(loop: number[], limit: number): number[] {
+  const n = loop.length / 2;
+  if (n < 4) return loop;
+  const pt = (k: number): [number, number] => [loop[2 * ((k % n + n) % n)], loop[2 * ((k % n + n) % n) + 1]];
+  const lengths = Array.from({ length: n }, (_, k) => Math.hypot(pt(k + 1)[0] - pt(k)[0], pt(k + 1)[1] - pt(k)[1]));
+  const long = (k: number) => lengths[(k % n + n) % n] >= limit;
+  let first = 0;
+  while (first < n && !long(first)) first++;
+  if (first === n) return loop;
+  // The corner that replaces vertices k..m + 1, by k.
+  const corners = new Map<number, { end: number, at: [number, number] }>();
+  for (let k = first + 1; k < first + n; k++) {
+    if (long(k)) continue;
+    let m = k, run = 0;
+    while (!long(m)) run += lengths[m++ % n];
+    const [a, b] = [k - 1, m];
+    const next = m;
+    if (run < limit && lengths[a % n] >= 2 * run && lengths[b % n] >= 2 * run) {
+      const [a0, a1, b0, b1] = [pt(a), pt(a + 1), pt(b), pt(b + 1)];
+      const [ux, uy, vx, vy] = [a1[0] - a0[0], a1[1] - a0[1], b1[0] - b0[0], b1[1] - b0[1]];
+      const det = ux * vy - uy * vx;
+      const turn = Math.abs(Math.atan2(det, ux * vx + uy * vy));
+      if (turn >= CORNER_TURN) {
+        const t = ((b0[0] - a1[0]) * vy - (b0[1] - a1[1]) * vx) / det;
+        const at: [number, number] = [a1[0] + ux * t, a1[1] + uy * t];
+        if (Math.hypot(at[0] - (a1[0] + b0[0]) / 2, at[1] - (a1[1] + b0[1]) / 2) <= run) corners.set(k % n, { end: m % n, at });
       }
-      out[oy * w + x] = Math.round(v);
+    }
+    k = next;
+  }
+  if (!corners.size) return loop;
+  const out: number[] = [];
+  for (let i = 0, k = first; i < n; i++, k = (k + 1) % n) {
+    const corner = corners.get(k);
+    if (!corner) {
+      out.push(...pt(k));
+      continue;
+    }
+    out.push(...corner.at);
+    // Vertices k + 1 to the end of the run go with it.
+    const skip = (corner.end - k + n) % n;
+    i += skip;
+    k = (k + skip) % n;
+  }
+  return out;
+}
+
+/**
+ * `loop` (ink on its left) with every piece moved into the ink by
+ * `move(nx, ny)` px, its normal into the ink being (nx, ny): the corners
+ * where the moved pieces' lines cross. A piece the move turns round (a curve
+ * or a corner tighter than the move) is dropped, and its neighbours meet
+ * instead. Empty when nothing is left.
+ */
+export function moveOutline(loop: number[], move: (nx: number, ny: number) => number): number[] {
+  const n = loop.length / 2;
+  const nx = new Float64Array(n), ny = new Float64Array(n), shift = new Float64Array(n), along = new Float64Array(n);
+  for (let k = 0; k < n; k++) {
+    const j = (k + 1) % n;
+    const dx = loop[2 * j] - loop[2 * k], dy = loop[2 * j + 1] - loop[2 * k + 1];
+    const len = Math.hypot(dx, dy) || 1;
+    nx[k] = dy / len;
+    ny[k] = -dx / len;
+    // The moved line: the points p with p . normal = along.
+    shift[k] = move(nx[k], ny[k]);
+    along[k] = loop[2 * k] * nx[k] + loop[2 * k + 1] * ny[k] + shift[k];
+  }
+  const prev = Array.from({ length: n }, (_, k) => (k + n - 1) % n);
+  const next = Array.from({ length: n }, (_, k) => (k + 1) % n);
+  // Where piece b starts: on piece a's line and on its own.
+  const start = (a: number, b: number): [number, number] => {
+    const det = nx[a] * ny[b] - ny[a] * nx[b];
+    const [cx, cy] = [loop[2 * b], loop[2 * b + 1]];
+    if (Math.abs(det) > 0.02) {
+      const x = (along[a] * ny[b] - ny[a] * along[b]) / det, y = (nx[a] * along[b] - along[a] * nx[b]) / det;
+      if (Math.hypot(x - cx, y - cy) <= MITER_LIMIT * Math.max(shift[a], shift[b], 0.5)) return [x, y];
+    }
+    // Nearly in line, or too sharp a corner: between where the two lines pass the corner.
+    const end = (a + 1) % n;
+    const [ex, ey] = [loop[2 * end], loop[2 * end + 1]];
+    return [(ex + nx[a] * shift[a] + cx + nx[b] * shift[b]) / 2, (ey + ny[a] * shift[a] + cy + ny[b] * shift[b]) / 2];
+  };
+  const xs = new Float64Array(n), ys = new Float64Array(n);
+  for (let k = 0; k < n; k++) [xs[k], ys[k]] = start(prev[k], k);
+  let alive = n;
+  for (let changed = true; changed && alive >= 3;) {
+    changed = false;
+    for (let k = 0; k < n && alive >= 3; k++) {
+      if (next[k] < 0) continue;
+      const j = next[k];
+      // Turned round: it now runs against its normal's tangent.
+      if ((xs[j] - xs[k]) * -ny[k] + (ys[j] - ys[k]) * nx[k] >= 0) continue;
+      const [p, q] = [prev[k], next[k]];
+      next[p] = q;
+      prev[q] = p;
+      next[k] = prev[k] = -1;
+      alive--;
+      [xs[q], ys[q]] = start(p, q);
+      changed = true;
+    }
+  }
+  if (alive < 3) return [];
+  const out: number[] = [];
+  let first = 0;
+  while (next[first] < 0) first++;
+  let k = first;
+  do {
+    out.push(xs[k], ys[k]);
+    k = next[k];
+  } while (k !== first);
+  return out;
+}
+
+/**
+ * Coverage (0-255, `w` x `h`) of the area inside `loops` (as
+ * traceOutlines() gives them), anti-aliased by the exact area each pixel
+ * has inside.
+ */
+export function fillOutlines(loops: number[][], w: number, h: number): Uint8Array {
+  const stride = w + 2;
+  const area = new Float32Array(stride * h);
+  const line = (px: number, py: number, qx: number, qy: number) => {
+    if (py === qy) return;
+    const dir = py < qy ? 1 : -1;
+    const [ax, ay, bx, by] = py < qy ? [px, py, qx, qy] : [qx, qy, px, py];
+    const dxdy = (bx - ax) / (by - ay);
+    let x = ax + Math.max(-ay, 0) * dxdy;
+    for (let y = Math.max(Math.floor(ay), 0); y < Math.min(Math.ceil(by), h); y++) {
+      const row = y * stride;
+      const dy = Math.min(y + 1, by) - Math.max(y, ay);
+      const xNext = x + dxdy * dy;
+      const d = dy * dir;
+      const x0 = Math.min(Math.max(Math.min(x, xNext), 0), w);
+      const x1 = Math.min(Math.max(Math.max(x, xNext), 0), w);
+      const i0 = Math.floor(x0), i1 = Math.ceil(x1);
+      if (i1 <= i0 + 1) {
+        const mid = (x0 + x1) / 2 - i0;
+        area[row + i0] += d * (1 - mid);
+        area[row + i0 + 1] += d * mid;
+      } else {
+        // The part of the row's slice left of each pixel boundary.
+        const s = 1 / (x1 - x0);
+        const f0 = x0 - i0;
+        const a0 = 0.5 * s * (1 - f0) ** 2;
+        const f1 = x1 - i1 + 1;
+        const am = 0.5 * s * f1 * f1;
+        area[row + i0] += d * a0;
+        if (i1 === i0 + 2) {
+          area[row + i0 + 1] += d * (1 - a0 - am);
+        } else {
+          const a1 = s * (1.5 - f0);
+          area[row + i0 + 1] += d * (a1 - a0);
+          for (let i = i0 + 2; i < i1 - 1; i++) area[row + i] += d * s;
+          const a2 = a1 + (i1 - i0 - 3) * s;
+          area[row + i1 - 1] += d * (1 - a2 - am);
+        }
+        area[row + i1] += d * am;
+      }
+      x = xNext;
+    }
+  };
+  for (const loop of loops) {
+    const n = loop.length / 2;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      line(loop[2 * i], loop[2 * i + 1], loop[2 * j], loop[2 * j + 1]);
+    }
+  }
+  const out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    let sum = 0;
+    for (let x = 0; x < w; x++) {
+      sum += area[y * stride + x];
+      out[y * w + x] = Math.round(Math.min(Math.abs(sum), 1) * 255);
     }
   }
   return out;
+}
+
+/**
+ * Coverage `alpha` (`w` x `h`) of a glyph drawn `stretch` times as tall,
+ * with each stroke pulled back to the thickness a pen `pen` px across
+ * (upright strokes) and tall (flat strokes) draws it at that angle.
+ */
+export function keepStrokeWidths(alpha: Uint8Array, w: number, h: number, pen: [number, number],
+  stretch: number): Uint8Array {
+  const [across, tall] = pen;
+  const move = (nx: number, ny: number) =>
+    (Math.hypot(across * nx, stretch * tall * ny) - Math.hypot(across * nx, tall * ny)) / 2;
+  const corner = CORNER_SIZE * Math.min(across, tall);
+  const loops = traceOutlines(alpha, w, h).map(loop => moveOutline(sharpenCorners(simplify(loop, TRACE_TOLERANCE), corner), move));
+  return fillOutlines(loops, w, h);
 }
 
 // Averages `factor` x `factor` blocks and scales the distances to match.
@@ -832,24 +790,30 @@ export function fileFace(font: TrueTypeFont, size: number): TextFace {
   };
 }
 
-// Rows `top` to `bottom` of a layout (px) made `extra` px taller.
+// How glyphs are made taller: y is drawn at centre + scale * (y - centre),
+// and the strokes are given back the thickness the pen draws them with,
+// [across, tall] (see keepStrokeWidths()).
 interface Tallness {
-  top: number;
-  bottom: number;
-  extra: number;
+  scale: number;
+  centre: number;
+  pen: [number, number];
 }
 
-// Draws `text` at SUPERSAMPLE times the size, stretched `stretch` times as wide
-// (and made taller by `tall`, in px at that size) into a temporary PNG and reads
-// its coverage back, with `margin` px of room around it. The coverage is in
-// whole blocks of SUPERSAMPLE.
-async function rasterize(face: TextFace, text: string, stretch: number, tall: Tallness | null,
+function tallY(tall: Tallness | null, y: number): number {
+  return tall ? tall.centre + tall.scale * (y - tall.centre) : y;
+}
+
+// Draws `text` at `scale` times the size, stretched `stretch` times as wide
+// and made taller by `tall` (in px at that scale), into a temporary PNG and
+// reads its coverage back, with `margin` px of room around it. The coverage
+// is in whole blocks of SUPERSAMPLE.
+async function rasterize(face: TextFace, text: string, scale: number, stretch: number, tall: Tallness | null,
   margin: number, cancellable: Gio.Cancellable): Promise<{ alpha: Uint8Array, width: number, height: number, originX: number, originY: number }> {
-  const b = face.bounds(text, SUPERSAMPLE);
+  const b = face.bounds(text, scale);
   const x0 = Math.floor(b.x0 * stretch) - margin;
-  const y0 = b.y0 - margin;
+  const y0 = Math.floor(tallY(tall, b.y0)) - margin;
   const x1 = Math.ceil(b.x1 * stretch) + margin;
-  const y1 = b.y1 + margin;
+  const y1 = Math.ceil(tallY(tall, b.y1)) + margin;
   // Whole blocks of SUPERSAMPLE, so the downscaled field keeps its origin.
   const ax = x0 - ((x0 % SUPERSAMPLE) + SUPERSAMPLE) % SUPERSAMPLE;
   const ay = y0 - ((y0 % SUPERSAMPLE) + SUPERSAMPLE) % SUPERSAMPLE;
@@ -860,8 +824,14 @@ async function rasterize(face: TextFace, text: string, stretch: number, tall: Ta
   const cr = new Cairo.Context(surface);
   cr.setSourceRGBA(1, 1, 1, 1);
   cr.translate(-ax, -ay);
-  cr.scale(stretch, 1);
-  face.draw(cr, text, SUPERSAMPLE);
+  if (tall) {
+    cr.translate(0, tall.centre);
+    cr.scale(stretch, tall.scale);
+    cr.translate(0, -tall.centre);
+  } else {
+    cr.scale(stretch, 1);
+  }
+  face.draw(cr, text, scale);
   cr.$dispose();
 
   const [fd, path] = GLib.file_open_tmp('liquid-glass-glyph-XXXXXX.png');
@@ -880,9 +850,8 @@ async function rasterize(face: TextFace, text: string, stretch: number, tall: Ta
       });
     });
     const { alpha, width: w, height: h } = decodePngAlpha(bytes);
-    if (!tall || tall.extra < 1) return { alpha, width: w, height: h, originX: -ax, originY: -ay };
-    return { alpha: tallen(alpha, w, h, tall.top - ay, tall.bottom - ay, tall.extra), width: w,
-      height: h + tall.extra, originX: -ax, originY: -ay };
+    return { alpha: tall ? keepStrokeWidths(alpha, w, h, tall.pen, tall.scale) : alpha, width: w, height: h,
+      originX: -ax, originY: -ay };
   } finally {
     file.delete_async(GLib.PRIORITY_DEFAULT, null, (_f, res) => {
       // Throws a GError when the file is already gone; nothing is left behind then.
@@ -894,33 +863,67 @@ async function rasterize(face: TextFace, text: string, stretch: number, tall: Ta
   }
 }
 
+// The digits are measured for their pen this many px tall.
+const MEASURE_HEIGHT = 240;
+
 /**
  * Distance fields of single glyphs of `face`, stretched `stretch` times as
- * wide and made `height` times as tall (see tallen()), built on first use.
- * `range` is how far (px) from the outline the fields reach.
+ * wide and made `height` times as tall (see keepStrokeWidths()), built on
+ * first use. `range` is how far (px) from the outline the fields reach.
  */
 export class GlyphFields {
   private _glyphs = new Map<string, Promise<GlyphField>>();
   // Cancels the reads still running when the fields are no longer wanted.
   readonly cancellable = new Gio.Cancellable();
-  // The rows the digits stand in, from their top to the baseline, and the
-  // px added to them.
-  private _tall: Tallness;
   /** The digits' height in the font as it is, px. */
   readonly digitHeight: number;
+  private _band: [number, number];
+  private _tall: Promise<Tallness | null> | null = null;
 
   constructor(private _face: TextFace, readonly range: number, readonly stretch = 1, readonly height = 1) {
-    const [top, baseline] = _face.digitBand();
-    this.digitHeight = Math.max(baseline - top, 1);
-    this._tall = { top, bottom: baseline, extra: Math.round((height - 1) * this.digitHeight) };
+    this._band = _face.digitBand();
+    this.digitHeight = Math.max(this._band[1] - this._band[0], 1);
+  }
+
+  // How the glyphs are made taller, in px at the font's size. Each end of
+  // the digits loses half of what the stretch added to a flat stroke, so
+  // they are stretched that much more, about the middle of their top stroke:
+  // their outline then spans `height` times the digits' height from the top.
+  private _tallness(): Promise<Tallness | null> {
+    if (this._tall) return this._tall;
+    if (this.height <= 1) return this._tall = Promise.resolve(null);
+    this._tall = (async () => {
+      const [across, tall] = await this._pen('0123456789');
+      const h = this.digitHeight;
+      const flat = Math.min(tall, h / 3);
+      return { scale: (this.height * h - flat) / (h - flat), centre: this._band[0] + flat / 2, pen: [across, tall] };
+    })();
+    // Measured again next time when it failed.
+    this._tall.catch(() => {
+      this._tall = null;
+    });
+    return this._tall;
+  }
+
+  // How thick the strokes of `text` are, px at the font's size (see
+  // strokeWidths()), or for dots how big the dots are.
+  private async _pen(text: string, dots = false): Promise<[number, number]> {
+    const scale = Math.min(MEASURE_HEIGHT / this.digitHeight, SUPERSAMPLE);
+    const big = await rasterize(this._face, text, scale, this.stretch, null, 2, this.cancellable);
+    const [across, tall] = (dots ? dotSize : strokeWidths)(big.alpha, big.width, big.height);
+    return [across / scale, tall / scale];
   }
 
   private _glyph(ch: string): Promise<GlyphField> {
     let glyph = this._glyphs.get(ch);
     if (!glyph) {
-      const tall = { top: this._tall.top * SUPERSAMPLE, bottom: this._tall.bottom * SUPERSAMPLE,
-        extra: this._tall.extra * SUPERSAMPLE };
-      glyph = rasterize(this._face, ch, this.stretch, tall, this.range * SUPERSAMPLE, this.cancellable).then(big => {
+      glyph = this._tallness().then(async t => {
+        // The colon's dots keep their own shape, whatever the digits' strokes are.
+        const pen = t && ch === ':' ? await this._pen(ch, true) : t?.pen;
+        const tall = t && { scale: t.scale, centre: t.centre * SUPERSAMPLE,
+          pen: pen!.map(v => v * SUPERSAMPLE) as [number, number] };
+        const big = await rasterize(this._face, ch, SUPERSAMPLE, this.stretch, tall, this.range * SUPERSAMPLE,
+          this.cancellable);
         const field = downsample({ data: signedDistances(big.alpha, big.width, big.height),
           width: big.width, height: big.height }, SUPERSAMPLE);
         return { ...field, originX: big.originX / SUPERSAMPLE, originY: big.originY / SUPERSAMPLE };
@@ -946,10 +949,13 @@ export class GlyphFields {
     const b = this._face.bounds(text, 1);
     const offsets = this._face.offsets(text);
     const r = this.range;
+    // The line's room above and below the digits stays as it was.
+    const tall = await this._tallness();
+    const [top, baseline] = this._band;
     const x0 = Math.floor(b.x0 * this.stretch) - r;
-    const y0 = b.y0 - r;
+    const y0 = Math.floor(tallY(tall, top) - (top - b.y0)) - r;
     const width = Math.ceil(b.x1 * this.stretch) + r - x0;
-    const height = b.y1 + this._tall.extra + r - y0;
+    const height = Math.ceil(tallY(tall, baseline) + (b.y1 - baseline)) + r - y0;
     const data = new Float32Array(width * height).fill(r);
 
     Array.from(text).forEach((ch, index) => {

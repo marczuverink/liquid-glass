@@ -51,7 +51,11 @@ export class DesktopLayer {
 
   constructor(private _path: string, private _settings: Gio.Settings, private _logger: Logger,
               private _openPreferences: () => void) {
-    this._env = { path: _path, settings: _settings, logger: _logger, menu: (item, x, y) => this._openMenu(item, x, y) };
+    this._env = {
+      path: _path, settings: _settings, logger: _logger,
+      menu: (item, x, y) => this._openMenu(item, x, y),
+      relayout: () => this._queueLayout(),
+    };
   }
 
   setup(): void {

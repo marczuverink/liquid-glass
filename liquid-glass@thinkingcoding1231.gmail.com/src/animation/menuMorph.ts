@@ -1,9 +1,11 @@
-// How a menu's glass grows out of its panel button and goes back into it, after
-// the menu of liquid-dom's showcase. Opening, the button's glass slides to the
-// middle of where the menu will be and shrinks into it, while the menu's glass,
-// a small blob in the button at first, follows on a bouncier spring and swells
-// to the menu's size, rounding off less and less. The two are drawn as one
-// liquid. Closing runs it back and ends on the button's capsule.
+// How a menu's glass grows out of its panel button and goes back into it, as
+// one body of glass all the way. Opening, the button's capsule draws itself
+// into a round drop, which is thrown out to where the menu will be and swells
+// to the menu's size, rounding off less and less; each time it is also given
+// a push of its own, somewhere downwards, so no two openings are quite the
+// same. Closing, the menu shrinks back into a drop that falls into the button,
+// stretches into its capsule there and fades. The springs follow liquid-dom's
+// menu demo.
 
 // [x, y, w, h]
 export type Rect = number[];
@@ -31,33 +33,40 @@ class Spring {
 }
 
 // [stiffness, damping], unit mass, as liquid-dom's demo has them.
-const BUTTON_OPEN_MOVE = [499, 22];
-const BUTTON_CLOSE_MOVE = [90, 20];
-const BUTTON_SCALE = [155, 24];
-const BODY_OPEN_MOVE = [144, 14];
-const BODY_CLOSE_MOVE = [130, 18];
+const OPEN_MOVE = [144, 14];
+const CLOSE_MOVE = [130, 18];
 const CONTENT_FADE = [137, 20];
-// The demo throws the menu out and the button back at 2400 px/s over about
-// 150 px; here the throw is that many times the distance, per second.
+// The demo throws the menu out at 2400 px/s over about 150 px; here the
+// throw is that many times the distance, per second.
 const THROW = 16;
-// The button shrinks to this in the middle of the menu.
-const BUTTON_OPEN_SCALE = 0.5;
-// The menu's glass starts as a blob no wider than this (px), and its content
-// twice its size.
-const BLOB_MAX = 40;
-const CONTENT_CLOSED_SCALE = 2;
+// The push each opening gets on top of the throw, px/s per px of the menu's
+// shorter side, at its strongest: the menu swings aside or dips by at most
+// about 6% of that side before it settles. Its strength is drawn from
+// PUSH_MIN to 1 of that, its direction from anywhere in the lower half.
+const PUSH = 1.3;
+const PUSH_MIN = 0.3;
+// The capsule draws into a drop this many times the button's height across.
+const DROP_SIZE = 1.15;
+const CAPSULE_S = 0.12;
 const OPEN_SIZE_S = 0.3;
 const CLOSE_SIZE_S = 0.25;
 const RADIUS_S = 0.7;
 const CONTENT_SCALE_S = 0.3;
+// The content starts twice its size.
+const CONTENT_CLOSED_SCALE = 2;
 // The content is seen through the glass as if it were deep inside it when
 // the menu opens, and comes up to the surface over this long.
 const LENS_S = 0.3;
-// The closed glass fades over this long once it is back on the button.
-const FADE_S = 0.15;
-// Corners start (opening) and end (closing) this round, as a fraction of the
-// largest the body allows.
-const BLOB_ROUNDNESS = 0.8;
+// Closing: the drop turns into the capsule once it is this near the button
+// (px, or this many times its height if more), or this long after closing
+// began whatever; the capsule then stays FADE_DELAY_S and fades over FADE_S.
+const ARRIVE_PX = 4;
+const ARRIVE_HEIGHTS = 0.3;
+const ARRIVE_MAX_S = 0.6;
+const FADE_DELAY_S = 0.1;
+const FADE_S = 0.2;
+// Corners start (opening) this round, as a fraction of the largest the body allows.
+const OPEN_ROUNDNESS = 0.8;
 
 function cubicBezier(x1: number, y1: number, x2: number, y2: number): (t: number) => number {
   const at = (t: number, a: number, b: number) => 3 * a * t * (1 - t) ** 2 + 3 * b * t * t * (1 - t) + t ** 3;
@@ -74,20 +83,23 @@ function cubicBezier(x1: number, y1: number, x2: number, y2: number): (t: number
   };
 }
 
-// Slow out of the button, then quick to the menu's size.
+// Slow out of the drop, then quick to the menu's size.
 const openSize = cubicBezier(0.8, 0.3, 0.5, 0.8);
 const easeOut = (t: number) => 1 - (1 - t) ** 2;
+const easeInOut = (t: number) => t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
 
 function clamp01(t: number): number {
   return Math.min(Math.max(t, 0), 1);
 }
 
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
 export interface MorphFrame {
-  // The menu's glass and its corner radius.
+  // The glass and its corner radius.
   body: Rect;
   bodyRadius: number;
-  // The button's glass, a capsule.
-  button: Rect;
   // The menu's items: drawn around the body's centre at this scale and opacity.
   contentScale: number;
   contentOpacity: number;
@@ -100,62 +112,62 @@ export interface MorphFrame {
 
 export class MenuMorphMotion {
   private _t = 0;
-  private _bodyX: Spring;
-  private _bodyY: Spring;
-  private _buttonX: Spring;
-  private _buttonY: Spring;
-  private _buttonScale: Spring;
+  private _x: Spring;
+  private _y: Spring;
   private _opacity: Spring;
+  // Opening: how long the capsule takes to draw into a drop (0 when the
+  // motion takes over from another). The rest of the motion starts after it.
+  private _capsuleS: number;
   private _sizeFrom: number[];
   private _radiusFrom: number;
   private _contentFrom: number;
   private _lensFrom: number;
-  private _fadeAt = -1;
+  // Closing: when the drop reached the button, and its rect then.
+  private _arrivedAt = -1;
+  private _arrivedBody: Rect = [];
   private _frame: MorphFrame;
 
   /**
    * Starts towards the menu (`opening`) or back to the button, from `from`
    * (the frame a reversed motion had got to) or from where that motion rests.
+   * `random` gives the opening its push.
    */
   constructor(readonly opening: boolean, private _buttonRect: Rect, private _menu: Rect,
-    private _menuRadius: number, from: MorphFrame | null = null, velocities: number[] | null = null) {
-    const [bx, by, bw, bh] = _buttonRect;
-    const blob = this._blob();
+    private _menuRadius: number, from: MorphFrame | null = null, velocities: number[] | null = null,
+    random: () => number = Math.random) {
     const start: MorphFrame = from ?? (opening
-      ? { body: [bx + bw / 2 - blob / 2, by + bh / 2 - blob / 2, blob, blob], bodyRadius: blob / 2,
-        button: [..._buttonRect], contentScale: CONTENT_CLOSED_SCALE, contentOpacity: 0, lens: 1, glassOpacity: 1,
-        done: false }
-      : { body: [..._menu], bodyRadius: _menuRadius, button: this._buttonAt(centre(_menu), BUTTON_OPEN_SCALE),
-        contentScale: 1, contentOpacity: 1, lens: 0, glassOpacity: 1, done: false });
+      ? { body: [..._buttonRect], bodyRadius: _buttonRect[3] / 2, contentScale: CONTENT_CLOSED_SCALE,
+        contentOpacity: 0, lens: 1, glassOpacity: 1, done: false }
+      : { body: [..._menu], bodyRadius: _menuRadius, contentScale: 1, contentOpacity: 1, lens: 0, glassOpacity: 1,
+        done: false });
     this._frame = start;
+    this._capsuleS = opening && !from ? CAPSULE_S : 0;
 
-    const [bodyMove, buttonMove] = opening ? [BODY_OPEN_MOVE, BUTTON_OPEN_MOVE] : [BODY_CLOSE_MOVE, BUTTON_CLOSE_MOVE];
-    const bc = centre(start.body), uc = centre(start.button);
-    this._bodyX = new Spring(bc[0], bodyMove[0], bodyMove[1]);
-    this._bodyY = new Spring(bc[1], bodyMove[0], bodyMove[1]);
-    this._buttonX = new Spring(uc[0], buttonMove[0], buttonMove[1]);
-    this._buttonY = new Spring(uc[1], buttonMove[0], buttonMove[1]);
-    this._buttonScale = new Spring(start.button[3] / Math.max(bh, 1), BUTTON_SCALE[0], BUTTON_SCALE[1]);
+    const [stiffness, damping] = opening ? OPEN_MOVE : CLOSE_MOVE;
+    const [cx, cy] = centre(start.body);
+    this._x = new Spring(cx, stiffness, damping);
+    this._y = new Spring(cy, stiffness, damping);
     this._opacity = new Spring(start.contentOpacity, CONTENT_FADE[0], CONTENT_FADE[1]);
-    if (velocities) {
-      [this._bodyX.velocity, this._bodyY.velocity, this._buttonX.velocity, this._buttonY.velocity] = velocities;
-    }
-    this._sizeFrom = [start.body[2], start.body[3]];
+    if (velocities) [this._x.velocity, this._y.velocity] = velocities;
+    const drop = this._drop();
+    this._sizeFrom = this._capsuleS ? [drop, drop] : [start.body[2], start.body[3]];
     this._radiusFrom = from ? start.bodyRadius
-      : opening ? BLOB_ROUNDNESS * Math.min(_menu[2], _menu[3]) / 2 : _menuRadius;
+      : opening ? OPEN_ROUNDNESS * Math.min(_menu[2], _menu[3]) / 2 : _menuRadius;
     this._contentFrom = start.contentScale;
     this._lensFrom = start.lens;
     this._aim();
-    // Thrown: the menu's glass out of the button, the button's back to its place.
-    if (!velocities) {
-      const thrown = opening ? [this._bodyX, this._bodyY] : [this._buttonX, this._buttonY];
-      for (const s of thrown) s.velocity = (s.target - s.value) * THROW;
+    if (opening && !velocities) {
+      for (const s of [this._x, this._y]) s.velocity = (s.target - s.value) * THROW;
+      const angle = random() * Math.PI;
+      const push = PUSH * Math.min(_menu[2], _menu[3]) * lerp(PUSH_MIN, 1, random());
+      this._x.velocity += Math.cos(angle) * push;
+      this._y.velocity += Math.sin(angle) * push;
     }
   }
 
-  /** The springs' velocities, for a motion that reverses this one. */
+  /** The body's velocity, for a motion that reverses this one. */
   get velocities(): number[] {
-    return [this._bodyX.velocity, this._bodyY.velocity, this._buttonX.velocity, this._buttonY.velocity];
+    return [this._x.velocity, this._y.velocity];
   }
 
   get frame(): MorphFrame {
@@ -170,74 +182,98 @@ export class MenuMorphMotion {
     this._aim();
   }
 
-  private _blob(): number {
-    return Math.max(Math.min(this._buttonRect[2], this._buttonRect[3], BLOB_MAX), 1);
-  }
-
-  private _buttonAt(c: number[], scale: number): Rect {
-    const w = this._buttonRect[2] * scale, h = this._buttonRect[3] * scale;
-    return [c[0] - w / 2, c[1] - h / 2, w, h];
+  // The round drop between the capsule and the menu, px across.
+  private _drop(): number {
+    const [, , w, h] = this._buttonRect;
+    return Math.max(Math.min(h * DROP_SIZE, w), 1);
   }
 
   private _aim(): void {
-    const home = centre(this._buttonRect), menu = centre(this._menu);
-    const [bodyTo, buttonTo] = this.opening ? [menu, menu] : [home, home];
-    [this._bodyX.target, this._bodyY.target] = bodyTo;
-    [this._buttonX.target, this._buttonY.target] = buttonTo;
-    this._buttonScale.target = this.opening ? BUTTON_OPEN_SCALE : 1;
+    [this._x.target, this._y.target] = centre(this.opening ? this._menu : this._buttonRect);
     this._opacity.target = this.opening ? 1 : 0;
   }
 
   /** Advances by `elapsed` seconds. */
   step(elapsed: number): MorphFrame {
     const dt = Math.min(Math.max(elapsed, 0), MAX_FRAME_S);
+    this._t += dt;
+    this._frame = this.opening ? this._open(dt) : this._close(dt);
+    return this._frame;
+  }
+
+  private _stepSprings(dt: number): void {
     for (let t = 0; t < dt; t += STEP_S) {
       const h = Math.min(STEP_S, dt - t);
-      for (const s of [this._bodyX, this._bodyY, this._buttonX, this._buttonY, this._buttonScale, this._opacity])
-        s.step(h);
+      for (const s of [this._x, this._y, this._opacity]) s.step(h);
     }
-    this._t += dt;
-    const t = this._t;
+  }
 
-    const blob = this._blob();
-    const sizeTo = this.opening ? [this._menu[2], this._menu[3]] : [blob, blob];
-    const k = this.opening ? openSize(clamp01(t / OPEN_SIZE_S)) : easeOut(clamp01(t / CLOSE_SIZE_S));
-    const w = this._sizeFrom[0] + (sizeTo[0] - this._sizeFrom[0]) * k;
-    const h = this._sizeFrom[1] + (sizeTo[1] - this._sizeFrom[1]) * k;
-    const body = [this._bodyX.value - w / 2, this._bodyY.value - h / 2, w, h];
-
-    const radiusTo = this.opening ? this._menuRadius : BLOB_ROUNDNESS * Math.min(...this._sizeFrom) / 2;
-    const radius = this._radiusFrom + (radiusTo - this._radiusFrom) * easeOut(clamp01(t / RADIUS_S));
-
-    const contentTo = this.opening ? 1 : CONTENT_CLOSED_SCALE;
-    const contentScale = this._contentFrom + (contentTo - this._contentFrom) * easeOut(clamp01(t / CONTENT_SCALE_S));
-    const lens = this.opening ? this._lensFrom * (1 - clamp01(t / LENS_S) ** 2) : 0;
-
-    const moving = ![this._bodyX, this._bodyY, this._buttonX, this._buttonY].every(s => s.settled(0.5)) ||
-      !this._buttonScale.settled(0.005);
-    let glassOpacity = 1;
-    let done = false;
-    if (this.opening) {
-      done = !moving && t >= Math.max(OPEN_SIZE_S, RADIUS_S);
-    } else {
-      if (this._fadeAt < 0 && !moving && t >= CLOSE_SIZE_S) this._fadeAt = t;
-      if (this._fadeAt >= 0) {
-        glassOpacity = 1 - clamp01((t - this._fadeAt) / FADE_S);
-        done = glassOpacity === 0;
-      }
+  private _open(dt: number): MorphFrame {
+    if (this._t < this._capsuleS) {
+      // The capsule draws into a drop where it is.
+      const k = easeInOut(this._t / this._capsuleS);
+      const [bx, by, bw, bh] = this._buttonRect;
+      const drop = this._drop();
+      const w = lerp(bw, drop, k), h = lerp(bh, drop, k);
+      return { body: [bx + bw / 2 - w / 2, by + bh / 2 - h / 2, w, h], bodyRadius: Math.min(w, h) / 2,
+        contentScale: CONTENT_CLOSED_SCALE, contentOpacity: 0, lens: 1, glassOpacity: 1, done: false };
     }
-
-    this._frame = {
-      body,
+    this._stepSprings(Math.min(dt, this._t - this._capsuleS));
+    const t = this._t - this._capsuleS;
+    const k = openSize(clamp01(t / OPEN_SIZE_S));
+    const w = lerp(this._sizeFrom[0], this._menu[2], k);
+    const h = lerp(this._sizeFrom[1], this._menu[3], k);
+    const radius = lerp(this._radiusFrom, this._menuRadius, easeOut(clamp01(t / RADIUS_S)));
+    const moving = !this._x.settled(0.5) || !this._y.settled(0.5);
+    return {
+      body: [this._x.value - w / 2, this._y.value - h / 2, w, h],
       bodyRadius: Math.min(radius, w / 2, h / 2),
-      button: this._buttonAt([this._buttonX.value, this._buttonY.value], Math.max(this._buttonScale.value, 0.01)),
-      contentScale,
+      contentScale: lerp(this._contentFrom, 1, easeOut(clamp01(t / CONTENT_SCALE_S))),
       contentOpacity: clamp01(this._opacity.value),
-      lens,
-      glassOpacity,
-      done,
+      lens: this._lensFrom * (1 - clamp01(t / LENS_S) ** 2),
+      glassOpacity: 1,
+      done: !moving && t >= Math.max(OPEN_SIZE_S, RADIUS_S),
     };
-    return this._frame;
+  }
+
+  private _close(dt: number): MorphFrame {
+    this._stepSprings(dt);
+    const t = this._t;
+    const drop = this._drop();
+    const k = easeOut(clamp01(t / CLOSE_SIZE_S));
+    const w = lerp(this._sizeFrom[0], drop, k);
+    const h = lerp(this._sizeFrom[1], drop, k);
+    const radius = lerp(this._radiusFrom, drop / 2, k);
+    let body = [this._x.value - w / 2, this._y.value - h / 2, w, h];
+    let bodyRadius = Math.min(radius, w / 2, h / 2);
+
+    const [hx, hy] = centre(this._buttonRect);
+    const near = Math.hypot(this._x.value - hx, this._y.value - hy) <=
+      Math.max(ARRIVE_PX, this._buttonRect[3] * ARRIVE_HEIGHTS);
+    if (this._arrivedAt < 0 && ((near && t >= CLOSE_SIZE_S) || t >= ARRIVE_MAX_S)) {
+      this._arrivedAt = t;
+      this._arrivedBody = body;
+    }
+    let glassOpacity = 1;
+    if (this._arrivedAt >= 0) {
+      // Into the capsule, on the button wherever the springs are.
+      const since = t - this._arrivedAt;
+      const c = easeInOut(clamp01(since / CAPSULE_S));
+      const [ax, ay, aw, ah] = this._arrivedBody;
+      const [bx, by, bw, bh] = this._buttonRect;
+      body = [lerp(ax, bx, c), lerp(ay, by, c), lerp(aw, bw, c), lerp(ah, bh, c)];
+      bodyRadius = Math.min(body[2], body[3]) / 2;
+      glassOpacity = 1 - clamp01((since - CAPSULE_S - FADE_DELAY_S) / FADE_S);
+    }
+    return {
+      body,
+      bodyRadius,
+      contentScale: lerp(this._contentFrom, CONTENT_CLOSED_SCALE, easeOut(clamp01(t / CONTENT_SCALE_S))),
+      contentOpacity: clamp01(this._opacity.value),
+      lens: 0,
+      glassOpacity,
+      done: glassOpacity === 0,
+    };
   }
 }
 

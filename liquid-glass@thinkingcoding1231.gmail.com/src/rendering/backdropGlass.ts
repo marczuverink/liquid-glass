@@ -319,7 +319,6 @@ export const GlassActor = GObject.registerClass(
     setResolution(width: number, height: number): void { this._renderer.setResolution(width, height); }
     setGlassGeometry(x: number, y: number, w: number, h: number): void { this._renderer.setGlassGeometry(x, y, w, h); }
     setMultiRegionMode(enabled: boolean): void { this._renderer.setMultiRegionMode(enabled); }
-    setDrop(rect: number[] | null, radius?: number, merge?: number): void { this._renderer.setDrop(rect, radius, merge); }
     setShapeTexture(texture: Cogl.Texture | null, range: number, band: number): void {
       this._renderer.setShapeTexture(texture, range, band);
     }

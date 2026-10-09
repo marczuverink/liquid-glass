@@ -1,6 +1,7 @@
 // A menu's items seen through the glass they sit in while it changes shape:
 // cut to its rounded outline and, when they are deep in it, refracted by its
-// rim the way the glass refracts what is behind it.
+// rim the way the glass refracts what is behind it. At no depth it only cuts
+// round corners (the media card's cover art).
 import Clutter from 'gi://Clutter';
 import Cogl from 'gi://Cogl';
 import GObject from 'gi://GObject';

@@ -313,8 +313,6 @@ export const GlassActor = GObject.registerClass(class GlassActor extends Clutter
 
     setMultiRegionMode(enabled) { this._renderer.setMultiRegionMode(enabled); }
 
-    setDrop(rect, radius, merge) { this._renderer.setDrop(rect, radius, merge); }
-
     setShapeTexture(texture, range, band) {
         this._renderer.setShapeTexture(texture, range, band);
     }

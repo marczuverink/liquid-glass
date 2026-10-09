@@ -51,7 +51,11 @@ export class DesktopLayer {
         this._settings = _settings;
         this._logger = _logger;
         this._openPreferences = _openPreferences;
-        this._env = { path: _path, settings: _settings, logger: _logger, menu: (item, x, y) => this._openMenu(item, x, y) };
+        this._env = {
+            path: _path, settings: _settings, logger: _logger,
+            menu: (item, x, y) => this._openMenu(item, x, y),
+            relayout: () => this._queueLayout(),
+        };
     }
 
     setup() {

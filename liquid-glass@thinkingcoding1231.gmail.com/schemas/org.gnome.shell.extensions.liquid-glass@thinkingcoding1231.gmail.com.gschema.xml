@@ -832,6 +832,11 @@
       <summary>Desktop widgets</summary>
       <description>Which widgets are shown: "weather", "events" (up next) and "media" (now playing).</description>
     </key>
+    <key name="media-visualizer" type="b">
+      <default>true</default>
+      <summary>Bars that follow the sound on the Now Playing widget</summary>
+      <description>While a player plays, the widget listens to the default output and shows its loudness in five bands. GNOME shows the microphone indicator while it listens.</description>
+    </key>
     <key name="desktop-widgets-position" type="s">
       <default>"top-right"</default>
       <summary>Where the widgets are stacked</summary>
@@ -926,7 +931,7 @@
       <range min="1.0" max="3.0"/>
       <default>1.0</default>
       <summary>Height of the glass clock's digits, relative to the font</summary>
-      <description>Above 1 the digits are made taller by lengthening their straight upright parts, while curves and horizontal strokes keep their shape.</description>
+      <description>Above 1 the digits are made taller evenly, while every stroke keeps its width and the colon's dots keep their shape.</description>
     </key>
     <key name="glass-clock-format" type="s">
       <default>"system"</default>

@@ -12,6 +12,7 @@ const MENU = [610, 40, 700, 420];
 const RADIUS = 20;
 const centre = r => [r[0] + r[2] / 2, r[1] + r[3] / 2];
 const near = (a, b, within) => a.every((v, i) => Math.abs(v - b[i]) <= within);
+const fixed = (...values) => () => values.length > 1 ? values.shift() : values[0];
 
 // Steps at 60 fps until done (or 3 s), calling `each` with every frame and its time.
 function run(motion, each = () => {}) {
@@ -24,66 +25,99 @@ function run(motion, each = () => {}) {
   return { frame, t: Infinity };
 }
 
-test('opening starts on the button and comes to rest on the menu', () => {
+test('opening starts as the button\'s capsule and comes to rest on the menu', () => {
   const motion = new MenuMorphMotion(true, BUTTON, MENU, RADIUS);
   const first = motion.frame;
-  assert.ok(near(first.button, BUTTON, 0), `button glass ${first.button}`);
-  assert.ok(near(centre(first.body), centre(BUTTON), 6), `body ${first.body}`);
-  assert.ok(first.body[2] <= 40 && first.contentOpacity < 0.2, `body ${first.body}`);
-  assert.ok(first.lens > 0.9);
+  assert.ok(near(first.body, BUTTON, 0), `body ${first.body}`);
+  assert.equal(first.bodyRadius, BUTTON[3] / 2);
+  assert.ok(first.contentOpacity === 0 && first.lens === 1);
 
   const { frame, t } = run(motion);
-  assert.ok(t < 1.5, `took ${t}s`);
+  assert.ok(t < 1.6, `took ${t}s`);
   assert.ok(near(frame.body, MENU, 0.5), `body ${frame.body}`);
   assert.equal(frame.bodyRadius, RADIUS);
   assert.equal(frame.contentScale, 1);
   assert.ok(frame.contentOpacity > 0.99 && frame.lens === 0 && frame.glassOpacity === 1);
-  // The button's glass waits in the middle of the menu, half its size.
-  assert.ok(near(centre(frame.button), centre(MENU), 0.5) && Math.abs(frame.button[2] - 100) < 1);
 });
 
-test('the button reaches the middle of the menu before the menu has grown', () => {
+test('the capsule draws into a round drop on the button before it moves', () => {
   const motion = new MenuMorphMotion(true, BUTTON, MENU, RADIUS);
-  let arrived = null;
-  run(motion, (f, t) => {
-    if (arrived === null && Math.hypot(...centre(f.button).map((v, i) => v - centre(MENU)[i])) < 20)
-      arrived = { t, width: f.body[2] };
-  });
-  assert.ok(arrived && arrived.t < 0.25, JSON.stringify(arrived));
-  assert.ok(arrived.width < MENU[2] / 2, JSON.stringify(arrived));
+  const frames = [];
+  run(motion, (f, t) => frames.push({ f, t }));
+  const drop = frames.filter(({ t }) => t <= 0.12).pop().f;
+  const [x, y, w, h] = drop.body;
+  assert.ok(Math.abs(w - h) < 1 && Math.abs(h - BUTTON[3] * 1.15) < 1, `drop ${drop.body}`);
+  assert.equal(drop.bodyRadius, Math.min(w, h) / 2);
+  assert.ok(near(centre([x, y, w, h]), centre(BUTTON), 0.5), `drop ${drop.body}`);
+  // Always one round body: never rounder than it can be, never a corner sharper than the menu's.
+  for (const { f } of frames) {
+    assert.ok(f.bodyRadius <= Math.min(f.body[2], f.body[3]) / 2 + 1e-9);
+    assert.ok(f.bodyRadius >= Math.min(RADIUS, f.body[2] / 2, f.body[3] / 2) - 1e-9, `${f.body} ${f.bodyRadius}`);
+  }
 });
 
-test('closing goes back into the button\'s capsule, then fades', () => {
+test('each opening is pushed somewhere downwards, never far', () => {
+  const path = random => {
+    const motion = new MenuMorphMotion(true, BUTTON, MENU, RADIUS, null, null, random);
+    const centres = [];
+    run(motion, f => centres.push(centre(f.body)));
+    return centres;
+  };
+  // Where it would be without a push: pushed straight down it does not go
+  // aside, and pushed straight aside it falls as if it were not pushed.
+  const down = path(fixed(0.5, 1)), aside = path(fixed(0, 1));
+  const still = down.map((c, i) => [c[0], aside[Math.min(i, aside.length - 1)][1]]);
+  const target = centre(MENU);
+  for (const [angle, strength] of [[0, 1], [0.5, 1], [1, 1], [0.25, 0.4], [0.9, 0]]) {
+    const pushed = path(fixed(angle, strength));
+    // The furthest it goes from where it would have been is aside or down,
+    // and no more than about 6% of the menu's shorter side.
+    let furthest = [0, 0];
+    pushed.forEach((c, i) => {
+      const off = [c[0] - still[Math.min(i, still.length - 1)][0], c[1] - still[Math.min(i, still.length - 1)][1]];
+      if (Math.hypot(...off) > Math.hypot(...furthest)) furthest = off;
+    });
+    assert.ok(Math.hypot(...furthest) <= 0.07 * MENU[3], `angle ${angle} strength ${strength}: ${furthest}`);
+    assert.ok(furthest[1] >= -0.5, `angle ${angle}: ${furthest}`);
+    if (strength > 0.3 && angle > 0) assert.ok(Math.hypot(...furthest) > 5, `angle ${angle}: only ${furthest}`);
+    assert.ok(near(pushed[pushed.length - 1], target, 0.5));
+  }
+});
+
+test('closing ends as the button\'s capsule and is gone 0.3 s after it gets there', () => {
   const motion = new MenuMorphMotion(false, BUTTON, MENU, RADIUS);
   assert.ok(near(motion.frame.body, MENU, 0), `body ${motion.frame.body}`);
-  let beforeFade = null;
-  const { frame, t } = run(motion, f => {
-    if (f.glassOpacity === 1) beforeFade = f;
+  let capsuleAt = null;
+  const { frame, t } = run(motion, (f, time) => {
+    if (capsuleAt === null && near(f.body, BUTTON, 0.01)) capsuleAt = time;
+    // One body: never taller than the button once it is down there.
+    if (capsuleAt !== null) assert.ok(f.body[3] <= BUTTON[3] + 0.01);
   });
-  assert.ok(t < 1.5, `took ${t}s`);
+  assert.ok(capsuleAt !== null && capsuleAt < 0.8, `capsule at ${capsuleAt}`);
+  assert.ok(t < 1, `took ${t}s`);
   assert.equal(frame.glassOpacity, 0);
-  // Before it fades the glass is the capsule, with the menu's blob inside it.
-  assert.ok(near(beforeFade.button, BUTTON, 0.6), `button glass ${beforeFade.button}`);
-  const [x, y, w, h] = beforeFade.body;
-  assert.ok(x >= BUTTON[0] && y >= BUTTON[1] - 0.5 && x + w <= BUTTON[0] + BUTTON[2] &&
-    y + h <= BUTTON[1] + BUTTON[3] + 0.5, `body ${beforeFade.body}`);
+  assert.ok(t - capsuleAt <= 0.31 && t - capsuleAt >= 0.25, `${t - capsuleAt}s on the button`);
 });
 
 test('reversing midway carries on from where the glass is', () => {
   const opening = new MenuMorphMotion(true, BUTTON, MENU, RADIUS);
   let frame;
-  for (let i = 0; i < 12; i++) frame = opening.step(1 / 60);
+  for (let i = 0; i < 20; i++) frame = opening.step(1 / 60);
   const closing = new MenuMorphMotion(false, BUTTON, MENU, RADIUS, frame, opening.velocities);
   const next = closing.step(1 / 60);
   assert.ok(near(next.body, frame.body, 70), `${frame.body} -> ${next.body}`);
-  assert.ok(near(next.button, frame.button, 25), `${frame.button} -> ${next.button}`);
   assert.ok(Math.abs(next.contentScale - frame.contentScale) < 0.1);
   assert.ok(run(closing).frame.done);
+
+  const back = new MenuMorphMotion(true, BUTTON, MENU, RADIUS, next, closing.velocities);
+  const again = back.step(1 / 60);
+  assert.ok(near(again.body, next.body, 70), `${next.body} -> ${again.body}`);
+  assert.ok(near(run(back).frame.body, MENU, 0.5));
 });
 
 test('the glass never jumps from one frame to the next', () => {
   for (const opening of [true, false]) {
-    const motion = new MenuMorphMotion(opening, BUTTON, MENU, RADIUS);
+    const motion = new MenuMorphMotion(opening, BUTTON, MENU, RADIUS, null, null, fixed(0.2, 1));
     let last = motion.frame;
     run(motion, f => {
       for (let i = 0; i < 4; i++) {

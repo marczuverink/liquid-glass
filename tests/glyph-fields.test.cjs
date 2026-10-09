@@ -60,173 +60,126 @@ test('softening keeps a straight edge where it is and rounds the fold in a corne
   assert.equal(glyphs.maxDepth({ data, width: w, height: h }), 20);
 });
 
-// Rows (from the top) where column x is covered at least half.
-function coveredRows(alpha, w, h, x) {
-  const rows = [];
-  for (let y = 0; y < h; y++) if (alpha[y * w + x] >= 128) rows.push(y);
-  return rows;
+// Whether (x, y) is inside the polygon [[x, y], ...] (even-odd).
+function inPolygon(x, y, points) {
+  let inside = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const [xi, yi] = points[i], [xj, yj] = points[j];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
 }
 
-test('a taller glyph lengthens its upright stroke and keeps its bars as thick', () => {
-  // An I: bars across rows 10-14 and 50-54, a stem in columns 20-29 between them.
-  const [w, h] = [50, 70];
-  const alpha = coverage(w, h, (x, y) => (y >= 9.5 && y < 54.5 && x >= 19.5 && x < 29.5) ||
-    (((y >= 9.5 && y < 14.5) || (y >= 49.5 && y < 54.5)) && x >= 9.5 && x < 39.5));
-  const tall = glyphs.tallen(alpha, w, h, 10, 55, 20);
-  // At the bars' ends only the bars are covered: still 5 rows each.
-  const bar = coveredRows(tall, w, h + 20, 12);
-  assert.deepEqual(bar, [10, 11, 12, 13, 14, 70, 71, 72, 73, 74]);
-  // The stem runs between them, 20 rows longer.
-  assert.deepEqual(coveredRows(tall, w, h + 20, 25), Array.from({ length: 65 }, (_, i) => 10 + i));
-  // Above the glyph nothing moved.
-  assert.deepEqual(tall.subarray(0, 10 * w), alpha.subarray(0, 10 * w));
-});
+// The longest run of ink (coverage counted as its fraction) along a line from (x, y) by (dx, dy) per step.
+function run(alpha, w, h, x, y, dx, dy, steps) {
+  let total = 0;
+  for (let i = -steps; i <= steps; i++) {
+    const px = Math.round(x + dx * i - 0.5), py = Math.round(y + dy * i - 0.5);
+    if (px >= 0 && py >= 0 && px < w && py < h) total += alpha[py * w + px] / 255;
+  }
+  return total * Math.hypot(dx, dy);
+}
 
-test('the added height goes to the rows where the outline runs upright', () => {
-  // An O: the rows round its top and bottom curve, the middle ones run upright.
-  const [w, h] = [60, 60];
+test('an outline traced from coverage fills back to the same coverage', () => {
+  const [w, h] = [80, 70];
   const alpha = coverage(w, h, (x, y) => {
-    const d = Math.hypot((x - 30) / 20, Math.max(Math.abs(y - 30) - 10, 0) / 20);
-    return d < 1 && Math.hypot((x - 30) / 10, Math.max(Math.abs(y - 30) - 10, 0) / 10) >= 1;
+    const d = Math.hypot(x - 40.3, y - 33.7);
+    return d < 26.2 && d > 11.4;
   });
-  const shares = glyphs.rowShares(alpha, w, 10, 50);
-  const perRow = (a, b) => shares.slice(a, b).reduce((s, v) => s + v, 0) / (b - a);
-  // The rows away from the curves take several times what the curves' rows do.
-  const middle = perRow(15, 25), curves = (perRow(0, 8) + perRow(32, 40)) / 2;
-  assert.ok(middle > curves * 3, `middle ${middle.toFixed(4)} curves ${curves.toFixed(4)}`);
-  assert.ok(Math.abs(shares.reduce((a, b) => a + b, 0) - 1) < 1e-9);
+  const loops = glyphs.traceOutlines(alpha, w, h);
+  assert.equal(loops.length, 2);
+  const back = glyphs.fillOutlines(loops, w, h);
+  let worst = 0, sum = 0;
+  for (let i = 0; i < w * h; i++) {
+    worst = Math.max(worst, Math.abs(back[i] - alpha[i]));
+    sum += Math.abs(back[i] - alpha[i]);
+  }
+  assert.ok(worst <= 25 && sum / (w * h) < 0.5, `worst ${worst}, mean ${sum / (w * h)}`);
 });
 
-test('a round dot keeps its shape and the space round it takes the height', () => {
-  // A colon: two round dots, the gap between them and the room round them.
-  const [w, h] = [40, 100];
-  const alpha = coverage(w, h, (x, y) => Math.hypot(x - 20, y - 30) < 8 || Math.hypot(x - 20, y - 80) < 8);
-  const shares = glyphs.rowShares(alpha, w, 10, 95);
-  const dot = shares.slice(14, 26).reduce((a, b) => a + b, 0);
-  assert.ok(dot < 0.05, `the dot takes ${dot}`);
-  const tall = glyphs.tallen(alpha, w, h, 10, 95, 50);
-  const rows = coveredRows(tall, w, h + 50, 20);
-  const runs = rows.filter((y, i) => i === 0 || rows[i - 1] !== y - 1).length;
-  assert.equal(runs, 2);
-  // Each dot is still about 16 rows tall.
-  assert.ok(Math.abs(rows.filter(y => y < 60).length - 16) <= 1, String(rows.filter(y => y < 60).length));
+test('stroke widths are measured across upright and across flat strokes', () => {
+  const [w, h] = [100, 130];
+  // An L: an upright stem 10 px wide and a foot 6 px tall.
+  const alpha = coverage(w, h, (x, y) => (x > 20 && x < 30 && y > 10 && y < 120) || (x > 20 && x < 85 && y > 114 && y < 120));
+  const [across, tall] = glyphs.strokeWidths(alpha, w, h);
+  assert.ok(Math.abs(across - 10) < 0.6 && Math.abs(tall - 6) < 0.6, `${across} x ${tall}`);
 });
 
-test('a 4 grows along its slanted upper part as well as its stem', () => {
-  // A 4: a diagonal from the top of the stem down to the bar, the stem in
-  // columns 40-49 from row 10 to 90, and the bar across rows 60-69.
-  const [w, h] = [70, 100];
-  const alpha = coverage(w, h, (x, y) => {
-    const stem = x >= 39.5 && x < 49.5 && y >= 9.5 && y < 89.5;
-    const bar = x >= 9.5 && x < 59.5 && y >= 59.5 && y < 69.5;
-    // The diagonal's left edge runs from (40, 10) to (10, 60), 12 px wide.
-    const left = 40 - (y - 10) * 0.6;
-    const diagonal = y >= 9.5 && y < 60 && x >= left && x < left + 12;
-    return stem || bar || diagonal;
-  });
-  const shares = glyphs.rowShares(alpha, w, 10, 90);
-  const perRow = (a, b) => shares.slice(a - 10, b - 10).reduce((s, v) => s + v, 0) / (b - a);
-  const upper = perRow(25, 50), lower = perRow(75, 88);
-  assert.ok(upper > lower * 0.6, `upper ${upper.toFixed(4)} lower ${lower.toFixed(4)}`);
-  // The bar keeps its thickness.
-  assert.ok(perRow(61, 68) < lower * 0.2, `bar ${perRow(61, 68).toFixed(4)}`);
+test('a glyph drawn taller gets back its bars\' and its slanted strokes\' width', () => {
+  const s = 2;
+  // A 7 with a bar 12 px thick and a slanted stroke, drawn twice as tall.
+  const seven = [[20, 20], [100, 20], [100, 30], [58, 140], [45, 140], [86, 32], [20, 32]].map(([x, y]) => [x, y * s]);
+  const [w, h] = [120, 300];
+  const alpha = coverage(w, h, (x, y) => inPolygon(x, y, seven));
+  const out = glyphs.keepStrokeWidths(alpha, w, h, [12, 12], s);
+  // The bar: 24 px drawn, 12 px kept.
+  for (const x of [30, 50, 70]) {
+    const bar = run(out, w, h, x + 0.5, 52, 0, 1, 30);
+    assert.ok(Math.abs(bar - 12) < 0.3, `bar at ${x}: ${bar}`);
+  }
+  // The slanted stroke, measured across it: as thick as the pen draws it at its new angle.
+  const [ax, ay, bx, by] = [86, 64, 45, 280];
+  const len = Math.hypot(bx - ax, by - ay);
+  const [nx, ny] = [(by - ay) / len, -(bx - ax) / len];
+  for (const t of [0.35, 0.55, 0.75]) {
+    const across = run(out, w, h, ax + (bx - ax) * t + nx * 6, ay + (by - ay) * t + ny * 6, nx / 4, ny / 4, 120);
+    const before = run(alpha, w, h, ax + (bx - ax) * t + nx * 6, ay + (by - ay) * t + ny * 6, nx / 4, ny / 4, 120);
+    // The stretch made it thicker by 12 * (g - 1), g as it faces now.
+    const g = Math.hypot(nx, s * ny);
+    assert.ok(Math.abs(across - (before - 12 * (g - 1))) < 0.4, `slanted at ${t}: ${before} -> ${across}`);
+  }
 });
 
-test('a band that starts and ends between rows is taken to the nearest rows', () => {
-  const [w, h] = [20, 40];
-  const alpha = coverage(w, h, (x, y) => x >= 7.5 && x < 12.5 && y >= 9.5 && y < 30.5);
-  const tall = glyphs.tallen(alpha, w, h, 9.6, 30.4, 10);
-  assert.equal(coveredRows(tall, w, h + 10, 10).length, 31);
-});
-
-test('a slanted straight stroke stays straight when the glyph grows, whatever starts beside it', () => {
-  // A 4 whose stem starts halfway down its diagonal, as in condensed fonts.
-  const [w, h] = [70, 100];
-  const alpha = coverage(w, h, (x, y) => {
-    const stem = x >= 39.5 && x < 49.5 && y >= 34.5 && y < 89.5;
-    const bar = x >= 9.5 && x < 59.5 && y >= 59.5 && y < 69.5;
-    const left = 40 - (y - 10) * 0.6;
-    const diagonal = y >= 9.5 && y < 60 && x >= left && x < left + 12;
-    return stem || bar || diagonal;
-  });
-  const extra = 40;
-  const tall = glyphs.tallen(alpha, w, h, 10, 90, extra);
-  // The diagonal's left edge, row by row, to a fraction of a pixel.
-  const xs = [], ys = [];
-  for (let y = 0; y < h + extra; y++) {
-    for (let x = 1; x < 39; x++) {
-      const a = tall[y * w + x - 1], b = tall[y * w + x];
-      if (a < 128 && b >= 128) {
-        xs.push(x - 1 + (127.5 - a) / (b - a));
-        ys.push(y);
-        break;
+test('the inner corner of a 7 stays a corner where the bar and the slanted stroke meet', () => {
+  const s = 2;
+  const seven = [[20, 20], [100, 20], [100, 30], [58, 140], [45, 140], [86, 32], [20, 32]].map(([x, y]) => [x, y * s]);
+  const [w, h] = [120, 300];
+  const out = glyphs.keepStrokeWidths(coverage(w, h, (x, y) => inPolygon(x, y, seven)), w, h, [12, 12], s);
+  // The bar's underside moves up 6 px; the slanted side moves in by what the
+  // stretch added on it. The outline near the corner lies on those two lines.
+  const move = (nx, ny) => (Math.hypot(12 * nx, s * 12 * ny) - 12) / 2;
+  const [px, py, qx, qy] = [45, 280, 86, 64];
+  const len = Math.hypot(qx - px, qy - py);
+  const [nx, ny] = [(qy - py) / len, -(qx - px) / len];
+  const e = move(nx, ny);
+  // The outline's pixel (x, y) covers x to x + 1; the polygon's covers x - 0.5 to x + 0.5.
+  // (nx, ny) points out of the ink there.
+  const lines = [p => Math.abs(p[1] - 0.5 - (64 - 6)), p => Math.abs((p[0] - 0.5 - px) * nx + (p[1] - 0.5 - py) * ny + e)];
+  const loops = glyphs.traceOutlines(out, w, h);
+  // Where they cross; right at it, coverage cannot say how sharp the corner is.
+  const cornerY = 58.5, cornerX = 0.5 + px + ((-e - (cornerY - 0.5 - py) * ny) / nx);
+  let checked = 0;
+  for (const loop of loops) {
+    for (let i = 0; i < loop.length; i += 2) {
+      const p = [loop[i], loop[i + 1]];
+      if (p[1] < 54 || p[1] > 90 || p[0] < 50 || p[0] > 92 || Math.hypot(p[0] - cornerX, p[1] - cornerY) < 1.5) continue;
+      // Points on the underside or on the slanted side, near the corner.
+      if (p[1] < 60 || Math.abs(p[0] - 80) < 12) {
+        const off = Math.min(...lines.map(f => f(p)));
+        if (off < 3) {
+          checked++;
+          assert.ok(off < 0.2, `(${p}) is ${off} px off`);
+        }
       }
     }
   }
-  // Away from its ends, where it meets the stem's top and the bar.
-  const pts = xs.map((x, i) => [ys[i], x]).filter(([y]) => y > ys[0] + 6 && y < 60 + extra * 0.4);
-  assert.ok(pts.length > 30, `only ${pts.length} rows of the diagonal`);
-  const n = pts.length;
-  const my = pts.reduce((s, [y]) => s + y, 0) / n, mx = pts.reduce((s, [, x]) => s + x, 0) / n;
-  const slope = pts.reduce((s, [y, x]) => s + (y - my) * (x - mx), 0) / pts.reduce((s, [y]) => s + (y - my) ** 2, 0);
-  const worst = Math.max(...pts.map(([y, x]) => Math.abs(mx + slope * (y - my) - x)));
-  assert.ok(worst < 0.5, `the diagonal strays ${worst.toFixed(2)} px from a straight line`);
+  assert.ok(checked > 20, `${checked} points`);
 });
 
-// The width of the ink across row y of `alpha` (`w` wide) around column x.
-function runAt(alpha, w, y, x) {
-  let a = x, b = x;
-  while (a > 0 && alpha[y * w + a - 1] >= 128) a--;
-  while (b < w - 1 && alpha[y * w + b + 1] >= 128) b++;
-  return alpha[y * w + x] >= 128 ? b - a + 1 : 0;
-}
+test('a ring drawn taller keeps its width all round, and a dot stays round', () => {
+  const s = 2.2;
+  const [w, h] = [100, 200];
+  const ring = coverage(w, h, (x, y) => {
+    const d = Math.hypot(x - 50, (y - 100) / s);
+    return d < 40 && d > 28;
+  });
+  const out = glyphs.keepStrokeWidths(ring, w, h, [12, 12], s);
+  const top = run(out, w, h, 50.5, 100 - 34 * s, 0, 1, 40);
+  const side = run(out, w, h, 50 - 34, 100.5, 1, 0, 40);
+  assert.ok(Math.abs(top - 12) < 0.6 && Math.abs(side - 12) < 0.6, `top ${top}, side ${side}`);
 
-test('a slanted stroke keeps its width when the glyph grows', () => {
-  // A stroke 10 px wide slanting at 45 degrees from (10, 10) to (60, 60).
-  const [w, h] = [80, 80];
-  const across = 10 * Math.SQRT2;
-  const alpha = coverage(w, h, (x, y) => y >= 9.5 && y < 60.5 && Math.abs(x - y) < across / 2);
-  const extra = 50;
-  const tall = glyphs.tallen(alpha, w, h, 10, 60, extra);
-  // Twice as tall, the stroke slants at atan(2); 10 px wide across its slant
-  // it spans 10 / sin(atan(2)) = 11.2 px across a row (the plain stretch: 14.1).
-  const y = 10 + Math.round((60 + extra - 10) / 2);
-  const x = Math.round(10 + (y - 10) / 2);
-  const run = runAt(tall, w, y, x);
-  assert.ok(Math.abs(run - 10 / Math.sin(Math.atan(2))) <= 1.5, `${run} px across`);
-});
-
-test('a ring with nothing upright grows evenly and keeps its width all round', () => {
-  // An ellipse 60 x 80 px with a stroke 8 px wide.
-  const [w, h] = [80, 100];
-  const ring = (x, y, a, b) => ((x - 40) / a) ** 2 + ((y - 50) / b) ** 2 < 1;
-  const alpha = coverage(w, h, (x, y) => ring(x, y, 30, 40) && !ring(x, y, 22, 32));
-  const tall = glyphs.tallen(alpha, w, h, 10, 90, 80);
-  const rows = coveredRows(tall, w, h + 80, 40);
-  // Top and bottom still 8 rows thick.
-  const runs = [];
-  for (const y of rows) {
-    if (runs.length && runs[runs.length - 1][1] === y - 1) runs[runs.length - 1][1] = y;
-    else runs.push([y, y]);
-  }
-  assert.equal(runs.length, 2, JSON.stringify(runs));
-  for (const [a, b] of runs) assert.ok(Math.abs(b - a + 1 - 8) <= 1, JSON.stringify(runs));
-  // Its outside spans the band, 160 rows.
-  assert.ok(Math.abs(runs[1][1] - runs[0][0] + 1 - 160) <= 2, JSON.stringify(runs));
-  // And its sides are 8 px wide halfway down.
-  assert.ok(Math.abs(runAt(tall, w, 90, 14) - 8) <= 1, String(runAt(tall, w, 90, 14)));
-});
-
-test('the cut end of a flat stroke stays square where its rows grow', () => {
-  // A bar 8 rows thick from x = 10 to 50 hanging off an upright stroke, all
-  // in rows that grow evenly with a ring beside them.
-  const [w, h] = [100, 100];
-  const ring = (x, y, a, b) => ((x - 75) / a) ** 2 + ((y - 50) / b) ** 2 < 1;
-  const alpha = coverage(w, h, (x, y) => (x >= 9.5 && x < 50.5 && y >= 45.5 && y < 53.5) ||
-    (x >= 42.5 && x < 50.5 && y >= 9.5 && y < 90.5) || (ring(x, y, 20, 40) && !ring(x, y, 12, 32)));
-  const tall = glyphs.tallen(alpha, w, h, 10, 90, 80);
-  // The bar's rows down its free end and further in.
-  const end = coveredRows(tall, w, h + 80, 11), inner = coveredRows(tall, w, h + 80, 30);
-  assert.ok(Math.abs(end.length - 8) <= 1 && Math.abs(inner.length - 8) <= 1, `${end} / ${inner}`);
-  assert.ok(Math.abs(end[0] - inner[0]) <= 1, `${end[0]} vs ${inner[0]}`);
+  const dot = coverage(60, 80, (x, y) => Math.hypot(x - 30, (y - 40) / s) < 7);
+  const round = glyphs.keepStrokeWidths(dot, 60, 80, [14, 14], s);
+  const tall = run(round, 60, 80, 30.5, 40, 0, 1, 40), wide = run(round, 60, 80, 30, 40.5, 1, 0, 30);
+  assert.ok(Math.abs(tall - 14) < 0.8 && Math.abs(wide - 14) < 0.8, `${wide} x ${tall}`);
 });

@@ -239,23 +239,6 @@ export class GlassRenderer {
   }
 
   /**
-   * Fuses a second rounded rect [x, y, w, h] onto the glass (same space as
-   * setGlassGeometry(), without padding) by a smooth union `merge` px wide;
-   * null removes it.
-   */
-  setDrop(rect: number[] | null, radius: number = 0, merge: number = 24): void {
-    const r = rect && rect[2] >= 1 && rect[3] >= 1 ? rect : null;
-    this.uniforms.set('drop_x', r ? r[0] : 0);
-    this.uniforms.set('drop_y', r ? r[1] : 0);
-    this.uniforms.set('drop_w', r ? r[2] : 0);
-    this.uniforms.set('drop_h', r ? r[3] : 0);
-    this.uniforms.set('drop_radius', radius);
-    this.uniforms.set('drop_merge', merge);
-    this.geometry.extraRects = r ? [r.slice()] : [];
-    this._repaintIfDirty();
-  }
-
-  /**
    * The distance field a shape-texture glass takes its outline from: it covers
    * the glass rect, holds `range` px each way, and the lens rises over `band`
    * px from the edge.
