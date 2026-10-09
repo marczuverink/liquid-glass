@@ -1,5 +1,8 @@
 # GNOME Shell Extension Development Guidelines
 
+## 返答の言語
+- ユーザーへの返答・途中経過・最終報告は、常に日本語で書く。ツールの出力やコードが英語でも、長い作業の後の最終報告でも同じ。
+
 ## 開発環境
 - GNOME 50 / Clutter 18 環境向けの TypeScript 拡張機能開発。
 - メインのソースコードやビルド設定は `liquid-glass@thinkingcoding1231.gmail.com/` 配下にあります。

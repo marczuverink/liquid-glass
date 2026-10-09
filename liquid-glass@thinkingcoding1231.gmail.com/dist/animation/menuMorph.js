@@ -1,11 +1,11 @@
 // How a menu's glass grows out of its panel button and goes back into it, as
 // one body of glass all the way. Opening, the button's capsule draws itself
-// into a round drop, which is thrown out to where the menu will be and swells
-// to the menu's size, rounding off less and less; each time it is also given
-// a push of its own, somewhere downwards, so no two openings are quite the
-// same. Closing, the menu shrinks back into a drop that falls into the button,
-// stretches into its capsule there and fades. The springs follow liquid-dom's
-// menu demo.
+// into a round drop as it drops out of the button, and the drop is thrown out
+// to where the menu will be and swells to the menu's size, rounding off less
+// and less; each time it is also given a push of its own, somewhere
+// downwards, so no two openings are quite the same. Closing, the menu shrinks
+// back into a drop that rises into the button, stretching into its capsule on
+// the way, and fades there. The springs follow liquid-dom's menu demo.
 const STEP_S = 0.002;
 const MAX_FRAME_S = 0.05;
 
@@ -47,9 +47,15 @@ const THROW = 16;
 // PUSH_MIN to 1 of that, its direction from anywhere in the lower half.
 const PUSH = 1.3;
 const PUSH_MIN = 0.3;
-// The capsule draws into a drop this many times the button's height across.
+// The capsule draws into a drop this many times the button's height across,
+// while it drops this many heights below the button.
 const DROP_SIZE = 1.15;
-const CAPSULE_S = 0.12;
+const DROP_FALL = 2;
+const CAPSULE_S = 0.14;
+// The springs swing the drop past the menu; as it swells to the menu's size,
+// all but this much of the swing is taken out, so the grown glass does not
+// shoot back over the menu.
+const SETTLED_SWING = 0.25;
 const OPEN_SIZE_S = 0.3;
 const CLOSE_SIZE_S = 0.25;
 const RADIUS_S = 0.7;
@@ -59,12 +65,13 @@ const CONTENT_CLOSED_SCALE = 2;
 // The content is seen through the glass as if it were deep inside it when
 // the menu opens, and comes up to the surface over this long.
 const LENS_S = 0.3;
-// Closing: the drop turns into the capsule once it is this near the button
-// (px, or this many times its height if more), or this long after closing
-// began whatever; the capsule then stays FADE_DELAY_S and fades over FADE_S.
-const ARRIVE_PX = 4;
-const ARRIVE_HEIGHTS = 0.3;
+// Closing: the drop starts to turn into the capsule once it is this many
+// button heights from where the capsule rests, or this long after closing
+// began whatever, and rises into place as it does over CLOSE_CAPSULE_S; the
+// capsule then stays FADE_DELAY_S and fades over FADE_S.
+const ARRIVE_HEIGHTS = 2;
 const ARRIVE_MAX_S = 0.6;
+const CLOSE_CAPSULE_S = 0.16;
 const FADE_DELAY_S = 0.1;
 const FADE_S = 0.2;
 // Corners start (opening) this round, as a fraction of the largest the body allows.
@@ -118,9 +125,9 @@ export class MenuMorphMotion {
     _radiusFrom;
     _contentFrom;
     _lensFrom;
-    // Closing: when the drop reached the button, and its rect then.
+    // Closing: when the drop came near the button, and its size then.
     _arrivedAt = -1;
-    _arrivedBody = [];
+    _arrivedSize = [];
     _frame;
 
     /**
@@ -141,7 +148,9 @@ export class MenuMorphMotion {
         this._frame = start;
         this._capsuleS = opening && !from ? CAPSULE_S : 0;
         const [stiffness, damping] = opening ? OPEN_MOVE : CLOSE_MOVE;
-        const [cx, cy] = centre(start.body);
+        // The drop is thrown from where it fell to.
+        const [cx, y] = centre(start.body);
+        const cy = y + (this._capsuleS ? this._fall() : 0);
         this._x = new Spring(cx, stiffness, damping);
         this._y = new Spring(cy, stiffness, damping);
         this._opacity = new Spring(start.contentOpacity, CONTENT_FADE[0], CONTENT_FADE[1]);
@@ -182,6 +191,10 @@ export class MenuMorphMotion {
         this._aim();
     }
 
+    _fall() {
+        return this._buttonRect[3] * DROP_FALL;
+    }
+
     // The round drop between the capsule and the menu, px across.
     _drop() {
         const [, , w, h] = this._buttonRect;
@@ -212,11 +225,15 @@ export class MenuMorphMotion {
     _open(dt) {
         if (this._t < this._capsuleS) {
             // The capsule draws into a drop where it is.
-            const k = easeInOut(this._t / this._capsuleS);
+            const t = this._t / this._capsuleS;
+            // It leaves the button as a capsule and rounds off on the way down,
+            // falling faster and faster into the throw.
+            const k = easeInOut(clamp01((t - 0.3) / 0.7));
             const [bx, by, bw, bh] = this._buttonRect;
             const drop = this._drop();
             const w = lerp(bw, drop, k), h = lerp(bh, drop, k);
-            return { body: [bx + bw / 2 - w / 2, by + bh / 2 - h / 2, w, h], bodyRadius: Math.min(w, h) / 2,
+            const y = by + bh / 2 + this._fall() * t ** 1.5;
+            return { body: [bx + bw / 2 - w / 2, y - h / 2, w, h], bodyRadius: Math.min(w, h) / 2,
                 contentScale: CONTENT_CLOSED_SCALE, contentOpacity: 0, lens: 1, glassOpacity: 1, done: false };
         }
         this._stepSprings(Math.min(dt, this._t - this._capsuleS));
@@ -226,8 +243,11 @@ export class MenuMorphMotion {
         const h = lerp(this._sizeFrom[1], this._menu[3], k);
         const radius = lerp(this._radiusFrom, this._menuRadius, easeOut(clamp01(t / RADIUS_S)));
         const moving = !this._x.settled(0.5) || !this._y.settled(0.5);
+        const swing = lerp(1, SETTLED_SWING, k);
+        const x = this._x.target + (this._x.value - this._x.target) * swing;
+        const y = this._y.target + (this._y.value - this._y.target) * swing;
         return {
-            body: [this._x.value - w / 2, this._y.value - h / 2, w, h],
+            body: [x - w / 2, y - h / 2, w, h],
             bodyRadius: Math.min(radius, w / 2, h / 2),
             contentScale: lerp(this._contentFrom, 1, easeOut(clamp01(t / CONTENT_SCALE_S))),
             contentOpacity: clamp01(this._opacity.value),
@@ -248,22 +268,23 @@ export class MenuMorphMotion {
         let body = [this._x.value - w / 2, this._y.value - h / 2, w, h];
         let bodyRadius = Math.min(radius, w / 2, h / 2);
         const [hx, hy] = centre(this._buttonRect);
-        const near = Math.hypot(this._x.value - hx, this._y.value - hy) <=
-            Math.max(ARRIVE_PX, this._buttonRect[3] * ARRIVE_HEIGHTS);
+        const near = Math.hypot(this._x.value - hx, this._y.value - hy) <= this._buttonRect[3] * ARRIVE_HEIGHTS;
         if (this._arrivedAt < 0 && ((near && t >= CLOSE_SIZE_S) || t >= ARRIVE_MAX_S)) {
             this._arrivedAt = t;
-            this._arrivedBody = body;
+            this._arrivedSize = [w, h];
         }
         let glassOpacity = 1;
         if (this._arrivedAt >= 0) {
-            // Into the capsule, on the button wherever the springs are.
+            // Into the capsule as it rises, ending on the button wherever the springs are.
             const since = t - this._arrivedAt;
-            const c = easeInOut(clamp01(since / CAPSULE_S));
-            const [ax, ay, aw, ah] = this._arrivedBody;
-            const [bx, by, bw, bh] = this._buttonRect;
-            body = [lerp(ax, bx, c), lerp(ay, by, c), lerp(aw, bw, c), lerp(ah, bh, c)];
-            bodyRadius = Math.min(body[2], body[3]) / 2;
-            glassOpacity = 1 - clamp01((since - CAPSULE_S - FADE_DELAY_S) / FADE_S);
+            const c = easeInOut(clamp01(since / CLOSE_CAPSULE_S));
+            const [aw, ah] = this._arrivedSize;
+            const [, , bw, bh] = this._buttonRect;
+            const cw = lerp(aw, bw, c), ch = lerp(ah, bh, c);
+            const cx = lerp(this._x.value, hx, c), cy = lerp(this._y.value, hy, c);
+            body = [cx - cw / 2, cy - ch / 2, cw, ch];
+            bodyRadius = Math.min(cw, ch) / 2;
+            glassOpacity = 1 - clamp01((since - CLOSE_CAPSULE_S - FADE_DELAY_S) / FADE_S);
         }
         return {
             body,

@@ -40,19 +40,38 @@ test('opening starts as the button\'s capsule and comes to rest on the menu', ()
   assert.ok(frame.contentOpacity > 0.99 && frame.lens === 0 && frame.glassOpacity === 1);
 });
 
-test('the capsule draws into a round drop on the button before it moves', () => {
+test('the capsule draws into a round drop as it drops out of the button', () => {
   const motion = new MenuMorphMotion(true, BUTTON, MENU, RADIUS);
   const frames = [];
   run(motion, (f, t) => frames.push({ f, t }));
-  const drop = frames.filter(({ t }) => t <= 0.12).pop().f;
+  const { f: drop, t } = frames.filter(({ t }) => t <= 0.14).pop();
   const [x, y, w, h] = drop.body;
-  assert.ok(Math.abs(w - h) < 1 && Math.abs(h - BUTTON[3] * 1.15) < 1, `drop ${drop.body}`);
+  assert.ok(Math.abs(w - h) < 3 && Math.abs(h - BUTTON[3] * 1.15) < 1, `drop ${drop.body}`);
   assert.equal(drop.bodyRadius, Math.min(w, h) / 2);
-  assert.ok(near(centre([x, y, w, h]), centre(BUTTON), 0.5), `drop ${drop.body}`);
+  // Straight down, twice its height below the button.
+  const fall = BUTTON[3] * 2 * (t / 0.14) ** 1.5;
+  assert.ok(near(centre([x, y, w, h]), [centre(BUTTON)[0], centre(BUTTON)[1] + fall], 0.5), `drop ${drop.body}`);
+  // Still a capsule halfway down.
+  const half = frames.filter(({ t }) => t <= 0.07).pop().f;
+  assert.ok(half.body[2] > half.body[3] * 2, `halfway ${half.body}`);
   // Always one round body: never rounder than it can be, never a corner sharper than the menu's.
   for (const { f } of frames) {
     assert.ok(f.bodyRadius <= Math.min(f.body[2], f.body[3]) / 2 + 1e-9);
     assert.ok(f.bodyRadius >= Math.min(RADIUS, f.body[2] / 2, f.body[3] / 2) - 1e-9, `${f.body} ${f.bodyRadius}`);
+  }
+});
+
+test('the grown glass does not shoot back up over the menu', () => {
+  for (const random of [fixed(0.5, 1), fixed(0, 0), fixed(1, 1)]) {
+    const motion = new MenuMorphMotion(true, BUTTON, MENU, RADIUS, null, null, random);
+    let grownTop = null, highest = Infinity;
+    run(motion, f => {
+      if (f.body[3] < MENU[3] - 0.5) return;
+      grownTop ??= f.body[1];
+      highest = Math.min(highest, f.body[1]);
+    });
+    assert.ok(grownTop - MENU[1] < 20, `grown ${grownTop - MENU[1]}px below the menu's top`);
+    assert.ok(highest > MENU[1] - 4, `up to ${MENU[1] - highest}px over the menu's top`);
   }
 });
 
@@ -97,6 +116,16 @@ test('closing ends as the button\'s capsule and is gone 0.3 s after it gets ther
   assert.ok(t < 1, `took ${t}s`);
   assert.equal(frame.glassOpacity, 0);
   assert.ok(t - capsuleAt <= 0.31 && t - capsuleAt >= 0.25, `${t - capsuleAt}s on the button`);
+});
+
+test('closing, the drop widens into the capsule while it is still rising', () => {
+  const motion = new MenuMorphMotion(false, BUTTON, MENU, RADIUS);
+  let widening = null;
+  run(motion, (f, t) => {
+    if (widening === null && t > 0.25 && f.body[2] > BUTTON[3] * 1.15 + 2) widening = f;
+  });
+  const below = centre(widening.body)[1] - centre(BUTTON)[1];
+  assert.ok(below > 10, `starts widening ${below}px below the button`);
 });
 
 test('reversing midway carries on from where the glass is', () => {

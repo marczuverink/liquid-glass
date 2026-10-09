@@ -927,11 +927,20 @@
       <default>1.0</default>
       <summary>Width of the glass clock's digits, relative to their height</summary>
     </key>
+    <key name="glass-clock-tall-style" type="s">
+      <choices>
+        <choice value="even"/>
+        <choice value="upright"/>
+      </choices>
+      <default>"even"</default>
+      <summary>How the glass clock's digits are made taller</summary>
+      <description>"even": the digits grow evenly, every stroke keeping its width. "upright": mostly their straight upright strokes grow, while curves, bars and the colon's dots keep their shape; the parts above and below a join in the middle grow alike.</description>
+    </key>
     <key name="glass-clock-height" type="d">
       <range min="1.0" max="3.0"/>
       <default>1.0</default>
       <summary>Height of the glass clock's digits, relative to the font</summary>
-      <description>Above 1 the digits are made taller evenly, while every stroke keeps its width and the colon's dots keep their shape.</description>
+      <description>Above 1 the digits are made taller as glass-clock-tall-style says, every stroke keeping its width.</description>
     </key>
     <key name="glass-clock-format" type="s">
       <default>"system"</default>

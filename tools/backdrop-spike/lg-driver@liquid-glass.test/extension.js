@@ -1414,11 +1414,24 @@ export default class LgDriver extends Extension {
         const f = step.call(this, elapsed);
         const r = n => n.map(v => v.toFixed(1)).join(',');
         log(`trace t=${((GLib.get_monotonic_time() - t0) / 1000).toFixed(0)} opening=${this.opening} ` +
-          `body=${r(f.body)} radius=${f.bodyRadius.toFixed(1)} button=${r(f.button)} ` +
+          `body=${r(f.body)} radius=${f.bodyRadius.toFixed(1)} ` +
           `content=${f.contentScale.toFixed(2)}/${f.contentOpacity.toFixed(2)} lens=${f.lens.toFixed(2)} ` +
           `glass=${f.glassOpacity.toFixed(2)}`);
         return f;
       };
+      const retarget = MenuMorphMotion.prototype.retarget;
+      MenuMorphMotion.prototype.retarget = function (button, menu, radius) {
+        const key = menu ? menu.map(v => v.toFixed(1)).join(',') : 'null';
+        if (key !== this._drvMenuKey) {
+          log(`trace t=${((GLib.get_monotonic_time() - t0) / 1000).toFixed(0)} menu=${key}`);
+          this._drvMenuKey = key;
+        }
+        return retarget.call(this, button, menu, radius);
+      };
+      // $LG_DRV_TRACE_NOTIFY: a few notifications in the calendar's list first.
+      for (let i = 0; i < Number(GLib.getenv('LG_DRV_TRACE_NOTIFY') ?? 0); i++)
+        Main.notify(`Driver ${i}`, 'A notification for the calendar menu');
+      await sleep(1500);
       const dateMenu = Main.panel.statusArea.dateMenu.menu;
       const clock = Main.panel.statusArea.dateMenu._clockDisplay;
       log(`trace clock label at ${clock.get_transformed_position().map(Math.round)} size ${clock.get_transformed_size().map(Math.round)}`);
@@ -1427,6 +1440,7 @@ export default class LgDriver extends Extension {
       dateMenu.close(true);
       await sleep(1500);
       MenuMorphMotion.prototype.step = step;
+      MenuMorphMotion.prototype.retarget = retarget;
     }
     if (parts.includes('qssub')) {
       // A Quick Settings submenu stays centred under the panel when the shell
@@ -1529,6 +1543,53 @@ export default class LgDriver extends Extension {
       settings.set_boolean('enable-desktop-widgets', false);
       Gio.bus_unown_name(owner);
       player.unexport();
+      await sleep(500);
+    }
+    if (parts.includes('clocktick')) {
+      // How long the main loop stalls when the clock's minute changes, once
+      // its digits are drawn ($LG_DRV_CLOCK_SIZE, $LG_DRV_CLOCK_HEIGHT, $LG_DRV_CLOCK_FONT).
+      settings.set_boolean('output-logs', true);
+      settings.set_int('glass-clock-size', Number(GLib.getenv('LG_DRV_CLOCK_SIZE') ?? 240));
+      settings.set_double('glass-clock-height', Number(GLib.getenv('LG_DRV_CLOCK_HEIGHT') ?? 1));
+      settings.set_double('glass-clock-stretch', Number(GLib.getenv('LG_DRV_CLOCK_STRETCH') ?? 1));
+      settings.set_string('glass-clock-tall-style', GLib.getenv('LG_DRV_CLOCK_STYLE') ?? 'even');
+      const font = GLib.getenv('LG_DRV_CLOCK_FONT');
+      if (font !== null) settings.set_string('glass-clock-font', font);
+      const {GlassClock} = await this._lgModule('desktop/clock.js');
+      let text = '10:00';
+      let clock = null;
+      const timeText = GlassClock.prototype._timeText;
+      const tick = GlassClock.prototype._tick;
+      GlassClock.prototype._timeText = () => text;
+      GlassClock.prototype._tick = function () {
+        clock = this;
+        return tick.call(this);
+      };
+      settings.set_boolean('enable-glass-clock', true);
+      // Every digit drawn once, as a clock that has run for a while has them.
+      for (const t of ['01:23', '45:67', '89:00']) {
+        text = t;
+        clock?._tick();
+        await sleep(6000);
+      }
+      for (const t of ['10:01', '10:02', '17:38', '23:59']) {
+        let last = GLib.get_monotonic_time(), worst = 0;
+        const probe = GLib.timeout_add(GLib.PRIORITY_HIGH, 2, () => {
+          const now = GLib.get_monotonic_time();
+          worst = Math.max(worst, now - last);
+          last = now;
+          return GLib.SOURCE_CONTINUE;
+        });
+        text = t;
+        const start = GLib.get_monotonic_time();
+        clock?._tick();
+        await sleep(3000);
+        GLib.Source.remove(probe);
+        log(`clocktick: ${t} longest stall ${(worst / 1000).toFixed(0)} ms (from ${((GLib.get_monotonic_time() - start) / 1000).toFixed(0)} ms)`);
+      }
+      GlassClock.prototype._timeText = timeText;
+      GlassClock.prototype._tick = tick;
+      settings.set_boolean('enable-glass-clock', false);
       await sleep(500);
     }
     if (parts.includes('clockshot')) {

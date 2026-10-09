@@ -258,17 +258,31 @@ function boxBlur(src: Float32Array, dst: Float32Array, w: number, h: number, r: 
   }
 }
 
+// The passes of a blur of about a Gaussian of `sigma` px over `a` (`w` x
+// `h`), which holds the result after the last; `b` is room for the passes.
+function blurPasses(a: Float32Array, b: Float32Array, w: number, h: number, sigma: number): (() => void)[] {
+  if (sigma <= 0.3) return [];
+  return boxRadii(sigma).filter(r => r >= 1).flatMap(r => [
+    () => boxBlur(a, b, w, h, r, true),
+    () => boxBlur(b, a, w, h, r, false),
+  ]);
+}
+
 /** `field` blurred by about a Gaussian of `sigma` px. */
 export function softened(field: DistanceField, sigma: number): DistanceField {
   const { width: w, height: h } = field;
   const a = Float32Array.from(field.data);
-  const b = new Float32Array(w * h);
-  if (sigma > 0.3) {
-    for (const r of boxRadii(sigma)) {
-      if (r < 1) continue;
-      boxBlur(a, b, w, h, r, true);
-      boxBlur(b, a, w, h, r, false);
-    }
+  for (const pass of blurPasses(a, new Float32Array(w * h), w, h, sigma)) pass();
+  return { data: a, width: w, height: h };
+}
+
+/** softened(), awaiting `pause` before each pass. */
+export async function softenedInSteps(field: DistanceField, sigma: number, pause: () => Promise<void>): Promise<DistanceField> {
+  const { width: w, height: h } = field;
+  const a = Float32Array.from(field.data);
+  for (const pass of blurPasses(a, new Float32Array(w * h), w, h, sigma)) {
+    await pause();
+    pass();
   }
   return { data: a, width: w, height: h };
 }
@@ -509,12 +523,13 @@ function sharpenCorners(loop: number[], limit: number): number[] {
 
 /**
  * `loop` (ink on its left) with every piece moved into the ink by
- * `move(nx, ny)` px, its normal into the ink being (nx, ny): the corners
+ * `move(nx, ny, x, y)` px, its normal into the ink being (nx, ny) and its
+ * middle (x, y): the corners
  * where the moved pieces' lines cross. A piece the move turns round (a curve
  * or a corner tighter than the move) is dropped, and its neighbours meet
  * instead. Empty when nothing is left.
  */
-export function moveOutline(loop: number[], move: (nx: number, ny: number) => number): number[] {
+export function moveOutline(loop: number[], move: (nx: number, ny: number, x: number, y: number) => number): number[] {
   const n = loop.length / 2;
   const nx = new Float64Array(n), ny = new Float64Array(n), shift = new Float64Array(n), along = new Float64Array(n);
   for (let k = 0; k < n; k++) {
@@ -524,7 +539,7 @@ export function moveOutline(loop: number[], move: (nx: number, ny: number) => nu
     nx[k] = dy / len;
     ny[k] = -dx / len;
     // The moved line: the points p with p . normal = along.
-    shift[k] = move(nx[k], ny[k]);
+    shift[k] = move(nx[k], ny[k], (loop[2 * k] + loop[2 * j]) / 2, (loop[2 * k + 1] + loop[2 * j + 1]) / 2);
     along[k] = loop[2 * k] * nx[k] + loop[2 * k + 1] * ny[k] + shift[k];
   }
   const prev = Array.from({ length: n }, (_, k) => (k + n - 1) % n);
@@ -640,18 +655,361 @@ export function fillOutlines(loops: number[][], w: number, h: number): Uint8Arra
 }
 
 /**
- * Coverage `alpha` (`w` x `h`) of a glyph drawn `stretch` times as tall,
- * with each stroke pulled back to the thickness a pen `pen` px across
- * (upright strokes) and tall (flat strokes) draws it at that angle.
+ * How many times as tall a glyph was drawn across a stroke: from height y
+ * (where it was drawn) into the ink along a normal whose downward part is
+ * ny, over `depth` px of the glyph as it was.
  */
+export type StrokeStretch = (y: number, ny: number, depth: number) => number;
+
+/**
+ * The outlines `loops` of a glyph drawn taller by `stretch`, each stroke
+ * pulled back to the thickness a pen `pen` px across (upright strokes) and
+ * tall (flat strokes) draws it at that angle.
+ */
+export function restroke(loops: number[][], pen: [number, number], stretch: StrokeStretch): number[][] {
+  const [across, tall] = pen;
+  const move = (nx: number, ny: number, _x: number, y: number) => {
+    const width = Math.hypot(across * nx, tall * ny);
+    return (Math.hypot(across * nx, stretch(y, ny, width) * tall * ny) - width) / 2;
+  };
+  const corner = CORNER_SIZE * Math.min(across, tall);
+  return loops.map(loop => moveOutline(sharpenCorners(simplify(loop, TRACE_TOLERANCE), corner), move))
+    .filter(loop => loop.length);
+}
+
+/** Coverage `alpha` (`w` x `h`) of a glyph drawn `stretch` times as tall, its strokes as thick as `pen` draws them. */
 export function keepStrokeWidths(alpha: Uint8Array, w: number, h: number, pen: [number, number],
   stretch: number): Uint8Array {
-  const [across, tall] = pen;
-  const move = (nx: number, ny: number) =>
-    (Math.hypot(across * nx, stretch * tall * ny) - Math.hypot(across * nx, tall * ny)) / 2;
-  const corner = CORNER_SIZE * Math.min(across, tall);
-  const loops = traceOutlines(alpha, w, h).map(loop => moveOutline(sharpenCorners(simplify(loop, TRACE_TOLERANCE), corner), move));
-  return fillOutlines(loops, w, h);
+  return fillOutlines(restroke(traceOutlines(alpha, w, h), pen, () => stretch), w, h);
+}
+
+// Taller along the upright strokes
+//
+// The other way to grow a glyph taller spaces its rows further apart, more in
+// some rows than in others. Each row has a cost for growing (an edge that
+// bends or lies flat through it would be drawn out of shape) and takes in
+// inverse to it; neighbouring rows that an edge slants or curves through are
+// tied to grow alike, or the edge would bend there. So upright straight
+// strokes take the height, curves and slanted strokes grow evenly, and a
+// glyph with nothing upright grows evenly all over. The glyph's upper and
+// lower parts, where it has a join or a bar in its middle third (a 3, a 5, an
+// 8), grow by the same factor. The outline is then spaced out with its rows
+// and its strokes given back their width (see restroke()).
+
+// How fast a row's cost rises as the outline bends through it: at this much
+// change of an edge's slope (horizontal px per row) between half a stroke
+// above and half a stroke below, it costs twice what a straight row does.
+const BEND_HALF = 0.12;
+// Edges flatter than this many px across per row change their angle visibly
+// when their rows spread out; past it the row costs more, twice as much at
+// FLAT_START + FLAT_HALF.
+const FLAT_START = 1.5;
+const FLAT_HALF = 1;
+// A row whose longest stroke is this many times the glyph's usual stroke runs
+// along a horizontal one (a bar, the top of a bowl), whose thickness is kept;
+// fully past BAR_START + BAR_SPAN.
+const BAR_START = 1.4;
+const BAR_SPAN = 0.3;
+// No row costs more than BEND_COST_MAX for bending, so the sharpest rows of a
+// curve do not stand out from the rest. Rows within half a stroke of where an
+// edge starts or ends cost END_COST more: the pixels there move with
+// different strokes' middles, and the end of a stroke, or where strokes meet,
+// keeps its shape only if its rows do not grow. Rows that must not grow at
+// all cost HOLD: those along a bar, and those where an edge is there for that
+// row only or nothing is covered past half (the tip of a curve).
+const BEND_COST_MAX = 30;
+const HOLD = 1e4;
+const END_COST = 1000;
+// Neighbouring rows an edge slants through by this many px per row, or
+// bends through by this much (as BEND_HALF measures it), may differ in growth
+// over about as many rows as the band has; the reach grows with the squares,
+// so straight upright edges barely tie their rows, and slanted or curved ones
+// make them grow as one.
+const SLOPE_TIE = 0.03;
+const BEND_TIE = 0.03;
+// The Gaussian the rows' shares are smoothed by, in strokes.
+const SHARE_SMOOTHING = 0.5;
+
+
+// Where the outline crosses row y of coverage `alpha` (`w` wide): x to a
+// fraction of a pixel, positive where the row enters the glyph and negative
+// where it leaves (the sign is the direction, the magnitude x + 1).
+function rowEdges(alpha: Uint8Array, w: number, y: number): number[] {
+  const edges: number[] = [];
+  let prev = 0;
+  for (let x = 0; x <= w; x++) {
+    const a = x < w ? alpha[y * w + x] : 0;
+    if ((prev < 128) !== (a < 128)) {
+      const at = x - 1 + (127.5 - prev) / (a - prev);
+      edges.push(a >= 128 ? at + 1 : -(at + 1));
+    }
+    prev = a;
+  }
+  return edges;
+}
+
+// The rows of a band, top to bottom: their edges (see rowEdges()), and the
+// slope (px across per row) and bend of each edge there, NaN for an edge
+// that is there for that row only.
+interface BandRows {
+  edges: number[][];
+  slopes: number[][];
+  bends: number[][];
+  // How many rows each edge has before it starts or after it ends, whichever
+  // is fewer.
+  ends: number[][];
+  // Which edges go on into the next row, as the index of the edge they
+  // become there (or -1).
+  next: number[][];
+  longest: Float64Array;
+  // Whether anything is drawn in the row at all.
+  inked: boolean[];
+  stroke: number;
+}
+
+// The usual width of the strokes: the median of the rows' longest runs.
+function medianStroke(longest: Float64Array): number {
+  const stroked = Array.from(longest).filter(v => v > 0).sort((a, b) => a - b);
+  return stroked.length ? stroked[stroked.length >> 1] : 1;
+}
+
+// Follows each edge from row to row, nearest matches first, so strokes that
+// start or end beside it do not break it.
+function bandRows(alpha: Uint8Array, w: number, top: number, bottom: number): BandRows {
+  const n = bottom - top;
+  const edges: number[][] = [];
+  const longest = new Float64Array(n + 1);
+  const inked: boolean[] = [];
+  for (let r = 0; r <= n; r++) {
+    edges.push(rowEdges(alpha, w, top + r));
+    let run = 0, ink = false;
+    for (let x = 0, i = (top + r) * w; x < w; x++, i++) {
+      run = alpha[i] >= 128 ? run + 1 : 0;
+      longest[r] = Math.max(longest[r], run);
+      ink ||= alpha[i] > 0;
+    }
+    inked.push(ink);
+  }
+  const stroke = medianStroke(longest);
+  const reach = Math.max(Math.round(stroke / 2), 1);
+
+  const next: number[][] = edges.map(row => row.map(() => -1));
+  const chains: { start: number, xs: number[] }[] = [];
+  const chainOf: number[][] = [];
+  for (let r = 0; r <= n; r++) {
+    const ids = edges[r].map(() => -1);
+    if (r > 0) {
+      const pairs: [number, number, number][] = [];
+      edges[r - 1].forEach((a, i) => edges[r].forEach((b, j) => {
+        const d = Math.abs(Math.abs(a) - Math.abs(b));
+        if (Math.sign(a) === Math.sign(b) && d <= reach) pairs.push([d, i, j]);
+      }));
+      pairs.sort((p, q) => p[0] - q[0]);
+      for (const [, i, j] of pairs) {
+        if (next[r - 1][i] >= 0 || ids[j] >= 0) continue;
+        next[r - 1][i] = j;
+        ids[j] = chainOf[r - 1][i];
+        chains[ids[j]].xs.push(Math.abs(edges[r][j]));
+      }
+    }
+    edges[r].forEach((e, j) => {
+      if (ids[j] >= 0) return;
+      ids[j] = chains.length;
+      chains.push({ start: r, xs: [Math.abs(e)] });
+    });
+    chainOf.push(ids);
+  }
+
+  const slopes = edges.map(row => row.map(() => NaN));
+  const bends = edges.map(row => row.map(() => 0));
+  const ends = edges.map(row => row.map(() => 0));
+  for (let r = 0; r <= n; r++) {
+    chainOf[r].forEach((c, j) => {
+      const { start, xs } = chains[c];
+      const i = r - start;
+      ends[r][j] = Math.min(i, xs.length - 1 - i);
+      if (xs.length < 2) return;
+      const a = Math.max(i - reach, 0), b = Math.min(i + reach, xs.length - 1);
+      const up = i > a ? (xs[i] - xs[a]) / (i - a) : null;
+      const down = b > i ? (xs[b] - xs[i]) / (b - i) : null;
+      slopes[r][j] = (xs[b] - xs[a]) / (b - a);
+      if (up !== null && down !== null) bends[r][j] = Math.abs(down - up);
+    });
+  }
+  return { edges, slopes, bends, ends, next, longest, inked, stroke };
+}
+
+// Solves the tridiagonal system with `diag` on the diagonal, -off[i] between
+// i and i + 1, and `rhs` on the right.
+function solveTridiagonal(diag: Float64Array, off: Float64Array, rhs: Float64Array): Float64Array {
+  const n = diag.length;
+  const c = new Float64Array(n);
+  const d = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const below = i > 0 ? off[i - 1] : 0;
+    const m = diag[i] + (i > 0 ? below * c[i - 1] : 0);
+    c[i] = i < n - 1 ? -off[i] / m : 0;
+    d[i] = (rhs[i] + (i > 0 ? below * d[i - 1] : 0)) / m;
+  }
+  for (let i = n - 2; i >= 0; i--) d[i] -= c[i] * d[i + 1];
+  return d;
+}
+
+function bandShares(rows: BandRows): Float64Array {
+  const n = rows.edges.length - 1;
+  // The room above and below the glyph grows as the band does, so the glyph
+  // stays where it was in it; the rest of the height goes to the rows between.
+  let first = 0, last = n - 1;
+  while (first < n && !rows.inked[first]) first++;
+  while (last >= first && !rows.inked[last]) last--;
+  const shares = new Float64Array(n).fill(1 / n);
+  const m = last - first + 1;
+  if (m <= 0) return shares;
+
+  const cost = new Float64Array(m);
+  const along = new Float64Array(m);
+  for (let r = first; r <= last; r++) {
+    let bend = 0, flat = 0, end = false;
+    // Drawn but never covered past half: the tip of a curve.
+    let lone = rows.inked[r] && rows.edges[r].length === 0;
+    rows.edges[r].forEach((_e, j) => {
+      if (rows.ends[r][j] < rows.stroke / 2) end = true;
+      const slope = rows.slopes[r][j];
+      if (Number.isNaN(slope)) lone = true;
+      else flat = Math.max(flat, Math.abs(slope));
+      bend = Math.max(bend, rows.bends[r][j]);
+    });
+    const b = bend / BEND_HALF;
+    const f = Math.max(flat - FLAT_START, 0) / FLAT_HALF;
+    const bar = Math.min(Math.max(rows.longest[r] / rows.stroke - BAR_START, 0) / BAR_SPAN, 1);
+    along[r - first] = bar;
+    const bending = Math.min((1 + b * b) * (1 + f * f), BEND_COST_MAX) + (end ? END_COST : 0);
+    cost[r - first] = bending + HOLD * (bar * bar + (lone ? 1 : 0));
+  }
+  // Ties between rows r and r + 1, through the edges that run on.
+  const tie = new Float64Array(m);
+  for (let r = first; r < last; r++) {
+    let pull = 0;
+    rows.next[r].forEach((j, i) => {
+      if (j < 0) return;
+      const a = rows.slopes[r][i], b = rows.slopes[r + 1][j];
+      if (Number.isNaN(a) || Number.isNaN(b)) return;
+      const slope = Math.abs(a + b) / 2, bend = (rows.bends[r][i] + rows.bends[r + 1][j]) / 2;
+      pull = Math.max(pull, (slope / SLOPE_TIE) ** 2 + (bend / BEND_TIE) ** 2);
+    });
+    // Not into a bar, which keeps its thickness however the edges that
+    // run into it grow.
+    const reach = n * pull * (1 - along[r - first]) * (1 - along[r + 1 - first]);
+    tie[r - first] = reach * reach;
+  }
+  // Each row takes in inverse to its cost, then the ties even that out:
+  // minimising sum((k - 1 / cost)^2) + sum(tie * (k[r + 1] - k[r])^2), so
+  // rows tied together take the mean of what they would alone.
+  const diag = new Float64Array(m);
+  for (let i = 0; i < m; i++) diag[i] = 1 + (i > 0 ? tie[i - 1] : 0) + tie[i];
+  const k = solveTridiagonal(diag, tie, cost.map(c => 1 / c));
+  // The parts above and below the row in the middle third that resists
+  // growing most each take the height in proportion to their own, when that
+  // row is a join or a bar; otherwise one part would be drawn out more than
+  // the other.
+  let split = Math.floor(m / 3);
+  for (let i = split; i < Math.ceil(m * 2 / 3); i++) if (cost[i] > cost[split]) split = i;
+  const parts = cost[split] >= END_COST && split > 0 ? [[0, split], [split, m]] : [[0, m]];
+  for (const [from, to] of parts) {
+    let total = 0;
+    for (let i = from; i < to; i++) total += k[i];
+    for (let i = from; i < to; i++) shares[first + i] = total > 0 ? k[i] / total * (to - from) / n : 1 / n;
+  }
+  // Where the share changes from row to row, a curve through those rows
+  // would bend there; spread over SHARE_SMOOTHING strokes, it bends
+  // gradually. The strokes get their width back afterwards (restroke()).
+  const smooth = new Float64Array(n);
+  const sigma = SHARE_SMOOTHING * rows.stroke;
+  const reach = Math.ceil(sigma * 3);
+  for (let i = 0; i < n; i++) {
+    let sum = 0, weight = 0;
+    for (let j = Math.max(i - reach, 0); j <= Math.min(i + reach, n - 1); j++) {
+      const w = Math.exp(-((j - i) ** 2) / (2 * sigma * sigma));
+      sum += shares[j] * w;
+      weight += w;
+    }
+    smooth[i] = sum / weight;
+  }
+  const total = smooth.reduce((a, b) => a + b, 0);
+  return smooth.map(v => v / total);
+}
+
+/**
+ * How much of a glyph's added height each row of coverage `alpha` (0-255,
+ * `w` wide) takes, rows `top` to `bottom` (see the top of this section). The
+ * shares add up to 1.
+ */
+export function rowShares(alpha: Uint8Array, w: number, top: number, bottom: number): Float64Array {
+  return bandShares(bandRows(alpha, w, top, bottom));
+}
+
+/**
+ * Where each row boundary of a glyph `h` rows tall lands when rows `top` to
+ * `bottom` take `extra` more by `shares`: the rows above stay, the rows below
+ * move down by all of it.
+ */
+export function rowLandings(h: number, top: number, shares: Float64Array, extra: number): Float64Array {
+  const lands = new Float64Array(h + 1);
+  for (let y = 0; y <= h; y++) {
+    const r = y - top;
+    lands[y] = y + (r <= 0 ? 0 : r >= shares.length ? extra : lands[y - 1] - (y - 1) + shares[r - 1] * extra);
+  }
+  return lands;
+}
+
+/**
+ * The outlines `loops` of a glyph with its rows landed at `lands` (see
+ * rowLandings()), and how many times as tall the glyph is drawn around each
+ * height it lands at.
+ */
+export function spaceRows(loops: number[][], lands: Float64Array): { loops: number[][], stretch: StrokeStretch } {
+  const h = lands.length - 1;
+  const land = (y: number) => {
+    if (y <= 0) return y;
+    if (y >= h) return y - h + lands[h];
+    const i = Math.floor(y);
+    return lands[i] + (y - i) * (lands[i + 1] - lands[i]);
+  };
+  // Where a landed height was.
+  const before = (y: number) => {
+    if (y <= lands[0]) return y;
+    if (y >= lands[h]) return y - lands[h] + h;
+    let lo = 0, hi = h;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (lands[mid] <= y) lo = mid;
+      else hi = mid;
+    }
+    return lo + (y - lands[lo]) / Math.max(lands[lo + 1] - lands[lo], 1e-9);
+  };
+  // Averaged over the stroke's thickness, which may span rows that grow by
+  // very different amounts.
+  const stretch = (y: number, ny: number, depth: number) => {
+    const from = before(y);
+    const down = ny * depth;
+    if (Math.abs(down) < 0.5) return land(from + 0.5) - land(from - 0.5);
+    return (land(from + down) - land(from)) / down;
+  };
+  return { loops: loops.map(loop => loop.map((v, i) => i % 2 ? land(v) : v)), stretch };
+}
+
+/**
+ * Coverage `alpha` (`w` x `h`) made `extra` rows taller between rows `top`
+ * and `bottom` by rowShares(), its strokes as thick as `pen` draws them;
+ * `h + extra` rows.
+ */
+export function growUpright(alpha: Uint8Array, w: number, h: number, top: number, bottom: number, extra: number,
+  pen: [number, number]): Uint8Array {
+  top = Math.min(Math.max(Math.round(top), 0), h - 1);
+  bottom = Math.min(Math.max(Math.round(bottom), top + 1), h - 1);
+  const lands = rowLandings(h, top, rowShares(alpha, w, top, bottom), extra);
+  const { loops, stretch } = spaceRows(traceOutlines(alpha, w, h), lands);
+  return fillOutlines(restroke(loops, pen, stretch), w, h + extra);
 }
 
 // Averages `factor` x `factor` blocks and scales the distances to match.
@@ -790,23 +1148,34 @@ export function fileFace(font: TrueTypeFont, size: number): TextFace {
   };
 }
 
-// How glyphs are made taller: y is drawn at centre + scale * (y - centre),
-// and the strokes are given back the thickness the pen draws them with,
-// [across, tall] (see keepStrokeWidths()).
-interface Tallness {
-  scale: number;
-  centre: number;
-  pen: [number, number];
-}
+/** How the clock's digits are made taller: evenly, or along their upright strokes. */
+export type TallStyle = 'even' | 'upright';
+
+// How glyphs are made taller, in px at the size they are drawn at: evenly,
+// y drawn at centre + scale * (y - centre), or along their upright strokes,
+// rows top to bottom made extra px taller (see growUpright()). Either way
+// the strokes are given back the thickness the pen draws them with,
+// [across, tall] (see restroke()).
+type Tallness = { even: true, scale: number, centre: number, pen: [number, number] } |
+  { even: false, top: number, bottom: number, extra: number, pen: [number, number] };
 
 function tallY(tall: Tallness | null, y: number): number {
-  return tall ? tall.centre + tall.scale * (y - tall.centre) : y;
+  if (!tall) return y;
+  if (tall.even) return tall.centre + tall.scale * (y - tall.centre);
+  return y <= tall.top ? y : y >= tall.bottom ? y + tall.extra : y + tall.extra * (y - tall.top) / (tall.bottom - tall.top);
+}
+
+// `tall` at `k` times the size.
+function scaledTall(tall: Tallness, k: number, pen: [number, number]): Tallness {
+  const scaledPen = pen.map(v => v * k) as [number, number];
+  return tall.even ? { ...tall, centre: tall.centre * k, pen: scaledPen }
+    : { ...tall, top: tall.top * k, bottom: tall.bottom * k, extra: tall.extra * k, pen: scaledPen };
 }
 
 // Draws `text` at `scale` times the size, stretched `stretch` times as wide
-// and made taller by `tall` (in px at that scale), into a temporary PNG and
-// reads its coverage back, with `margin` px of room around it. The coverage
-// is in whole blocks of SUPERSAMPLE.
+// and, made evenly taller by `tall` (in px at that scale), into a temporary
+// PNG and reads its coverage back, with `margin` px of room around it. The
+// coverage is in whole blocks of SUPERSAMPLE.
 async function rasterize(face: TextFace, text: string, scale: number, stretch: number, tall: Tallness | null,
   margin: number, cancellable: Gio.Cancellable): Promise<{ alpha: Uint8Array, width: number, height: number, originX: number, originY: number }> {
   const b = face.bounds(text, scale);
@@ -824,7 +1193,7 @@ async function rasterize(face: TextFace, text: string, scale: number, stretch: n
   const cr = new Cairo.Context(surface);
   cr.setSourceRGBA(1, 1, 1, 1);
   cr.translate(-ax, -ay);
-  if (tall) {
+  if (tall?.even) {
     cr.translate(0, tall.centre);
     cr.scale(stretch, tall.scale);
     cr.translate(0, -tall.centre);
@@ -850,8 +1219,7 @@ async function rasterize(face: TextFace, text: string, scale: number, stretch: n
       });
     });
     const { alpha, width: w, height: h } = decodePngAlpha(bytes);
-    return { alpha: tall ? keepStrokeWidths(alpha, w, h, tall.pen, tall.scale) : alpha, width: w, height: h,
-      originX: -ax, originY: -ay };
+    return { alpha, width: w, height: h, originX: -ax, originY: -ay };
   } finally {
     file.delete_async(GLib.PRIORITY_DEFAULT, null, (_f, res) => {
       // Throws a GError when the file is already gone; nothing is left behind then.
@@ -868,8 +1236,9 @@ const MEASURE_HEIGHT = 240;
 
 /**
  * Distance fields of single glyphs of `face`, stretched `stretch` times as
- * wide and made `height` times as tall (see keepStrokeWidths()), built on
- * first use. `range` is how far (px) from the outline the fields reach.
+ * wide and made `height` times as tall in `style`, built on first use.
+ * `range` is how far (px) from the outline the fields reach. The work is
+ * done in steps between which the main loop runs (see pause()).
  */
 export class GlyphFields {
   private _glyphs = new Map<string, Promise<GlyphField>>();
@@ -879,24 +1248,48 @@ export class GlyphFields {
   readonly digitHeight: number;
   private _band: [number, number];
   private _tall: Promise<Tallness | null> | null = null;
+  private _pauses = new Set<number>();
 
-  constructor(private _face: TextFace, readonly range: number, readonly stretch = 1, readonly height = 1) {
+  constructor(private _face: TextFace, readonly range: number, readonly stretch = 1, readonly height = 1,
+    readonly style: TallStyle = 'even') {
     this._band = _face.digitBand();
     this.digitHeight = Math.max(this._band[1] - this._band[0], 1);
+    this.cancellable.connect(() => {
+      for (const id of this._pauses) GLib.Source.remove(id);
+      this._pauses.clear();
+    });
   }
 
-  // How the glyphs are made taller, in px at the font's size. Each end of
-  // the digits loses half of what the stretch added to a flat stroke, so
-  // they are stretched that much more, about the middle of their top stroke:
-  // their outline then spans `height` times the digits' height from the top.
+  /**
+   * Lets the main loop draw and take input before the next step of work.
+   * Never resolves once the fields are no longer wanted.
+   */
+  pause(): Promise<void> {
+    return new Promise(resolve => {
+      const id = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+        this._pauses.delete(id);
+        resolve();
+        return GLib.SOURCE_REMOVE;
+      });
+      this._pauses.add(id);
+    });
+  }
+
+  // How the glyphs are made taller, in px at the font's size. Evenly, each
+  // end of the digits loses half of what the stretch added to a flat stroke,
+  // so they are stretched that much more, about the middle of their top
+  // stroke: their outline then spans `height` times the digits' height.
   private _tallness(): Promise<Tallness | null> {
     if (this._tall) return this._tall;
     if (this.height <= 1) return this._tall = Promise.resolve(null);
-    this._tall = (async () => {
-      const [across, tall] = await this._pen('0123456789');
+    this._tall = (async (): Promise<Tallness> => {
+      const pen = await this._pen('0123456789');
       const h = this.digitHeight;
-      const flat = Math.min(tall, h / 3);
-      return { scale: (this.height * h - flat) / (h - flat), centre: this._band[0] + flat / 2, pen: [across, tall] };
+      const [top, baseline] = this._band;
+      if (this.style === 'upright')
+        return { even: false, top, bottom: baseline, extra: Math.round((this.height - 1) * h), pen };
+      const flat = Math.min(pen[1], h / 3);
+      return { even: true, scale: (this.height * h - flat) / (h - flat), centre: top + flat / 2, pen };
     })();
     // Measured again next time when it failed.
     this._tall.catch(() => {
@@ -917,22 +1310,44 @@ export class GlyphFields {
   private _glyph(ch: string): Promise<GlyphField> {
     let glyph = this._glyphs.get(ch);
     if (!glyph) {
-      glyph = this._tallness().then(async t => {
-        // The colon's dots keep their own shape, whatever the digits' strokes are.
-        const pen = t && ch === ':' ? await this._pen(ch, true) : t?.pen;
-        const tall = t && { scale: t.scale, centre: t.centre * SUPERSAMPLE,
-          pen: pen!.map(v => v * SUPERSAMPLE) as [number, number] };
-        const big = await rasterize(this._face, ch, SUPERSAMPLE, this.stretch, tall, this.range * SUPERSAMPLE,
-          this.cancellable);
-        const field = downsample({ data: signedDistances(big.alpha, big.width, big.height),
-          width: big.width, height: big.height }, SUPERSAMPLE);
-        return { ...field, originX: big.originX / SUPERSAMPLE, originY: big.originY / SUPERSAMPLE };
-      });
+      glyph = this._buildGlyph(ch);
       // A failed glyph is tried again next time.
       glyph.catch(() => this._glyphs.delete(ch));
       this._glyphs.set(ch, glyph);
     }
     return glyph;
+  }
+
+  private async _buildGlyph(ch: string): Promise<GlyphField> {
+    const t = await this._tallness();
+    // The colon's dots keep their own shape, whatever the digits' strokes are.
+    const tall = t && scaledTall(t, SUPERSAMPLE, ch === ':' ? await this._pen(ch, true) : t.pen);
+    const big = await rasterize(this._face, ch, SUPERSAMPLE, this.stretch, tall?.even ? tall : null,
+      this.range * SUPERSAMPLE, this.cancellable);
+    const { width } = big;
+    let { alpha, height } = big;
+    if (tall) {
+      await this.pause();
+      let loops = traceOutlines(alpha, width, height);
+      let stretch: StrokeStretch = () => tall.even ? tall.scale : 1;
+      if (!tall.even) {
+        const top = Math.min(Math.max(Math.round(tall.top + big.originY), 0), height - 1);
+        const bottom = Math.min(Math.max(Math.round(tall.bottom + big.originY), top + 1), height - 1);
+        await this.pause();
+        const lands = rowLandings(height, top, rowShares(alpha, width, top, bottom), tall.extra);
+        ({ loops, stretch } = spaceRows(loops, lands));
+        height += tall.extra;
+      }
+      await this.pause();
+      loops = restroke(loops, tall.pen, stretch);
+      await this.pause();
+      alpha = fillOutlines(loops, width, height);
+    }
+    await this.pause();
+    const signed = signedDistances(alpha, width, height);
+    await this.pause();
+    const field = downsample({ data: signed, width, height }, SUPERSAMPLE);
+    return { ...field, originX: big.originX / SUPERSAMPLE, originY: big.originY / SUPERSAMPLE };
   }
 
   /**
@@ -958,9 +1373,10 @@ export class GlyphFields {
     const height = Math.ceil(tallY(tall, baseline) + (b.y1 - baseline)) + r - y0;
     const data = new Float32Array(width * height).fill(r);
 
-    Array.from(text).forEach((ch, index) => {
+    for (const [index, ch] of Array.from(text).entries()) {
       const glyph = glyphs.get(ch);
-      if (!glyph) return;
+      if (!glyph) continue;
+      await this.pause();
       const left = Math.round(offsets[index] * this.stretch - glyph.originX - x0);
       const top = Math.round(-glyph.originY - y0);
       for (let gy = 0; gy < glyph.height; gy++) {
@@ -974,7 +1390,7 @@ export class GlyphFields {
           if (v < data[i]) data[i] = v;
         }
       }
-    });
+    }
     return { data, width, height };
   }
 }
@@ -995,13 +1411,13 @@ export function maxDepth(field: DistanceField): number {
 export function fieldTexture(outline: DistanceField, lens: DistanceField, range: number): Cogl.Texture {
   const { width, height } = outline;
   const bytes = new Uint8Array(width * height * 8);
+  const scale = 65535 / (2 * range);
   const put = (data: Float32Array, offset: number) => {
-    for (let i = 0; i < width * height; i++) {
-      const t = Math.min(Math.max((data[i] + range) / (2 * range), 0), 1);
-      const v = Math.round(t * 65535);
-      const o = (offset + i) * 4;
-      bytes[o] = v >> 8;
-      bytes[o + 1] = v & 255;
+    for (let i = 0, o = offset * 4; i < width * height; i++, o += 4) {
+      const v = ((data[i] + range) * scale + 0.5) | 0;
+      const c = v < 0 ? 0 : v > 65535 ? 65535 : v;
+      bytes[o] = c >> 8;
+      bytes[o + 1] = c & 255;
       bytes[o + 3] = 255;
     }
   };

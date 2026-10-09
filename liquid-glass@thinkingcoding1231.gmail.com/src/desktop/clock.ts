@@ -11,7 +11,7 @@ import { AdaptiveTextColor } from '../adaptiveText.js';
 import { sanitizeColorPreference } from '../contrastSampler.js';
 import { connectClicks, type DesktopItem, type ItemEnv } from './desktopItem.js';
 import { bundledFontFile } from './bundledFonts.js';
-import { GlyphFields, type TextFace, fieldTexture, fileFace, maxDepth, pangoFace, softened } from './glassText.js';
+import { GlyphFields, type TallStyle, type TextFace, fieldTexture, fileFace, maxDepth, pangoFace, softenedInSteps } from './glassText.js';
 import { TrueTypeFont } from './trueType.js';
 
 // How far (px) the distance field reaches past the outline: room for the
@@ -30,6 +30,14 @@ const FONT_DELAY_MS = 300;
 const DATE_GAP = 6;
 
 const SIZE_KEYS = ['glass-clock-size', 'glass-clock-stretch', 'glass-clock-height'];
+
+// The glass of the digits for one time.
+interface Digits {
+  texture: ReturnType<typeof fieldTexture>;
+  band: number;
+  width: number;
+  height: number;
+}
 
 // The [min, max] the schema allows for a number key.
 function keyRange(settings: Gio.Settings, key: string): [number, number] {
@@ -53,6 +61,9 @@ export class GlassClock implements DesktopItem {
   private _glass: BackdropGlass;
   private _date: St.Label;
   private _glyphs: GlyphFields | null = null;
+  // The digits for the time shown and for the next minute, made ahead so the
+  // minute changes without the work.
+  private _prepared = new Map<string, Promise<Digits>>();
   private _text = '';
   private _fontKey = '';
   // The shipped fonts by file: read, being read (undefined), or unreadable (null).
@@ -85,7 +96,7 @@ export class GlassClock implements DesktopItem {
 
     this._adaptive = new AdaptiveTextColor(() => [this._date], () => [this._glass], env.logger, 'clock');
     const watch = (key: string, fn: () => void) => this._settingsIds.push(env.settings.connect(`changed::${key}`, fn));
-    for (const key of ['glass-clock-font', 'glass-clock-size', 'glass-clock-stretch', 'glass-clock-height'])
+    for (const key of ['glass-clock-font', 'glass-clock-size', 'glass-clock-stretch', 'glass-clock-height', 'glass-clock-tall-style'])
       watch(key, () => this._queueFont());
     watch('glass-clock-format', () => this._tick());
     watch('glass-clock-show-date', () => this._tick());
@@ -173,13 +184,15 @@ export class GlassClock implements DesktopItem {
     const size = s.get_int('glass-clock-size');
     const stretch = s.get_double('glass-clock-stretch');
     const height = s.get_double('glass-clock-height');
-    const key = `${font}|${size}|${stretch}|${height}`;
+    const style: TallStyle = s.get_string('glass-clock-tall-style') === 'upright' ? 'upright' : 'even';
+    const key = `${font}|${size}|${stretch}|${height}|${style}`;
     if (this._glyphs && key === this._fontKey) return;
     const face = this._face(font, size);
     if (!face) return;
     this._glyphs?.cancellable.cancel();
     this._fontKey = key;
-    this._glyphs = new GlyphFields(face, FIELD_RANGE, stretch, height);
+    this._glyphs = new GlyphFields(face, FIELD_RANGE, stretch, height, style);
+    this._prepared.clear();
     this._date.set_style(`font-size: ${Math.max(11, Math.round(size * 0.13))}px;`);
     this._text = '';
     this._tick();
@@ -241,18 +254,31 @@ export class GlassClock implements DesktopItem {
     });
   }
 
+  // The digits for `text`, made a step at a time (see GlyphFields.pause()).
+  private _digits(glyphs: GlyphFields, text: string): Promise<Digits> {
+    let digits = this._prepared.get(text);
+    if (!digits) {
+      digits = (async () => {
+        const field = await glyphs.fieldFor(text);
+        const band = Math.min(Math.max(maxDepth(field), 2), MAX_BAND);
+        const lens = await softenedInSteps(field, band * LENS_SOFTNESS, () => glyphs.pause());
+        await glyphs.pause();
+        return { texture: fieldTexture(field, lens, FIELD_RANGE), band, width: field.width, height: field.height };
+      })();
+      digits.catch(() => this._prepared.delete(text));
+      this._prepared.set(text, digits);
+    }
+    return digits;
+  }
+
   private async _setText(text: string): Promise<void> {
     const glyphs = this._glyphs;
     if (text === this._text || !glyphs) return;
     this._text = text;
-    let field;
-    let texture;
-    let band;
+    let digits;
     try {
-      field = await glyphs.fieldFor(text);
+      digits = await this._digits(glyphs, text);
       if (glyphs !== this._glyphs || text !== this._text) return;
-      band = Math.min(Math.max(maxDepth(field), 2), MAX_BAND);
-      texture = fieldTexture(field, softened(field, band * LENS_SOFTNESS), FIELD_RANGE);
     } catch (e) {
       if (!(e instanceof GLib.Error && e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED)))
         this._env.logger.error(`[Liquid Glass] Could not draw the clock's digits: ${e}`);
@@ -260,13 +286,20 @@ export class GlassClock implements DesktopItem {
       if (text === this._text) this._text = '';
       return;
     }
-    this._fieldSize = [field.width, field.height];
-    this._glass.set_size(field.width, field.height);
-    this._glass.setResolution(field.width, field.height);
-    this._glass.setGlassGeometry(0, 0, field.width, field.height);
+    const { texture, band, width, height } = digits;
+    this._fieldSize = [width, height];
+    this._glass.set_size(width, height);
+    this._glass.setResolution(width, height);
+    this._glass.setGlassGeometry(0, 0, width, height);
     this._glass.setShapeTexture(texture, FIELD_RANGE, band);
     this._sizeChanged = true;
     this._adaptive.invalidate();
+
+    for (const key of [...this._prepared.keys()]) {
+      if (key !== text) this._prepared.delete(key);
+    }
+    // A failure shows when that minute comes and the digits are made again.
+    this._digits(glyphs, this._timeText(GLib.DateTime.new_now_local().add_minutes(1)!)).catch(() => {});
   }
 
   // The date above the digits; the field's margin is mostly empty, so the
@@ -327,6 +360,7 @@ export class GlassClock implements DesktopItem {
     this._adaptive.clear();
     this._glyphs?.cancellable.cancel();
     this._glyphs = null;
+    this._prepared.clear();
     this._fontCancellable.cancel();
     this._glass.cleanup();
     if (isActorValid(this.actor)) this.actor.destroy();

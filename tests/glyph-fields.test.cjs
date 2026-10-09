@@ -183,3 +183,70 @@ test('a ring drawn taller keeps its width all round, and a dot stays round', () 
   const tall = run(round, 60, 80, 30.5, 40, 0, 1, 40), wide = run(round, 60, 80, 30, 40.5, 1, 0, 30);
   assert.ok(Math.abs(tall - 14) < 0.8 && Math.abs(wide - 14) < 0.8, `${wide} x ${tall}`);
 });
+
+// Rows (from the top) where column x is covered at least half.
+function coveredRows(alpha, w, h, x) {
+  const rows = [];
+  for (let y = 0; y < h; y++) if (alpha[y * w + x] >= 128) rows.push(y);
+  return rows;
+}
+
+test('grown along its upright strokes, an I lengthens its stem and keeps its bars as thick', () => {
+  // Bars across rows 10-14 and 50-54, a stem in columns 20-29 between them.
+  const [w, h] = [50, 70];
+  const alpha = coverage(w, h, (x, y) => (y >= 9.5 && y < 54.5 && x >= 19.5 && x < 29.5) ||
+    (((y >= 9.5 && y < 14.5) || (y >= 49.5 && y < 54.5)) && x >= 9.5 && x < 39.5));
+  const tall = glyphs.growUpright(alpha, w, h, 10, 55, 20, [10, 5]);
+  const bar = coveredRows(tall, w, h + 20, 12);
+  assert.equal(bar.length, 10, String(bar));
+  assert.ok(bar[0] === 10 && bar[9] === 74, String(bar));
+  assert.equal(coveredRows(tall, w, h + 20, 25).length, 65);
+});
+
+test('the added height goes to the rows where the outline runs upright', () => {
+  // An O: the rows round its top and bottom curve, the middle ones run upright.
+  const [w, h] = [60, 60];
+  const alpha = coverage(w, h, (x, y) => {
+    const d = Math.hypot((x - 30) / 20, Math.max(Math.abs(y - 30) - 10, 0) / 20);
+    return d < 1 && Math.hypot((x - 30) / 10, Math.max(Math.abs(y - 30) - 10, 0) / 10) >= 1;
+  });
+  const shares = glyphs.rowShares(alpha, w, 10, 50);
+  const perRow = (a, b) => shares.slice(a, b).reduce((s, v) => s + v, 0) / (b - a);
+  const middle = perRow(15, 25), curves = (perRow(0, 8) + perRow(32, 40)) / 2;
+  assert.ok(middle > curves * 2, `middle ${middle.toFixed(4)} curves ${curves.toFixed(4)}`);
+  assert.ok(Math.abs(shares.reduce((a, b) => a + b, 0) - 1) < 1e-9);
+});
+
+test('grown along its upright strokes, a colon keeps its dots round', () => {
+  const [w, h] = [40, 100];
+  const alpha = coverage(w, h, (x, y) => Math.hypot(x - 20, y - 30) < 8 || Math.hypot(x - 20, y - 80) < 8);
+  const tall = glyphs.growUpright(alpha, w, h, 10, 95, 50, [16, 16]);
+  const rows = coveredRows(tall, w, h + 50, 20);
+  const runs = [];
+  rows.forEach((y, i) => (i === 0 || rows[i - 1] !== y - 1 ? runs.push([y]) : runs[runs.length - 1].push(y)));
+  assert.equal(runs.length, 2);
+  for (const run of runs) assert.ok(Math.abs(run.length - 16) <= 1, `a dot ${run.length} rows tall`);
+});
+
+test('the parts above and below the join in the middle of a 3 grow alike', () => {
+  // A 3 of two bowls (open on the left) on a join at row 48: the upper bowl
+  // 36 rows tall, the lower 46.
+  const [w, h] = [70, 110];
+  const bowl = (x, y, cy, ry) => {
+    const d = Math.hypot((x - 30) / 25, (y - cy) / ry), d2 = Math.hypot((x - 30) / 15, (y - cy) / (ry - 10));
+    return x > 22 && d < 1 && d2 >= 1;
+  };
+  const alpha = coverage(w, h, (x, y) => bowl(x, y, 30, 18) || bowl(x, y, 71, 23));
+  const top = 12, bottom = 94, extra = 82;
+  const tall = glyphs.growUpright(alpha, w, h, top, bottom, extra, [10, 10]);
+  // Where the join and the bottom land, on the bowls' right sides.
+  const rows = coveredRows(tall, w, h + extra, 30);
+  const runs = [];
+  rows.forEach((y, i) => (i === 0 || rows[i - 1] !== y - 1 ? runs.push([y]) : runs[runs.length - 1].push(y)));
+  // Column 30 crosses the upper bowl's top, the join (the upper bowl's
+  // bottom on the lower one's top) and the lower bowl's bottom.
+  assert.equal(runs.length, 3);
+  const join = (runs[1][0] + runs[1][runs[1].length - 1] + 1) / 2;
+  const upper = (join - runs[0][0]) / (48 - 12), lower = (runs[2][runs[2].length - 1] + 1 - join) / (94 - 48);
+  assert.ok(Math.abs(upper / lower - 1) < 0.12, `upper x${upper.toFixed(2)}, lower x${lower.toFixed(2)}`);
+});
