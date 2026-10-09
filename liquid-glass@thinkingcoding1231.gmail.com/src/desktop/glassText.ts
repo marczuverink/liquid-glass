@@ -5,14 +5,12 @@
 // is drawn (with Pango, or from a font file the extension ships) into a Cairo
 // surface that is written to a PNG and decoded here. Glyphs are measured once
 // per font and kept: a new time only places the cached fields side by side.
-import Cogl from 'gi://Cogl';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Pango from 'gi://Pango';
 import PangoCairo from 'gi://PangoCairo';
 import Cairo from 'cairo';
 
-import { coglContext } from '../shellVersion.js';
 import { type TrueTypeFont, traceGlyph } from './trueType.js';
 
 // Glyphs are drawn this many times larger and their fields scaled down, for
@@ -1247,31 +1245,37 @@ export class GlyphFields {
   /** The digits' height in the font as it is, px. */
   readonly digitHeight: number;
   private _band: [number, number];
-  private _tall: Promise<Tallness | null> | null = null;
-  private _pauses = new Set<number>();
+  // How the digits are made taller, and how the colon is: evenly either way,
+  // so its dots keep their shape.
+  private _tall: Promise<{ digits: Tallness, colon: Tallness } | null> | null = null;
+  // The pauses waiting for the main loop, and how to give each up.
+  private _pauses = new Map<number, (error: GLib.Error) => void>();
 
   constructor(private _face: TextFace, readonly range: number, readonly stretch = 1, readonly height = 1,
     readonly style: TallStyle = 'even') {
     this._band = _face.digitBand();
     this.digitHeight = Math.max(this._band[1] - this._band[0], 1);
     this.cancellable.connect(() => {
-      for (const id of this._pauses) GLib.Source.remove(id);
+      for (const [id, reject] of this._pauses) {
+        GLib.Source.remove(id);
+        reject(GLib.Error.new_literal(Gio.io_error_quark(), Gio.IOErrorEnum.CANCELLED, 'The digits are no longer wanted'));
+      }
       this._pauses.clear();
     });
   }
 
   /**
-   * Lets the main loop draw and take input before the next step of work.
-   * Never resolves once the fields are no longer wanted.
+   * Lets the main loop run before the next step of work. Rejects with a
+   * GError once the fields are no longer wanted.
    */
   pause(): Promise<void> {
-    return new Promise(resolve => {
+    return new Promise((resolve, reject) => {
       const id = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
         this._pauses.delete(id);
         resolve();
         return GLib.SOURCE_REMOVE;
       });
-      this._pauses.add(id);
+      this._pauses.set(id, reject);
     });
   }
 
@@ -1279,17 +1283,18 @@ export class GlyphFields {
   // end of the digits loses half of what the stretch added to a flat stroke,
   // so they are stretched that much more, about the middle of their top
   // stroke: their outline then spans `height` times the digits' height.
-  private _tallness(): Promise<Tallness | null> {
+  private _tallness(): Promise<{ digits: Tallness, colon: Tallness } | null> {
     if (this._tall) return this._tall;
     if (this.height <= 1) return this._tall = Promise.resolve(null);
-    this._tall = (async (): Promise<Tallness> => {
+    this._tall = (async () => {
       const pen = await this._pen('0123456789');
       const h = this.digitHeight;
       const [top, baseline] = this._band;
-      if (this.style === 'upright')
-        return { even: false, top, bottom: baseline, extra: Math.round((this.height - 1) * h), pen };
       const flat = Math.min(pen[1], h / 3);
-      return { even: true, scale: (this.height * h - flat) / (h - flat), centre: top + flat / 2, pen };
+      const even: Tallness = { even: true, scale: (this.height * h - flat) / (h - flat), centre: top + flat / 2, pen };
+      const digits: Tallness = this.style === 'upright'
+        ? { even: false, top, bottom: baseline, extra: Math.round((this.height - 1) * h), pen } : even;
+      return { digits, colon: even };
     })();
     // Measured again next time when it failed.
     this._tall.catch(() => {
@@ -1319,7 +1324,8 @@ export class GlyphFields {
   }
 
   private async _buildGlyph(ch: string): Promise<GlyphField> {
-    const t = await this._tallness();
+    const both = await this._tallness();
+    const t = both && (ch === ':' ? both.colon : both.digits);
     // The colon's dots keep their own shape, whatever the digits' strokes are.
     const tall = t && scaledTall(t, SUPERSAMPLE, ch === ':' ? await this._pen(ch, true) : t.pen);
     const big = await rasterize(this._face, ch, SUPERSAMPLE, this.stretch, tall?.even ? tall : null,
@@ -1365,7 +1371,7 @@ export class GlyphFields {
     const offsets = this._face.offsets(text);
     const r = this.range;
     // The line's room above and below the digits stays as it was.
-    const tall = await this._tallness();
+    const tall = (await this._tallness())?.digits ?? null;
     const [top, baseline] = this._band;
     const x0 = Math.floor(b.x0 * this.stretch) - r;
     const y0 = Math.floor(tallY(tall, top) - (top - b.y0)) - r;
@@ -1403,12 +1409,11 @@ export function maxDepth(field: DistanceField): number {
 }
 
 /**
- * A texture for glass.frag's LG_SHAPE_TEXTURE: `outline` above `lens`, two
- * fields of the same size, distances from -range to +range in 16 bits, the
- * high byte in red and the low in green. Throws a GError when the texture
- * cannot be made.
+ * The pixels (RGBA) of a texture for glass.frag's LG_SHAPE_TEXTURE: `outline`
+ * above `lens`, two fields of the same size, distances from -range to +range
+ * in 16 bits, the high byte in red and the low in green.
  */
-export function fieldTexture(outline: DistanceField, lens: DistanceField, range: number): Cogl.Texture {
+export function encodeFields(outline: DistanceField, lens: DistanceField, range: number): Uint8Array {
   const { width, height } = outline;
   const bytes = new Uint8Array(width * height * 8);
   const scale = 65535 / (2 * range);
@@ -1423,5 +1428,5 @@ export function fieldTexture(outline: DistanceField, lens: DistanceField, range:
   };
   put(outline.data, 0);
   put(lens.data, width * height);
-  return Cogl.Texture2D.new_from_data(coglContext(), width, height * 2, Cogl.PixelFormat.RGBA_8888, width * 4, bytes);
+  return bytes;
 }

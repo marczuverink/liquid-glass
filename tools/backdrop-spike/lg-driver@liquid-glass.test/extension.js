@@ -1392,6 +1392,11 @@ export default class LgDriver extends Extension {
       await sleep(2000);
     }
     const m = Main.layoutManager.primaryMonitor;
+    // Menus grow from their button only when asked to.
+    if (parts.some(p => p.startsWith('morph'))) {
+      for (const surface of ['menu', 'panel-menu']) settings.set_boolean(`${surface}-grow-from-button`, true);
+      await sleep(500);
+    }
     if (parts.includes('morph')) {
       await this._slowMorph(12);
       const dateMenu = Main.panel.statusArea.dateMenu.menu;
@@ -1565,13 +1570,32 @@ export default class LgDriver extends Extension {
         clock = this;
         return tick.call(this);
       };
-      settings.set_boolean('enable-glass-clock', true);
+      // The longest the main loop stops from now until `done` resolves.
+      const stalls = async done => {
+        let last = GLib.get_monotonic_time(), worst = 0;
+        const probe = GLib.timeout_add(GLib.PRIORITY_HIGH, 2, () => {
+          const now = GLib.get_monotonic_time();
+          worst = Math.max(worst, now - last);
+          last = now;
+          return GLib.SOURCE_CONTINUE;
+        });
+        await done;
+        GLib.Source.remove(probe);
+        return (worst / 1000).toFixed(0);
+      };
       // Every digit drawn once, as a clock that has run for a while has them.
-      for (const t of ['01:23', '45:67', '89:00']) {
-        text = t;
-        clock?._tick();
-        await sleep(6000);
-      }
+      log(`clocktick: first digits, longest stall ${await stalls((async () => {
+        settings.set_boolean('enable-glass-clock', true);
+        for (const t of ['01:23', '45:67', '89:00']) {
+          text = t;
+          clock?._tick();
+          await sleep(6000);
+        }
+      })())} ms`);
+      log(`clocktick: resized, longest stall ${await stalls((async () => {
+        settings.set_int('glass-clock-size', settings.get_int('glass-clock-size') - 20);
+        await sleep(8000);
+      })())} ms`);
       for (const t of ['10:01', '10:02', '17:38', '23:59']) {
         let last = GLib.get_monotonic_time(), worst = 0;
         const probe = GLib.timeout_add(GLib.PRIORITY_HIGH, 2, () => {

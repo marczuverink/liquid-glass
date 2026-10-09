@@ -56,7 +56,6 @@ const CAPSULE_S = 0.14;
 const SETTLED_SWING = 0.25;
 const OPEN_SIZE_S = 0.3;
 const CLOSE_SIZE_S = 0.25;
-const RADIUS_S = 0.7;
 const CONTENT_SCALE_S = 0.3;
 // The content starts twice its size.
 const CONTENT_CLOSED_SCALE = 2;
@@ -65,15 +64,14 @@ const CONTENT_CLOSED_SCALE = 2;
 const LENS_S = 0.3;
 // Closing: the drop starts to turn into the capsule once it is this many
 // button heights from where the capsule rests, or this long after closing
-// began whatever, and rises into place as it does over CLOSE_CAPSULE_S; the
-// capsule then stays FADE_DELAY_S and fades over FADE_S.
+// began whatever, and rises into place as it does over CLOSE_CAPSULE_S. It
+// fades over FADE_S from FADE_DELAY_S after it starts to: on the button it
+// only hides the clock, bent by the glass.
 const ARRIVE_HEIGHTS = 2;
 const ARRIVE_MAX_S = 0.6;
 const CLOSE_CAPSULE_S = 0.16;
-const FADE_DELAY_S = 0.1;
-const FADE_S = 0.2;
-// Corners start (opening) this round, as a fraction of the largest the body allows.
-const OPEN_ROUNDNESS = 0.8;
+const FADE_DELAY_S = 0.04;
+const FADE_S = 0.14;
 
 function cubicBezier(x1: number, y1: number, x2: number, y2: number): (t: number) => number {
   const at = (t: number, a: number, b: number) => 3 * a * t * (1 - t) ** 2 + 3 * b * t * t * (1 - t) + t ** 3;
@@ -126,6 +124,8 @@ export class MenuMorphMotion {
   // motion takes over from another). The rest of the motion starts after it.
   private _capsuleS: number;
   private _sizeFrom: number[];
+  // Opening, how round the corners start, as a fraction of the roundest they
+  // can be; closing, the radius they start from.
   private _radiusFrom: number;
   private _contentFrom: number;
   private _lensFrom: number;
@@ -160,8 +160,8 @@ export class MenuMorphMotion {
     if (velocities) [this._x.velocity, this._y.velocity] = velocities;
     const drop = this._drop();
     this._sizeFrom = this._capsuleS ? [drop, drop] : [start.body[2], start.body[3]];
-    this._radiusFrom = from ? start.bodyRadius
-      : opening ? OPEN_ROUNDNESS * Math.min(_menu[2], _menu[3]) / 2 : _menuRadius;
+    this._radiusFrom = opening ? (from ? start.bodyRadius / Math.max(Math.min(start.body[2], start.body[3]) / 2, 1) : 1)
+      : start.bodyRadius;
     this._contentFrom = start.contentScale;
     this._lensFrom = start.lens;
     this._aim();
@@ -240,7 +240,8 @@ export class MenuMorphMotion {
     const k = openSize(clamp01(t / OPEN_SIZE_S));
     const w = lerp(this._sizeFrom[0], this._menu[2], k);
     const h = lerp(this._sizeFrom[1], this._menu[3], k);
-    const radius = lerp(this._radiusFrom, this._menuRadius, easeOut(clamp01(t / RADIUS_S)));
+    // The corners square off as the glass grows, and are the menu's once it has.
+    const radius = lerp(this._radiusFrom * Math.min(w, h) / 2, this._menuRadius, k);
     const moving = !this._x.settled(0.5) || !this._y.settled(0.5);
     const swing = lerp(1, SETTLED_SWING, k);
     const x = this._x.target + (this._x.value - this._x.target) * swing;
@@ -252,7 +253,7 @@ export class MenuMorphMotion {
       contentOpacity: clamp01(this._opacity.value),
       lens: this._lensFrom * (1 - clamp01(t / LENS_S) ** 2),
       glassOpacity: 1,
-      done: !moving && t >= Math.max(OPEN_SIZE_S, RADIUS_S),
+      done: !moving && t >= OPEN_SIZE_S,
     };
   }
 
@@ -284,7 +285,7 @@ export class MenuMorphMotion {
       const cx = lerp(this._x.value, hx, c), cy = lerp(this._y.value, hy, c);
       body = [cx - cw / 2, cy - ch / 2, cw, ch];
       bodyRadius = Math.min(cw, ch) / 2;
-      glassOpacity = 1 - clamp01((since - CLOSE_CAPSULE_S - FADE_DELAY_S) / FADE_S);
+      glassOpacity = 1 - clamp01((since - FADE_DELAY_S) / FADE_S);
     }
     return {
       body,

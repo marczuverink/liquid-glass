@@ -1,3 +1,4 @@
+import Cogl from 'gi://Cogl';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Pango from 'gi://Pango';
@@ -9,19 +10,11 @@ import { hexToColorArray } from '../animation/colors.js';
 import { AdaptiveTextColor } from '../adaptiveText.js';
 import { sanitizeColorPreference } from '../contrastSampler.js';
 import { connectClicks } from './desktopItem.js';
-import { bundledFontFile } from './bundledFonts.js';
-import { GlyphFields, fieldTexture, fileFace, maxDepth, pangoFace, softenedInSteps } from './glassText.js';
-import { TrueTypeFont } from './trueType.js';
-// How far (px) the distance field reaches past the outline: room for the
-// drop shadow, whose reach stays a little inside it.
-const FIELD_RANGE = 48;
+import { FIELD_RANGE } from './digits.js';
+import { DigitsSource } from './digitsSource.js';
+import { coglContext } from '../shellVersion.js';
+// The drop shadow's reach (px), a little inside the distance field's.
 const SHADOW_REACH = 40;
-// The lens rises over at most this much of a stroke (px), as on any glass.
-const MAX_BAND = 22;
-// The lens's slope points the way of the outline softened by this fraction of
-// its band, so it turns smoothly in a corner instead of folding along the
-// corner's bisector.
-const LENS_SOFTNESS = 0.35;
 // Font changes are applied once the preferences stop changing them.
 const FONT_DELAY_MS = 300;
 // The date sits this far (px) above the glass digits' outline.
@@ -49,15 +42,15 @@ export class GlassClock {
     _env;
     _glass;
     _date;
-    _glyphs = null;
+    _source;
+    // The font, size and shape the digits are made in; null until there is one.
+    _font = null;
     // The digits for the time shown and for the next minute, made ahead so the
     // minute changes without the work.
     _prepared = new Map();
     _text = '';
-    _fontKey = '';
-    // The shipped fonts by file: read, being read (undefined), or unreadable (null).
-    _fontFiles = new Map();
-    _fontCancellable = new Gio.Cancellable();
+    // The digits' height in the font as it is (px), once known.
+    _digitHeight = 0;
     _fieldSize = [1, 1];
     _size = [1, 1];
     _bounds = [0, 0, 1, 1];
@@ -78,6 +71,7 @@ export class GlassClock {
         this._glass.setPadding(0);
         this._glass.setIsDock(false);
         this._glass.setShadowMaxRadius(SHADOW_REACH);
+        this._source = new DigitsSource(env.path, env.logger);
         this._date = new St.Label({ style_class: 'liquid-glass-clock-date' });
         this.actor.add_child(this._glass);
         this.actor.add_child(this._date);
@@ -128,39 +122,6 @@ export class GlassClock {
         return `${ui.get_family() ?? 'Sans'} Bold`;
     }
 
-    // One of the fonts the extension ships with, or an installed one. Null
-    // while a shipped font is still being read; the font is loaded again then.
-    _face(font, size) {
-        const file = bundledFontFile(this._env.path, font);
-        if (!file)
-            return pangoFace(font, size);
-        const read = this._fontFiles.get(file);
-        if (read)
-            return fileFace(read, size);
-        // Unreadable, the description falls through to whatever Pango makes of it.
-        if (read === null)
-            return pangoFace(font, size);
-        if (this._fontFiles.has(file))
-            return null;
-        this._fontFiles.set(file, undefined);
-        const gfile = Gio.File.new_for_path(file);
-        gfile.load_contents_async(this._fontCancellable, (_f, res) => {
-            try {
-                this._fontFiles.set(file, new TrueTypeFont(gfile.load_contents_finish(res)[1]));
-            }
-            catch (e) {
-                if (e instanceof GLib.Error && e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED)) {
-                    this._fontFiles.delete(file);
-                    return;
-                }
-                this._env.logger.error(`[Liquid Glass] Could not read the clock's font ${file}: ${e}`);
-                this._fontFiles.set(file, null);
-            }
-            this._loadFont();
-        });
-        return null;
-    }
-
     _queueFont() {
         if (this._fontTimerId)
             GLib.Source.remove(this._fontTimerId);
@@ -178,15 +139,10 @@ export class GlassClock {
         const stretch = s.get_double('glass-clock-stretch');
         const height = s.get_double('glass-clock-height');
         const style = s.get_string('glass-clock-tall-style') === 'upright' ? 'upright' : 'even';
-        const key = `${font}|${size}|${stretch}|${height}|${style}`;
-        if (this._glyphs && key === this._fontKey)
+        const next = { extensionPath: this._env.path, font, size, stretch, height, style };
+        if (this._font && JSON.stringify(next) === JSON.stringify(this._font))
             return;
-        const face = this._face(font, size);
-        if (!face)
-            return;
-        this._glyphs?.cancellable.cancel();
-        this._fontKey = key;
-        this._glyphs = new GlyphFields(face, FIELD_RANGE, stretch, height, style);
+        this._font = next;
         this._prepared.clear();
         this._date.set_style(`font-size: ${Math.max(11, Math.round(size * 0.13))}px;`);
         this._text = '';
@@ -202,13 +158,13 @@ export class GlassClock {
     /**
      * Makes the clock `sx` times as wide and `sy` times as tall, as far as the
      * settings allow: taller alone makes the digits taller with their strokes
-     * as thick (see keepStrokeWidths()), wider alone stretches them, and both
+     * as thick (see restroke()), wider alone stretches them, and both
      * scale the font.
      */
     resizeBy(sx, sy) {
         const s = this._env.settings;
-        if (sx === 1 && this._glyphs) {
-            const added = (sy - 1) * this._bounds[3] / this._glyphs.digitHeight;
+        if (sx === 1 && this._digitHeight) {
+            const added = (sy - 1) * this._bounds[3] / this._digitHeight;
             const height = clamp(s.get_double('glass-clock-height') + added, keyRange(s, 'glass-clock-height'));
             s.set_double('glass-clock-height', Math.round(height * 100) / 100);
             this._loadFont();
@@ -251,32 +207,30 @@ export class GlassClock {
         });
     }
 
-    // The digits for `text`, made a step at a time (see GlyphFields.pause()).
-    _digits(glyphs, text) {
-        let digits = this._prepared.get(text);
-        if (!digits) {
-            digits = (async () => {
-                const field = await glyphs.fieldFor(text);
-                const band = Math.min(Math.max(maxDepth(field), 2), MAX_BAND);
-                const lens = await softenedInSteps(field, band * LENS_SOFTNESS, () => glyphs.pause());
-                await glyphs.pause();
-                return { texture: fieldTexture(field, lens, FIELD_RANGE), band, width: field.width, height: field.height };
-            })();
-            digits.catch(() => this._prepared.delete(text));
-            this._prepared.set(text, digits);
+    // The glass for `text` in the current font.
+    _glassFor(text) {
+        let glass = this._prepared.get(text);
+        if (!glass) {
+            glass = this._source.make({ ...this._font, text }).then(digits => {
+                this._digitHeight = digits.digitHeight;
+                const texture = Cogl.Texture2D.new_from_data(coglContext(), digits.width, digits.height * 2, Cogl.PixelFormat.RGBA_8888, digits.width * 4, digits.bytes);
+                return { texture, band: digits.band, width: digits.width, height: digits.height };
+            });
+            glass.catch(() => this._prepared.delete(text));
+            this._prepared.set(text, glass);
         }
-        return digits;
+        return glass;
     }
 
     async _setText(text) {
-        const glyphs = this._glyphs;
-        if (text === this._text || !glyphs)
+        const font = this._font;
+        if (text === this._text || !font)
             return;
         this._text = text;
-        let digits;
+        let glass;
         try {
-            digits = await this._digits(glyphs, text);
-            if (glyphs !== this._glyphs || text !== this._text)
+            glass = await this._glassFor(text);
+            if (font !== this._font || text !== this._text)
                 return;
         }
         catch (e) {
@@ -287,7 +241,7 @@ export class GlassClock {
                 this._text = '';
             return;
         }
-        const { texture, band, width, height } = digits;
+        const { texture, band, width, height } = glass;
         this._fieldSize = [width, height];
         this._glass.set_size(width, height);
         this._glass.setResolution(width, height);
@@ -300,7 +254,7 @@ export class GlassClock {
                 this._prepared.delete(key);
         }
         // A failure shows when that minute comes and the digits are made again.
-        this._digits(glyphs, this._timeText(GLib.DateTime.new_now_local().add_minutes(1))).catch(() => { });
+        this._glassFor(this._timeText(GLib.DateTime.new_now_local().add_minutes(1))).catch(() => { });
     }
 
     // The date above the digits; the field's margin is mostly empty, so the
@@ -362,10 +316,9 @@ export class GlassClock {
         this._settingsIds = [];
         this._interfaceIds = [];
         this._adaptive.clear();
-        this._glyphs?.cancellable.cancel();
-        this._glyphs = null;
+        this._source.destroy();
+        this._font = null;
         this._prepared.clear();
-        this._fontCancellable.cancel();
         this._glass.cleanup();
         if (isActorValid(this.actor))
             this.actor.destroy();
