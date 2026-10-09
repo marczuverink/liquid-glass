@@ -13,7 +13,8 @@ function fixture(overrides = {}, dbusResponses = [], blurMyShell = null) {
   const xml = fs.readFileSync(path.join(root, 'schemas/org.gnome.shell.extensions.liquid-glass@thinkingcoding1231.gmail.com.gschema.xml'), 'utf8');
   for (const [, key, type, body] of xml.matchAll(/<key name="([^"]+)" type="([^"]+)">([\s\S]*?)<\/key>/g)) {
     const raw = body.match(/<default>([\s\S]*?)<\/default>/)[1].trim();
-    const value = type === 'as' ? [] : type === 's' ? raw.slice(1, -1) : type === 'b' ? raw === 'true' : Number(raw);
+    const value = type === 'as' ? [] : type === 's' ? raw.slice(1, -1) : type === 'b' ? raw === 'true'
+      : type.startsWith('(') ? JSON.parse(`[${raw.slice(1, -1)}]`) : Number(raw);
     types.set(key, type); values.set(key, value);
     const range = body.match(/<range min="([^"]+)" max="([^"]+)"\s*\/>/);
     if (range) ranges.set(key, {min: Number(range[1]), max: Number(range[2])});
@@ -75,13 +76,20 @@ function fixture(overrides = {}, dbusResponses = [], blurMyShell = null) {
   const Gtk = {Adjustment: Widget, ColorDialogButton: Widget, ColorDialog: Widget, Button: Widget, ListBox: Widget,
     Scale: Widget, Orientation: {HORIZONTAL: 0},
     SignalListItemFactory: Widget, Box: Widget, Label: Widget, Image: Widget,
-    StringList: {new: titles => titles}, Align: {CENTER: 0}, SelectionMode: {NONE: 0}};
+    StringList: {new: titles => titles}, Align: {CENTER: 0}, SelectionMode: {NONE: 0},
+    FontDialogButton: Widget, FontDialog: Widget, FontLevel: {FACE: 2},
+    accelerator_parse: text => [text.length > 0, text.length > 0 ? 1 : 0, 0]};
+  const WEIGHTS = {Light: 300, Regular: 400, SemiBold: 600, Bold: 700};
+  const fontDescription = text => ({copy() { return fontDescription(text); }, unset_fields() {}, to_string: () => text,
+    get_weight: () => WEIGHTS[text.split(' ').pop()] ?? 400});
+  const Pango = {FontDescription: {from_string: fontDescription}, FontMask: {SIZE: 1}};
   const dbusCalls = [];
   const bmsSchemas = '/home/test/.local/share/gnome-shell/extensions/blur-my-shell@aunetx/schemas';
   const GioSettings = function (props) {
     return props?.settings_schema === 'blur-my-shell-popup' ? blurMyShell : new Settings(props);
   };
   const Gio = {Settings: GioSettings, SettingsBindFlags: {GET: 1, DEFAULT: 0}, DBusCallFlags: {NONE: 0},
+    AppInfo: {get_all: () => []},
     SettingsSchemaSource: {get_default: () => null,
       new_from_directory: dir => ({lookup: id => dir === bmsSchemas && id === 'org.gnome.shell.extensions.blur-my-shell.popup'
         ? 'blur-my-shell-popup' : null})},
@@ -100,7 +108,7 @@ function fixture(overrides = {}, dbusResponses = [], blurMyShell = null) {
   const GLib = {Variant, FileTest: {EXISTS: 16}, build_filenamev: parts => parts.join('/'),
     file_test: file => blurMyShell !== null && file === `${bmsSchemas}/gschemas.compiled`,
     get_user_data_dir: () => '/home/test/.local/share', get_system_data_dirs: () => ['/usr/share']};
-  const load = createModuleLoader({Adw, Gtk, Gio, Gdk: {RGBA}, GLib});
+  const load = createModuleLoader({Adw, Gtk, Gio, Gdk: {RGBA}, GLib, Pango});
   const settings = new Settings(); const window = new Widget();
   const {buildPreferences} = load(path.join(root, 'preferences/pages.js'));
   const controls = buildPreferences(window, settings);
@@ -108,10 +116,10 @@ function fixture(overrides = {}, dbusResponses = [], blurMyShell = null) {
     row: title => widgets.find(widget => widget.title === title)};
 }
 
-test('preferences expose three pages and seven shared appearance controls', () => {
+test('preferences expose four pages and eight shared appearance controls', () => {
   const f = fixture();
-  assert.deepEqual(f.window.children.map(page => page.title), ['Appearance', 'Effects', 'Rendering']);
-  assert.equal(f.window.children[0].children.filter(group => group.title !== 'Settings' && group.visible !== false).flatMap(group => group.children).length, 7);
+  assert.deepEqual(f.window.children.map(page => page.title), ['Appearance', 'Effects', 'Desktop', 'Rendering']);
+  assert.equal(f.window.children[0].children.filter(group => group.title !== 'Settings' && group.visible !== false).flatMap(group => group.children).length, 8);
   assert.equal(f.widgets.filter(widget => /Spring|Sample Interval|X Offset|Y Offset/.test(widget.title ?? '')).length, 0);
   assert.equal(f.window.search_enabled, true);
 });
@@ -126,11 +134,11 @@ test('opening and closing preferences preserves a customized configuration witho
   assert.equal(f.values.get('menu-scale'), 0.83);
 });
 
-test('editing shared blur updates all eight surfaces in one transaction and no other settings', () => {
+test('editing shared blur updates all eleven surfaces in one transaction and no other settings', () => {
   const f = fixture();
   f.row('Blur').value = 12;
   assert.equal(f.writes.length, 1);
-  assert.equal(Object.keys(f.writes[0]).length, 8);
+  assert.equal(Object.keys(f.writes[0]).length, 11);
   assert.ok(Object.keys(f.writes[0]).every(key => key.endsWith('-blur-radius')));
   assert.ok(Object.values(f.writes[0]).every(value => value === 12));
   assert.equal(f.row('Blur').subtitle, '');
@@ -139,8 +147,9 @@ test('editing shared blur updates all eight surfaces in one transaction and no o
 test('corners include toggle glass and changing them does not enable any effect', () => {
   const f = fixture(); f.row('Corners').value = 24;
   assert.equal(f.values.get('quick-settings-toggle-corner-radius'), 24);
-  assert.equal(Object.keys(f.writes[0]).length, 9);
+  assert.equal(Object.keys(f.writes[0]).length, 12);
   assert.equal(f.values.get('enable-application-glass'), false);
+  assert.equal(f.values.get('top-bar-style'), 'off');
 });
 
 test('Smooth uses critically damped motion across menus without changing their appearance', () => {
@@ -268,7 +277,7 @@ test('a fresh install shows the default shadow as the Soft preset, not Custom', 
 test('the preferred text colour writes only its own surface key, and the dump shortcut has a switch', () => {
   const f = fixture({'preferences-advanced': true});
   f.row('Surface').selected = 1;
-  const row = f.row('Preferred text colour');
+  const row = f.row('Preferred text color');
   assert.ok(row, 'calendar shows the preferred text colour');
   const before = f.writes.length;
   row.selected = 2;

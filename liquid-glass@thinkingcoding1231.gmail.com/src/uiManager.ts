@@ -1,6 +1,7 @@
 import { stepMenuSpring, applyMenuFrame, showMenuAtRest } from './animation/menuSpring.js';
 import { addFrameTicker, removeFrameTicker, normalizeAnimationIntervalMs } from './animation/frameTicker.js';
 import { Spring, SwiftSpring } from './animation/spring.js';
+import { MenuMorphMotion, type MorphFrame } from './animation/menuMorph.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
@@ -8,6 +9,7 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import Gio from 'gi://Gio';
 import { BackdropGlass } from './rendering/backdropGlass.js';
+import { ContentLens } from './rendering/contentLens.js';
 import { StageContrastSampler, AdaptiveContrastConfig, sanitizeColorPreference } from './contrastSampler.js';
 import { UnpickableWidget } from './actors/unpickable.js';
 import { ensureGlassAllocated } from './actors/allocation.js';
@@ -33,6 +35,31 @@ interface CustomBannerActor extends St.Widget {
 }
 
 const MIN_MENU_SCALE = 0.5;
+
+// Frames to wait for an opening menu to get its size before it just appears.
+const MORPH_WAIT_FRAMES = 30;
+// The menu's own open and close animations, which the morph replaces; it keeps
+// the closing fade.
+const BOXPOINTER_EASED = ['opacity', 'translation-x', 'translation-y', 'scale-x', 'scale-y'];
+const BOXPOINTER_MOVES = BOXPOINTER_EASED.slice(1);
+const CONTENT_LENS = 'liquid-glass-content-lens';
+
+// The glass travelling between the panel button and the menu.
+interface MenuMorph {
+  opening: boolean;
+  // Null until an opening menu has its size.
+  motion: MenuMorphMotion | null;
+  // Where the motion it reverses had got to.
+  from: MorphFrame | null;
+  velocities: number[] | null;
+  // The button's glass, [x, y, w, h] in stage coordinates.
+  button: number[];
+  // On the menu's items while the glass changes shape.
+  lens: InstanceType<typeof ContentLens>;
+  lastUs: number;
+  waitFrames: number;
+}
+
 const MENU_MEASURE_FRAMES = 30;
 const MENU_MEASURE_STABLE_FRAMES = 3;
 
@@ -121,6 +148,9 @@ export class UIManager {
   private _swiftSpringScale: SwiftSpring;
 
   private _enableAnimation: boolean;
+  private _growFromButton: boolean = true;
+  private _morph: MenuMorph | null = null;
+  private _morphTickId: number = 0;
 
   private _interfaceSettings: Gio.Settings | null = null;
   private _accentColorSignalId: number = 0;
@@ -203,6 +233,7 @@ export class UIManager {
     this._bindSettings();
 
     this._enableAnimation = this._settings.get_boolean(this._animationKey());
+    this._growFromButton = this._settings.get_boolean(this._key('grow-from-button'));
     this._menuScale = this._settings.get_double(this._key('scale'));
     this._matchQuickSettingsHeight = this._settings.get_boolean(this._key('match-quick-settings-height'));
     const remembered = this._ownsSettingsNamespace
@@ -554,6 +585,10 @@ export class UIManager {
       this._enableAnimation = this._settings.get_boolean(this._animationKey());
     });
 
+    connectSetting(this._key('grow-from-button'), () => {
+      this._growFromButton = this._settings.get_boolean(this._key('grow-from-button'));
+    });
+
     connectSetting(this._key('spring-stiffness'), () => {
       this._springStiffness = this._settings.get_double(this._key('spring-stiffness'));
       if (this._springScale) this._springScale.updateParams(this._springStiffness, this._springDamping, this._springMass);
@@ -785,6 +820,8 @@ export class UIManager {
       id: this.menu.actor.connect('notify::mapped', () => {
         if (!this.menu.actor.mapped) {
           stopFrameSync();
+          // The glass outlives the menu while it goes back into the button.
+          if (this._morph && !this._morph.opening) return;
 
           if (this.glass) {
             this.glass.hide();
@@ -804,6 +841,8 @@ export class UIManager {
   }
 
   _syncGeometry() {
+    // The morph places the glass itself.
+    if (this._morph) return;
     if (!this._syncBgVisibility()) return;
     const { w, h, scaleX, scaleY } = this._measureMenu();
     const [animAbsX, animAbsY] = this._resolveMenuOrigin(w);
@@ -1264,9 +1303,13 @@ export class UIManager {
       this._tickId = 0;
     }
     if (!this._enableAnimation) {
+      this._endMorph();
       showMenuAtRest(this.glass, this.animActor);
       return;
     }
+    if (this._growFromButton && St.Settings.get().enable_animations && this._startMorph(targetValue === 1))
+      return;
+    this._endMorph();
 
     if (this.animActor) this.animActor.remove_all_transitions();
     if (this.glass) this.glass.remove_all_transitions();
@@ -1300,6 +1343,189 @@ export class UIManager {
     }
   }
 
+  // The button the menu belongs to, as the glass it grows out of: the capsule
+  // the theme highlights it with, [x, y, w, h] in stage coordinates, or null
+  // when it is not on screen. Panel buttons draw it inside a transparent
+  // border, and the clock on its label rather than on the whole button.
+  private _buttonRect(): number[] | null {
+    const source = this.menu?.sourceActor;
+    if (!source || !isActorValid(source) || !source.mapped) return null;
+    const label = (source as any)._clockDisplay;
+    const actor: St.Widget = label instanceof St.Widget && label.mapped ? label : source;
+    const [x, y] = actor.get_transformed_position();
+    const [w, h] = actor.get_transformed_size();
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !(w >= 1) || !(h >= 1)) return null;
+    const node = actor.get_theme_node();
+    const [sx, sy] = actor.get_transformed_size().map((v, i) => v / Math.max(i ? actor.height : actor.width, 1));
+    const left = node.get_border_width(St.Side.LEFT) * sx, right = node.get_border_width(St.Side.RIGHT) * sx;
+    const top = node.get_border_width(St.Side.TOP) * sy, bottom = node.get_border_width(St.Side.BOTTOM) * sy;
+    if (w - left - right < 1 || h - top - bottom < 1) return [x, y, w, h];
+    return [x + left, y + top, w - left - right, h - top - bottom];
+  }
+
+  // Where the menu's items are at rest: their stage rect without the
+  // morph's own scale and shift, and the scale (`k`) the menu puts on them.
+  private _menuRest(): { x: number, y: number, w: number, h: number, k: number } | null {
+    if (!this.targetActor.mapped) return null;
+    const a = this.animActor;
+    const [w, h] = getAllocatedSize(a);
+    const [tx, ty] = a.get_transformed_position();
+    const k = this.targetActor.get_scale()[0] || 1;
+    const x = tx - a.translation_x * k;
+    const y = ty - a.translation_y * k;
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !(w > 1) || !(h > 1)) return null;
+    return { x, y, w: w * k, h: h * k, k };
+  }
+
+  // The resting menu's glass body, [x, y, w, h] in stage coordinates.
+  private _menuBodyRect(): number[] | null {
+    const rest = this._menuRest();
+    if (!rest) return null;
+    const e = this._glassExpand;
+    return [rest.x - e, rest.y - e, rest.w + e * 2, rest.h + e * 2];
+  }
+
+  /**
+   * Starts the glass towards the menu (`open`) or back into the button.
+   * False when there is no button to grow out of; the scale spring runs then.
+   */
+  private _startMorph(open: boolean): boolean {
+    const button = this._buttonRect();
+    if (!this.glass || !button) return false;
+    // Reversing midway starts from where the glass is.
+    const prev = this._morph;
+    if (!open && !prev?.motion && !this._menuBodyRect()) return false;
+
+    this._stopMorphTicker();
+    let lens = prev?.lens;
+    if (!lens) {
+      lens = new ContentLens();
+      this.animActor.add_effect_with_name(CONTENT_LENS, lens);
+    }
+    this._morph = {
+      opening: open, motion: null, button, lens, lastUs: 0, waitFrames: 0,
+      from: prev?.motion?.frame ?? null, velocities: prev?.motion?.velocities ?? null,
+    };
+    this.animActor.remove_all_transitions();
+    this.glass.remove_all_transitions();
+    this.animActor.set_pivot_point(0, 0);
+    this._morphTickId = addFrameTicker(() => this._stepMorph(),
+      normalizeAnimationIntervalMs(this._animationInterval));
+    return true;
+  }
+
+  private _stepMorph(): boolean {
+    const m = this._morph;
+    if (!m || !this.glass) {
+      this._morphTickId = 0;
+      return false;
+    }
+    m.button = this._buttonRect() ?? m.button;
+    // The menu stays where it opens; closing, it only fades.
+    for (const name of m.opening ? BOXPOINTER_EASED : BOXPOINTER_MOVES) {
+      const ease = this.targetActor.get_transition(name);
+      if (!ease) continue;
+      if (m.opening) ease.set_from(ease.get_interval().peek_final_value());
+      else ease.set_to(ease.get_interval().peek_initial_value());
+    }
+
+    const menu = this._menuBodyRect();
+    if (!m.motion) {
+      if (!menu) {
+        // Not laid out yet: hold the glass on the button for a few frames.
+        this._placeMorph({ body: m.button, bodyRadius: m.button[3] / 2, contentScale: 1,
+          contentOpacity: 0, lens: 0, glassOpacity: 1, done: false });
+        if (++m.waitFrames < MORPH_WAIT_FRAMES) return true;
+        this._morphTickId = 0;
+        this._endMorph();
+        return false;
+      }
+      m.motion = new MenuMorphMotion(m.opening, m.button, menu, this._cornerRadius, m.from, m.velocities);
+    } else {
+      m.motion.retarget(m.button, menu, this._cornerRadius);
+    }
+
+    const now = GLib.get_monotonic_time();
+    const frame = m.motion.step(m.lastUs ? (now - m.lastUs) / 1e6 : 1 / 60);
+    m.lastUs = now;
+    this._placeMorph(frame);
+    if (!frame.done) return true;
+
+    this._morphTickId = 0;
+    const closed = !m.opening;
+    this._endMorph();
+    if (closed) {
+      this.glass.hide();
+      this.glass.opacity = 0;
+      this.animActor.opacity = 0;
+      if (!this.menu.isOpen) this.menu.actor.hide();
+    }
+    return false;
+  }
+
+  // Draws the travelling glass (stage coordinates) and the menu's items in it.
+  private _placeMorph(f: MorphFrame): void {
+    const glass = this.glass!;
+    const monitor = this._getMenuMonitorGeometry();
+    const mx = monitor?.x ?? 0;
+    const my = monitor?.y ?? 0;
+    const p = SHADER_PADDING;
+    const body = f.body;
+    if (!glass.visible) glass.show();
+    glass.opacity = Math.round(255 * f.glassOpacity);
+    this._applyGlassBounds(glass, body[0] - p, body[1] - p, body[2] + p * 2, body[3] + p * 2,
+      mx, my, Math.max(1, monitor?.width ?? 1), Math.max(1, monitor?.height ?? 1));
+    applyGlassScale(glass, f.bodyRadius, 1, 1);
+    this._placeContent(f);
+    glass.syncSources();
+  }
+
+  // Draws the menu's items `f.contentScale` times their size around the
+  // middle of the travelling glass, cut to its outline.
+  private _placeContent(f: MorphFrame): void {
+    const a = this.animActor;
+    const rest = this._menuRest();
+    if (!rest || !this._morph) {
+      a.opacity = 0;
+      return;
+    }
+    a.opacity = Math.round(255 * f.contentOpacity * f.glassOpacity);
+    const e = this._glassExpand;
+    const [bx, by, bw, bh] = f.body;
+    // Never 0, which Cogl cannot invert.
+    const s = Math.max(f.contentScale, 0.01);
+    const x = bx + (bw - (rest.w + e * 2) * s) / 2 + e * s;
+    const y = by + (bh - (rest.h + e * 2) * s) / 2 + e * s;
+    const k = rest.k;
+    a.set_scale(s, s);
+    a.set_translation((x - rest.x) / k, (y - rest.y) / k, 0);
+    const clip = [(bx - x) / (s * k), (by - y) / (s * k), bw / (s * k), bh / (s * k)];
+    a.set_clip(clip[0], clip[1], clip[2], clip[3]);
+    this._morph.lens.shape(clip, s * k, f.bodyRadius, f.lens);
+  }
+
+  private _stopMorphTicker(): void {
+    if (!this._morphTickId) return;
+    removeFrameTicker(this._morphTickId);
+    this._morphTickId = 0;
+  }
+
+  // Leaves the glass and the menu as the rest of the manager expects them.
+  private _endMorph(): void {
+    this._stopMorphTicker();
+    if (!this._morph) return;
+    this._morph = null;
+    if (!this._actorDestroyed && this.animActor) {
+      this.animActor.remove_effect_by_name(CONTENT_LENS);
+      this.animActor.remove_clip();
+      this.animActor.set_translation(0, 0, 0);
+      this.animActor.set_scale(1.0, 1.0);
+      this.animActor.set_pivot_point(0.5, 0.0);
+      this.animActor.opacity = 255;
+    }
+    if (this.glass && this.targetActor.mapped) this._syncGeometry();
+  }
+
   _removeEffect() {
     if (!this._isEffectActive) return;
     this._isEffectActive = false;
@@ -1320,6 +1546,7 @@ export class UIManager {
       removeFrameTicker(this._tickId);
       this._tickId = 0;
     }
+    this._endMorph();
 
     stopStageLoop(this._frameSignalSlot, this._frameSlot);
     this._disconnectAccentColor();

@@ -65,6 +65,11 @@
       <default>true</default>
       <summary>Enable menu animation</summary>
     </key>
+    <key name="menu-grow-from-button" type="b">
+      <default>false</default>
+      <summary>Grow the menu out of its button</summary>
+      <description>While animations are on, the glass leaves the button as a drop and stretches into the menu, and goes back into the button when the menu closes.</description>
+    </key>
     <key name="menu-spring-stiffness" type="d">
       <default>120.0</default>
       <summary>Spring stiffness</summary>
@@ -166,6 +171,11 @@
     <key name="enable-panel-menu-animation" type="b">
       <default>true</default>
       <summary>Enable panel menu animation</summary>
+    </key>
+    <key name="panel-menu-grow-from-button" type="b">
+      <default>false</default>
+      <summary>Grow the menu out of its button</summary>
+      <description>While animations are on, the glass leaves the button as a drop and stretches into the menu, and goes back into the button when the menu closes.</description>
     </key>
     <key name="panel-menu-spring-stiffness" type="d">
       <default>120.0</default>
@@ -763,6 +773,258 @@
       <default>false</default>
       <summary>Per-paint render diagnostics</summary>
       <description>Collect the per-paint state that global._lgGlass.dump() reports (backdrop copy, blur and composite rects, texture pool, blur result). This runs on every paint of every glass surface, so it costs performance even when logging is off. Leave this disabled unless you are debugging a rendering problem.</description>
+    </key>
+
+    <key name="top-bar-style" type="s">
+      <default>"off"</default>
+      <summary>Top bar glass</summary>
+      <description>"off" keeps the top bar as the theme draws it, "pill" puts one glass pill across it, "islands" puts a pill behind each of its three groups of buttons.</description>
+    </key>
+    <key name="top-bar-tint-color" type="s">
+      <default>"#ffffff"</default>
+      <summary>Tint color (Hex)</summary>
+    </key>
+    <key name="top-bar-tint-strength" type="d">
+      <default>0.12</default>
+      <summary>Tint strength</summary>
+    </key>
+    <key name="top-bar-blur-radius" type="i">
+      <default>5</default>
+      <summary>Blur radius</summary>
+    </key>
+    <key name="top-bar-corner-radius" type="d">
+      <default>99.0</default>
+      <summary>Corner radius</summary>
+      <description>Anything from half the bar's height up makes round ends.</description>
+    </key>
+    <key name="top-bar-brightness" type="d">
+      <default>1.0</default>
+      <summary>Brightness</summary>
+    </key>
+    <key name="top-bar-contrast" type="d">
+      <default>1.0</default>
+      <summary>Contrast</summary>
+    </key>
+    <key name="top-bar-saturation" type="d">
+      <default>1.5</default>
+      <summary>Saturation</summary>
+    </key>
+    <key name="top-bar-enable-adaptive-text-color" type="b">
+      <default>true</default>
+      <summary>Adapt the top bar's text color to what is behind it</summary>
+    </key>
+    <key name="top-bar-sample-interval-ms" type="i">
+      <default>1000</default>
+      <summary>How often the top bar's text color is checked (ms)</summary>
+    </key>
+    <key name="top-bar-adaptive-text-preference" type="s">
+      <default>"auto"</default>
+      <summary>Preferred text color</summary>
+      <description>"light" or "dark" decides when both are equally readable; "auto" favours neither.</description>
+    </key>
+
+    <key name="enable-desktop-widgets" type="b">
+      <default>false</default>
+      <summary>Show widgets on the desktop</summary>
+    </key>
+    <key name="desktop-widgets" type="as">
+      <default>['weather', 'events', 'media']</default>
+      <summary>Desktop widgets</summary>
+      <description>Which widgets are shown: "weather", "events" (up next) and "media" (now playing).</description>
+    </key>
+    <key name="media-visualizer" type="b">
+      <default>true</default>
+      <summary>Bars that follow the sound on the Now Playing widget</summary>
+      <description>While a player plays, the widget listens to the default output and shows its loudness in five bands. GNOME shows the microphone indicator while it listens.</description>
+    </key>
+    <key name="desktop-widgets-position" type="s">
+      <default>"top-right"</default>
+      <summary>Where the widgets are stacked</summary>
+      <description>"top-left", "top-right", "bottom-left", "bottom-right" or "center" of the primary monitor. A widget that was dragged stays where it was dropped.</description>
+    </key>
+    <key name="desktop-widget-anchors" type="s">
+      <default>"{}"</default>
+      <summary>Where single widgets are stacked instead</summary>
+      <description>JSON: widget id to "top-left", "top-right", "bottom-left", "bottom-right" or "center", for the widgets put somewhere other than desktop-widgets-position from their menu.</description>
+    </key>
+    <key name="desktop-item-positions" type="s">
+      <default>"{}"</default>
+      <summary>Where desktop items were dragged</summary>
+      <description>JSON: item id to the fraction [x, y] of the work area its center was dropped at.</description>
+    </key>
+    <key name="weather-place" type="(sdd)">
+      <default>("", 0.0, 0.0)</default>
+      <summary>Place for the weather widget</summary>
+      <description>Name, latitude and longitude of a place found in the preferences. Empty: the location set in GNOME Weather.</description>
+    </key>
+    <key name="weather-temperature-unit" type="s">
+      <default>"auto"</default>
+      <summary>Temperature unit</summary>
+      <description>"auto", "celsius" or "fahrenheit".</description>
+    </key>
+    <key name="desktop-widget-tint-color" type="s">
+      <default>"#ffffff"</default>
+      <summary>Tint color (Hex)</summary>
+    </key>
+    <key name="desktop-widget-tint-strength" type="d">
+      <default>0.12</default>
+      <summary>Tint strength</summary>
+    </key>
+    <key name="desktop-widget-blur-radius" type="i">
+      <default>8</default>
+      <summary>Blur radius</summary>
+    </key>
+    <key name="desktop-widget-corner-radius" type="d">
+      <default>28.0</default>
+      <summary>Corner radius</summary>
+    </key>
+    <key name="desktop-widget-brightness" type="d">
+      <default>1.0</default>
+      <summary>Brightness</summary>
+    </key>
+    <key name="desktop-widget-contrast" type="d">
+      <default>1.0</default>
+      <summary>Contrast</summary>
+    </key>
+    <key name="desktop-widget-saturation" type="d">
+      <default>1.5</default>
+      <summary>Saturation</summary>
+    </key>
+    <key name="desktop-widget-enable-adaptive-text-color" type="b">
+      <default>true</default>
+      <summary>Adapt the desktop items' text color to what is behind them</summary>
+    </key>
+    <key name="desktop-widget-sample-interval-ms" type="i">
+      <default>2000</default>
+      <summary>How often the desktop items' text color is checked (ms)</summary>
+    </key>
+    <key name="desktop-widget-adaptive-text-preference" type="s">
+      <default>"auto"</default>
+      <summary>Preferred text color</summary>
+      <description>"light" or "dark" decides when both are equally readable; "auto" favours neither.</description>
+    </key>
+    <key name="enable-glass-clock" type="b">
+      <default>false</default>
+      <summary>Show a clock with glass digits on the desktop</summary>
+    </key>
+    <key name="glass-clock-position" type="s">
+      <default>"center"</default>
+      <summary>Where the glass clock is</summary>
+      <description>"top-left", "top-right", "bottom-left", "bottom-right" or "center" of the primary monitor, unless it was dragged.</description>
+    </key>
+    <key name="glass-clock-font" type="s">
+      <default>"Sofia Sans Extra Condensed SemiBold"</default>
+      <summary>Font of the glass clock</summary>
+      <description>A font description without a size, such as "Cantarell Bold": one of the fonts the extension ships (Antonio, Barlow Condensed, Saira Extra Condensed, Sofia Sans Extra Condensed) with a weight (Light, Regular, SemiBold, Bold), or any installed font. Empty uses the interface font in bold.</description>
+    </key>
+    <key name="glass-clock-size" type="i">
+      <range min="48" max="480"/>
+      <default>160</default>
+      <summary>Size of the glass clock's digits (px)</summary>
+    </key>
+    <key name="glass-clock-stretch" type="d">
+      <range min="0.3" max="4.0"/>
+      <default>1.0</default>
+      <summary>Width of the glass clock's digits, relative to their height</summary>
+    </key>
+    <key name="glass-clock-tall-style" type="s">
+      <choices>
+        <choice value="even"/>
+        <choice value="upright"/>
+      </choices>
+      <default>"even"</default>
+      <summary>How the glass clock's digits are made taller</summary>
+      <description>"even": the digits grow evenly, every stroke keeping its width. "upright": mostly their straight upright strokes grow, while curves, bars and the colon's dots keep their shape; the parts above and below a join in the middle grow alike.</description>
+    </key>
+    <key name="glass-clock-height" type="d">
+      <range min="1.0" max="3.0"/>
+      <default>1.0</default>
+      <summary>Height of the glass clock's digits, relative to the font</summary>
+      <description>Above 1 the digits are made taller as glass-clock-tall-style says, every stroke keeping its width.</description>
+    </key>
+    <key name="glass-clock-format" type="s">
+      <default>"system"</default>
+      <summary>Time format</summary>
+      <description>"system" follows the clock format in Settings, "24h" or "12h".</description>
+    </key>
+    <key name="glass-clock-show-date" type="b">
+      <default>true</default>
+      <summary>Show the date above the glass clock</summary>
+    </key>
+    <key name="glass-clock-tint-color" type="s">
+      <default>"#ffffff"</default>
+      <summary>Tint color (Hex)</summary>
+    </key>
+    <key name="glass-clock-tint-strength" type="d">
+      <default>0.16</default>
+      <summary>Tint strength</summary>
+    </key>
+    <key name="glass-clock-blur-radius" type="i">
+      <default>2</default>
+      <summary>Blur radius</summary>
+    </key>
+    <key name="glass-clock-brightness" type="d">
+      <default>1.15</default>
+      <summary>Brightness</summary>
+    </key>
+    <key name="glass-clock-contrast" type="d">
+      <default>1.0</default>
+      <summary>Contrast</summary>
+    </key>
+    <key name="glass-clock-saturation" type="d">
+      <default>1.3</default>
+      <summary>Saturation</summary>
+    </key>
+
+    <key name="enable-launcher" type="b">
+      <default>false</default>
+      <summary>Search launcher</summary>
+      <description>A search field on glass in the middle of the screen, opened with the launcher shortcut. It shows the same results as the overview's search.</description>
+    </key>
+    <key name="launcher-shortcut" type="as">
+      <default><![CDATA[['<Super><Alt>space']]]></default>
+      <summary>Shortcut that opens the launcher</summary>
+    </key>
+    <key name="launcher-tint-color" type="s">
+      <default>"#ffffff"</default>
+      <summary>Tint color (Hex)</summary>
+    </key>
+    <key name="launcher-tint-strength" type="d">
+      <default>0.16</default>
+      <summary>Tint strength</summary>
+    </key>
+    <key name="launcher-blur-radius" type="i">
+      <default>12</default>
+      <summary>Blur radius</summary>
+    </key>
+    <key name="launcher-corner-radius" type="d">
+      <default>28.0</default>
+      <summary>Corner radius</summary>
+    </key>
+    <key name="launcher-brightness" type="d">
+      <default>1.0</default>
+      <summary>Brightness</summary>
+    </key>
+    <key name="launcher-contrast" type="d">
+      <default>1.0</default>
+      <summary>Contrast</summary>
+    </key>
+    <key name="launcher-saturation" type="d">
+      <default>1.5</default>
+      <summary>Saturation</summary>
+    </key>
+    <key name="launcher-enable-adaptive-text-color" type="b">
+      <default>true</default>
+      <summary>Adapt the launcher's text color to what is behind it</summary>
+    </key>
+    <key name="launcher-sample-interval-ms" type="i">
+      <default>600</default>
+      <summary>How often the launcher's text color is checked (ms)</summary>
+    </key>
+    <key name="launcher-adaptive-text-preference" type="s">
+      <default>"auto"</default>
+      <summary>Preferred text color</summary>
+      <description>"light" or "dark" decides when both are equally readable; "auto" favours neither.</description>
     </key>
 
   </schema>

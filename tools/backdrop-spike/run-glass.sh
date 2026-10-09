@@ -7,8 +7,9 @@
 #   LG_DRV_SCENARIO   the driver's scenario (default: dock)
 #   LG_SPIKE_MONITOR  virtual monitor mode (default: 1920x1080)
 #   LG_MONITORS_XML   a monitors.xml to use (e.g. for a fractional scale)
-#   LG_EXTRA_EXTENSIONS  more UUIDs from ~/.local/share/gnome-shell/extensions to
-#                        enable (e.g. blur-my-shell@aunetx), space separated
+#   LG_EXTRA_EXTENSIONS  more UUIDs from ~/.local/share/gnome-shell/extensions or
+#                        /usr/share/gnome-shell/extensions to enable (e.g.
+#                        blur-my-shell@aunetx, ding@rastersoft.com), space separated
 #   LG_BENCH=1        also enable tools/perf/lg-bench@liquid-glass.test
 #   LG_SHELL_TIMEOUT  seconds before the shell is killed (default: 180)
 #   LG_X11=1          run an X11 session on Xvfb instead (GNOME 48 and older)
@@ -27,7 +28,7 @@ ext="$out/data/gnome-shell/extensions"
 mkdir -p "$out"/{config,cache,shots} "$ext"
 rm -rf "${ext:?}"/*
 mkdir -p "$ext/$lg_uuid"
-for f in metadata.json extension.js stylesheet.css dist shaders schemas; do
+for f in metadata.json extension.js stylesheet.css dist shaders schemas fonts; do
   cp -r "$repo/$lg_uuid/$f" "$ext/$lg_uuid/"
 done
 cp -r "$dtd_src" "$ext/$dtd_uuid"
@@ -38,7 +39,9 @@ if [ "${LG_BENCH:-}" = 1 ]; then
   extra=", 'lg-bench@liquid-glass.test'"
 fi
 for uuid in ${LG_EXTRA_EXTENSIONS:-}; do
-  cp -r "$HOME/.local/share/gnome-shell/extensions/$uuid" "$ext/"
+  src="$HOME/.local/share/gnome-shell/extensions/$uuid"
+  [ -d "$src" ] || src="/usr/share/gnome-shell/extensions/$uuid"
+  cp -r "$src" "$ext/"
   extra="$extra, '$uuid'"
 done
 if [ -n "${LG_MONITORS_XML:-}" ]; then

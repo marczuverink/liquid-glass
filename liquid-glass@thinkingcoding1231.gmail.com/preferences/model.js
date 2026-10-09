@@ -1,12 +1,17 @@
-export const SURFACES = ['dock', 'menu', 'panel-menu', 'notification', 'quick-settings', 'osd', 'application', 'desktop-menu'];
+export const SURFACES = ['dock', 'menu', 'panel-menu', 'notification', 'quick-settings', 'osd', 'application', 'desktop-menu',
+  'top-bar', 'desktop-widget', 'launcher'];
 
 export const sharedKeys = suffix => SURFACES.map(surface => `${surface}-${suffix}`);
 
-export const TEXT_KEYS = ['menu', 'panel-menu', 'notification', 'quick-settings', 'osd']
+export const ADAPTIVE_SURFACES = ['menu', 'panel-menu', 'notification', 'quick-settings', 'osd', 'top-bar',
+  'desktop-widget', 'launcher'];
+
+export const TEXT_KEYS = ADAPTIVE_SURFACES
   .map(surface => `${surface}-enable-adaptive-text-color`);
 export const MENU_KEYS = ['enable-menu-glass', 'enable-quick-settings-glass', 'enable-extra-menu-glass', 'enable-desktop-menu-glass'];
 export const POPUP_KEYS = ['enable-notification-glass', 'enable-osd-glass'];
 export const MOTION_KEYS = ['menu', 'panel-menu', 'quick-settings'].map(surface => `enable-${surface}-animation`);
+export const GROW_KEYS = ['menu', 'panel-menu'].map(surface => `${surface}-grow-from-button`);
 
 export function uniformPatch(keys, value) {
   return Object.fromEntries(keys.map(key => [key, value]));
@@ -38,6 +43,12 @@ export const QUALITY = [
   {title: 'Sharp', patch: {'blur-method': 0, 'glass-blur-downscale': 2}},
   {title: 'Balanced', patch: {'blur-method': 1, 'glass-blur-downscale': 2}},
   {title: 'Fast', patch: {'blur-method': 1, 'glass-blur-downscale': 4}},
+];
+
+export const TOP_BAR = [
+  {title: 'Off', patch: {'top-bar-style': 'off'}},
+  {title: 'One pill', patch: {'top-bar-style': 'pill'}},
+  {title: 'Three pills', patch: {'top-bar-style': 'islands'}},
 ];
 
 export const booleanChoices = keys => [

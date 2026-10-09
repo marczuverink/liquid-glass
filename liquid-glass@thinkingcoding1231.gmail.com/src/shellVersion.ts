@@ -1,5 +1,6 @@
 import Clutter from 'gi://Clutter';
 import Cogl from 'gi://Cogl';
+import Meta from 'gi://Meta';
 import type Mtk from 'gi://Mtk';
 import St from 'gi://St';
 import * as Config from 'resource:///org/gnome/shell/misc/config.js';
@@ -10,6 +11,8 @@ export const SHELL_MAJOR = parseInt(Config.PACKAGE_VERSION, 10);
 // PopupMenu.open() and close() take {animate} from GNOME 51 on, and a
 // BoxPointer.PopupAnimation (0 for none) before.
 export const MENU_NO_ANIMATION: any = SHELL_MAJOR >= 51 ? { animate: false } : 0;
+// BoxPointer.PopupAnimation.FULL is ~0.
+export const MENU_ANIMATION: any = SHELL_MAJOR >= 51 ? { animate: true } : ~0;
 
 // GNOME 51 has no Clutter.get_default_backend(); the stage's context, which
 // the shell itself uses from 48 on, does not exist in 46.
@@ -65,6 +68,48 @@ export function undoCloneScale(clone: Clutter.Clone, volume: Clutter.PaintVolume
     volume.set_width(volume.get_width() / sx);
     volume.set_height(volume.get_height() / sy);
   }
+}
+
+// The properties that make an St.BoxLayout stack its children vertically:
+// `orientation` from GNOME 48 on; before, `vertical`, which GNOME 51 removed.
+export function verticalBoxParams(): { orientation: Clutter.Orientation } | { vertical: boolean } {
+  return SHELL_MAJOR >= 48 ? { orientation: Clutter.Orientation.VERTICAL } : { vertical: true };
+}
+
+export type CursorShape = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw' | 'move';
+
+const CLUTTER_CURSORS: Record<CursorShape, string> = {
+  n: 'N_RESIZE', s: 'S_RESIZE', e: 'E_RESIZE', w: 'W_RESIZE',
+  ne: 'NE_RESIZE', nw: 'NW_RESIZE', se: 'SE_RESIZE', sw: 'SW_RESIZE', move: 'MOVE',
+};
+
+const META_CURSORS: Record<CursorShape, string> = {
+  n: 'NORTH_RESIZE', s: 'SOUTH_RESIZE', e: 'EAST_RESIZE', w: 'WEST_RESIZE',
+  ne: 'NE_RESIZE', nw: 'NW_RESIZE', se: 'SE_RESIZE', sw: 'SW_RESIZE', move: 'MOVE_OR_RESIZE_WINDOW',
+};
+
+// Shows `shape` while the pointer is over `actor`. From GNOME 50 on an actor
+// has a cursor of its own; before, the display's cursor is set on entering it.
+export function setHoverCursor(actor: Clutter.Actor, shape: CursorShape): void {
+  if (SHELL_MAJOR >= 50) {
+    (actor as any).set_cursor_type((Clutter as any).CursorType[CLUTTER_CURSORS[shape]]);
+    return;
+  }
+  const cursor = (Meta as any).Cursor[META_CURSORS[shape]];
+  actor.connect('enter-event', () => {
+    (global.display as any).set_cursor(cursor);
+    return Clutter.EVENT_PROPAGATE;
+  });
+  actor.connect('leave-event', () => {
+    (global.display as any).set_cursor((Meta as any).Cursor.DEFAULT);
+    return Clutter.EVENT_PROPAGATE;
+  });
+}
+
+// The pointer's own cursor again, for when actors given one by
+// setHoverCursor() go away under it (GNOME 49 and older).
+export function resetHoverCursor(): void {
+  if (SHELL_MAJOR < 50) (global.display as any).set_cursor((Meta as any).Cursor.DEFAULT);
 }
 
 // The Quick Settings toggle with a menu arrow: `.quick-menu-toggle` until

@@ -1,6 +1,7 @@
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
 import {SURFACE_OPTIONS, APPEARANCE, LAYOUT, SPRING, OPTICS, LIGHTING, SHADOWS} from './advanced-model.js';
+import {ADAPTIVE_SURFACES, TOP_BAR} from './model.js';
 import {addPanelMenus} from './panel-menus.js';
 
 function addNumbers(group, controls, specs, prefix = '', slider = true) {
@@ -11,12 +12,16 @@ function addNumbers(group, controls, specs, prefix = '', slider = true) {
 function addMotion(group, controls, surface) {
   const key = `enable-${surface}-animation`;
   const toggle = controls.toggle(group, 'Animations', key);
+  const grow = surface === 'quick-settings' ? null
+    : controls.toggle(group, 'Grow from the button', `${surface}-grow-from-button`,
+      'The glass leaves the button as a drop and stretches into the menu');
   // Spring constants and intervals mean their number; no slider.
   const rows = addNumbers(group, controls, SPRING, `${surface}-`, false);
   const keys = surface === 'quick-settings' ? [key, 'quick-settings-apply-to'] : [key];
   controls.watch(keys, () => {
     const panel = surface !== 'quick-settings' || controls.settings.get_value('quick-settings-apply-to').deep_unpack() === 0;
     toggle.visible = panel;
+    if (grow) grow.visible = controls.settings.get_boolean(key);
     for (const row of rows.values()) row.visible = panel && controls.settings.get_boolean(key);
   });
 }
@@ -44,16 +49,16 @@ function addSurface(page, controls, surface, title) {
   controls.color(group, 'Tint', [`${surface}-tint-color`]);
   addLayout(group, controls, surface, appearance);
   if (['menu', 'panel-menu', 'quick-settings'].includes(surface)) addMotion(group, controls, surface);
-  if (['menu', 'panel-menu', 'notification', 'quick-settings', 'osd'].includes(surface)) {
+  if (ADAPTIVE_SURFACES.includes(surface)) {
     const key = `${surface}-enable-adaptive-text-color`;
     controls.toggle(group, 'Automatic text contrast', key);
     const row = controls.number(group, 'Contrast interval (ms)', [`${surface}-sample-interval-ms`], 100, 2000, 50);
     const preferenceKey = `${surface}-adaptive-text-preference`;
-    const preference = controls.choice(group, 'Preferred text colour', [
+    const preference = controls.choice(group, 'Preferred text color', [
       {title: 'Automatic', patch: {[preferenceKey]: 'auto'}},
       {title: 'Light', patch: {[preferenceKey]: 'light'}},
       {title: 'Dark', patch: {[preferenceKey]: 'dark'}},
-    ], 'Decides only when both colours are equally readable', false);
+    ], 'Decides only when both colors are equally readable', false);
     controls.watch([key], () => {
       row.visible = controls.settings.get_boolean(key);
       preference.visible = row.visible;
@@ -77,8 +82,8 @@ function addRendering(page, controls) {
     const group = controls.group(page, title);
     addNumbers(group, controls, specs);
     if (specs === LIGHTING) {
-      controls.toggle(group, 'Colour from backdrop', 'glass-backdrop-highlights',
-        'Light takes the colour of what is behind the glass instead of white');
+      controls.toggle(group, 'Color from backdrop', 'glass-backdrop-highlights',
+        'Light takes the color of what is behind the glass instead of white');
     }
     groups.push(group);
   }
@@ -93,7 +98,8 @@ export function buildAdvancedPreferences(pages, controls) {
   const surfaces = new Map();
   const effects = controls.group(pages.effects, 'Individual effects');
   for (const [surface, title, key, hint] of SURFACE_OPTIONS) {
-    if (surface !== 'application') controls.toggle(effects, title, key, hint ?? '');
+    if (key && surface !== 'application') controls.toggle(effects, title, key, hint ?? '');
+    else if (surface === 'top-bar') controls.choice(effects, title, TOP_BAR, 'The bar itself; menus are below', false);
   }
   const groups = [selectorGroup, effects, addPanelMenus(pages.effects, controls),
     ...addRendering(pages.rendering, controls)];

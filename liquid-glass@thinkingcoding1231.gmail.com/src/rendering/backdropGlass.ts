@@ -23,6 +23,8 @@ export interface GlassActorParams {
   logger?: Logger;
   // The owning manager, shown by global._lgGlass.dump().
   owner?: string;
+  // The outline comes from a distance field (setShapeTexture()).
+  shapeTexture?: boolean;
 }
 
 /**
@@ -81,6 +83,7 @@ export const GlassActor = GObject.registerClass(
         logger: params.logger,
         repaint: () => this._queueRepaint(),
         setDiagnostics: enabled => { this._diagEnabled = enabled; },
+        shapeTexture: params.shapeTexture,
       });
 
       registerGlass(this);
@@ -316,6 +319,9 @@ export const GlassActor = GObject.registerClass(
     setResolution(width: number, height: number): void { this._renderer.setResolution(width, height); }
     setGlassGeometry(x: number, y: number, w: number, h: number): void { this._renderer.setGlassGeometry(x, y, w, h); }
     setMultiRegionMode(enabled: boolean): void { this._renderer.setMultiRegionMode(enabled); }
+    setShapeTexture(texture: Cogl.Texture | null, range: number, band: number): void {
+      this._renderer.setShapeTexture(texture, range, band);
+    }
     setGlassRegions(regions: GlassRegion[]): void { this._renderer.setGlassRegions(regions); }
     setBrightness(brightness: number): void { this._renderer.setBrightness(brightness); }
     setContrast(contrast: number): void { this._renderer.setContrast(contrast); }

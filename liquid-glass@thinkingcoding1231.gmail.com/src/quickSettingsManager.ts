@@ -45,13 +45,26 @@ function _collectSubmenus(actor: Clutter.Actor, into: Clutter.Actor[]): void {
   for (let child of actor.get_children()) _collectSubmenus(child, into);
 }
 
+// Where `actor` is in `ancestor` as laid out, without the transforms of the
+// open and close animations, or null when it is not inside it.
+function _layoutOrigin(actor: Clutter.Actor, ancestor: Clutter.Actor): [number, number] | null {
+  let x = 0, y = 0;
+  let node: Clutter.Actor | null = actor;
+  for (; node && node !== ancestor; node = node.get_parent()) {
+    const box = node.get_allocation_box();
+    x += box.x1;
+    y += box.y1;
+  }
+  return node && Number.isFinite(x) && Number.isFinite(y) ? [x, y] : null;
+}
+
 type SubmenuGap = { subCenterY: number, aboveMaxY: number, belowMinY: number };
 
-function _recordSubmenuNeighbour(n: Clutter.Actor, gap: SubmenuGap): boolean {
-  let [, nodeY] = n.get_transformed_position();
+function _recordSubmenuNeighbour(n: Clutter.Actor, root: Clutter.Actor, gap: SubmenuGap): boolean {
+  const origin = _layoutOrigin(n, root);
   let [nodeW, nodeH] = getAllocatedSize(n);
-  if (Number.isNaN(nodeY) || Number.isNaN(nodeW) || Number.isNaN(nodeH) ||
-    nodeH <= 5 || nodeW <= 5) return false;
+  if (!origin || Number.isNaN(nodeW) || Number.isNaN(nodeH) || nodeH <= 5 || nodeW <= 5) return false;
+  const nodeY = origin[1];
 
   // The lowest item above the submenu's centre and the highest one below it.
   if (nodeY + (nodeH / 2) < gap.subCenterY) {
@@ -62,10 +75,10 @@ function _recordSubmenuNeighbour(n: Clutter.Actor, gap: SubmenuGap): boolean {
   return true;
 }
 
-function _findSubmenuGap(n: Clutter.Actor, submenu: Clutter.Actor, gap: SubmenuGap): void {
+function _findSubmenuGap(n: Clutter.Actor, submenu: Clutter.Actor, root: Clutter.Actor, gap: SubmenuGap): void {
   if (!n || !n.visible || !n.mapped || n === submenu) return;
-  if (!n.contains(submenu) && !_recordSubmenuNeighbour(n, gap)) return;
-  for (let child of n.get_children()) _findSubmenuGap(child, submenu, gap);
+  if (!n.contains(submenu) && !_recordSubmenuNeighbour(n, root, gap)) return;
+  for (let child of n.get_children()) _findSubmenuGap(child, submenu, root, gap);
 }
 
 type ToggleRegionLayout = {
@@ -163,6 +176,7 @@ export class QuickSettingsManager {
   private _animationInterval: number = 16;
 
   private _cachedSubmenus: Clutter.Actor[] | null = null;
+  private _submenuAfterUpdateId = 0;
 
   // quick-settings-apply-to, and the mode actually running.
   private _applyTo: 'background' | 'toggles' = 'background';
@@ -478,7 +492,7 @@ export class QuickSettingsManager {
 
     this._animSignalId = this.menu.connect('open-state-changed', (menu, isOpen: boolean) => {
       if (isOpen) {
-        this._cachedSubmenus = null;
+        this._forgetSubmenus();
 
         this._applyClassStyles();
         this._applyMenuOffsets();
@@ -506,6 +520,7 @@ export class QuickSettingsManager {
       id: this.menu.actor.connect('notify::mapped', () => {
         if (!this.menu.actor.mapped) {
           stopFrameSync();
+          this._forgetSubmenus();
 
           if (this.glass) {
             this.glass.hide();
@@ -618,7 +633,7 @@ export class QuickSettingsManager {
     // panel keeps its own look, and ToggleStyles owns the toggles' styles.
     this._animSignalId = this.menu.connect('open-state-changed', (menu, isOpen: boolean) => {
       if (isOpen) {
-        this._cachedSubmenus = null;
+        this._forgetSubmenus();
         startFrameSync();
         this._startAdaptiveColorSampling(true);
         this._toggleStyles.start();
@@ -634,6 +649,7 @@ export class QuickSettingsManager {
       id: this.menu.actor.connect('notify::mapped', () => {
         if (!this.menu.actor.mapped) {
           stopFrameSync();
+          this._forgetSubmenus();
           if (this.glass) {
             this.glass.hide();
             this.glass.opacity = 0;
@@ -1419,61 +1435,57 @@ export class QuickSettingsManager {
   }
 
   // Centres an open submenu horizontally in the menu and vertically in the
-  // gap between the items above and below it.
+  // gap between the items above and below it. Everything is measured as laid
+  // out in the menu's BoxPointer, which holds both the panel and the
+  // submenus: the panel's scale while it opens would skew the result, and so
+  // would the shell's own offset for the submenus, which it reads with that
+  // scale applied.
   _adjustSubmenuPositions() {
     if (!this.menu?.isOpen || !this.animActor) return;
 
     if (!this._cachedSubmenus) {
       this._cachedSubmenus = [];
       _collectSubmenus(this.menu.actor, this._cachedSubmenus);
+      // The frame loop reads the layout before it is updated, and the last
+      // change (the shell moving its submenus, a submenu taking its final
+      // height) may come with no frame after it; so every frame checks again
+      // once its layout is done.
+      this._submenuAfterUpdateId = global.stage.connect('after-update', () => this._adjustSubmenuPositions());
     }
 
-    let foundMenus: Clutter.Actor[] = this._cachedSubmenus;
-
-    if (foundMenus.length === 0) return;
-
-    let [parentAbsX, parentAbsY] = this.animActor.get_transformed_position();
-    // Allocated sizes, to match the allocation-based positions.
+    const root = this.targetActor;
+    const parent = _layoutOrigin(this.animActor, root);
     let [parentW, parentH] = getAllocatedSize(this.animActor);
+    if (!parent || Number.isNaN(parentW) || Number.isNaN(parentH) || parentW <= 0 || parentH <= 0) return;
 
-    if (Number.isNaN(parentAbsX) || Number.isNaN(parentAbsY) ||
-      Number.isNaN(parentW) || Number.isNaN(parentH) ||
-      parentW <= 0 || parentH <= 0) return;
-
-    for (let submenu of foundMenus)
-      this._centerSubmenu(submenu, parentAbsX, parentAbsY, parentW, parentH);
+    for (let submenu of this._cachedSubmenus)
+      this._centerSubmenu(submenu, root, parent, parentW, parentH);
   }
 
-  private _centerSubmenu(submenu: Clutter.Actor, parentAbsX: number, parentAbsY: number, parentW: number, parentH: number) {
+  private _centerSubmenu(submenu: Clutter.Actor, root: Clutter.Actor, [parentX, parentY]: [number, number],
+    parentW: number, parentH: number) {
     if (!submenu.mapped || !submenu.visible) return;
 
-    let [subAbsX, subAbsY] = submenu.get_transformed_position();
+    const origin = _layoutOrigin(submenu, root);
     let [subW, subH] = getAllocatedSize(submenu);
+    if (!origin || Number.isNaN(subW) || Number.isNaN(subH) || subW <= 0 || subH <= 0) return;
+    const [subX, subY] = origin;
 
-    if (Number.isNaN(subAbsX) || Number.isNaN(subAbsY) ||
-      Number.isNaN(subW) || Number.isNaN(subH) ||
-      subW <= 0 || subH <= 0) return;
+    const translationX = parentX + (parentW - subW) / 2 - subX;
+    if (Math.abs(submenu.translation_x - translationX) > 0.5) submenu.translation_x = translationX;
 
-    let currentTranslationX = submenu.translation_x || 0;
-    let baseRelativeX = subAbsX - parentAbsX - currentTranslationX;
-    let targetRelativeX = (parentW - subW) / 2;
-    let newTranslationX = targetRelativeX - baseRelativeX;
-    if (Math.abs(currentTranslationX - newTranslationX) > 0.5) {
-      submenu.translation_x = newTranslationX;
-    }
-
-    let currentTranslationY = submenu.translation_y || 0;
-    let baseAbsY = subAbsY - currentTranslationY;
-    const gap = { subCenterY: baseAbsY + (subH / 2), aboveMaxY: parentAbsY, belowMinY: parentAbsY + parentH };
-
-    for (let child of this.animActor.get_children()) _findSubmenuGap(child, submenu, gap);
-
-    let targetTranslationY = (gap.aboveMaxY + (gap.belowMinY - gap.aboveMaxY) / 2) - (subH / 2) - baseAbsY;
+    const gap = { subCenterY: subY + (subH / 2), aboveMaxY: parentY, belowMinY: parentY + parentH };
+    for (let child of this.animActor.get_children()) _findSubmenuGap(child, submenu, root, gap);
+    const translationY = (gap.aboveMaxY + gap.belowMinY) / 2 - (subH / 2) - subY;
 
     // Sub-pixel changes are ignored so it cannot jitter.
-    if (Math.abs(currentTranslationY - targetTranslationY) > 0.5) {
-      submenu.translation_y = targetTranslationY;
-    }
+    if (Math.abs(submenu.translation_y - translationY) > 0.5) submenu.translation_y = translationY;
+  }
+
+  private _forgetSubmenus() {
+    if (this._submenuAfterUpdateId) global.stage.disconnect(this._submenuAfterUpdateId);
+    this._submenuAfterUpdateId = 0;
+    this._cachedSubmenus = null;
   }
 
   _clearSubmenuFix() {
@@ -1482,9 +1494,9 @@ export class QuickSettingsManager {
     if (foundMenus.length === 0 && this.menu?.actor) _collectSubmenus(this.menu.actor, foundMenus);
 
     for (let submenu of foundMenus)
-      submenu.translation_x = 0;
+      submenu.set_translation(0, 0, 0);
 
-    this._cachedSubmenus = null;
+    this._forgetSubmenus();
   }
 
   _removeEffect() {

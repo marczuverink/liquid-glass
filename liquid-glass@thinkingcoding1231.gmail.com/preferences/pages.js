@@ -1,9 +1,10 @@
 import Adw from 'gi://Adw';
 import {PreferenceControls} from './controls.js';
 import {WindowRules} from './windows.js';
-import {sharedKeys, TEXT_KEYS, MENU_KEYS, POPUP_KEYS, MOTION, QUALITY, booleanChoices} from './model.js';
+import {sharedKeys, TEXT_KEYS, MENU_KEYS, POPUP_KEYS, MOTION, GROW_KEYS, QUALITY, TOP_BAR, booleanChoices} from './model.js';
 import {buildAdvancedPreferences} from './advanced.js';
 import {addBlurMyShellWarning} from './blur-my-shell.js';
+import {buildDesktopPage} from './desktop.js';
 
 function collectGroups(page, build) {
   const added = [];
@@ -32,6 +33,7 @@ export function buildPreferences(window, settings) {
 
   const appearance = page('Appearance', 'preferences-desktop-appearance-symbolic');
   const effects = page('Effects', 'preferences-other-symbolic');
+  const desktop = page('Desktop', 'user-desktop-symbolic');
   const advanced = page('Rendering', 'applications-engineering-symbolic');
   addBlurMyShellWarning(appearance, controls);
   const view = controls.group(appearance, 'Settings');
@@ -47,12 +49,15 @@ export function buildPreferences(window, settings) {
 
   const behavior = controls.group(appearance, 'Behavior');
   controls.choice(behavior, 'Animations', MOTION);
+  controls.choice(behavior, 'Menus grow from their button', booleanChoices(GROW_KEYS),
+    'Calendar and other top bar menus, while animations are on');
   controls.choice(behavior, 'Automatic text contrast', booleanChoices(TEXT_KEYS));
   controls.choice(behavior, 'Match menu heights', booleanChoices([
     'menu-match-quick-settings-height', 'panel-menu-match-quick-settings-height',
   ]));
 
   const surfaces = controls.group(effects, 'Show glass on');
+  controls.choice(surfaces, 'Top bar', TOP_BAR, 'The bar itself; menus are below', false);
   controls.toggle(surfaces, 'Dock', 'enable-dock-glass');
   controls.choice(surfaces, 'Menus', booleanChoices(MENU_KEYS), 'Calendar, quick settings, other top bar menus and desktop');
   controls.choice(surfaces, 'Popups', booleanChoices(POPUP_KEYS), 'Notifications and volume / brightness indicators');
@@ -67,6 +72,8 @@ export function buildPreferences(window, settings) {
     {title: 'Strong', patch: {'shadow-radius': 50, 'shadow-intensity': 0.5}},
   ]);
   controls.number(rendering, 'Edge shading', ['glass-ao-intensity'], 0, 1, 0.05, '', {slider: true});
+
+  buildDesktopPage(desktop, controls);
 
   const effectsTail = collectGroups(effects, () => {
     new WindowRules(settings, controls).add(effects);

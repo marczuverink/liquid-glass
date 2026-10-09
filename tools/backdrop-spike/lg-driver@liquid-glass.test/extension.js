@@ -17,6 +17,11 @@
 //   adaptive   adaptive text colour: the backdrop read against a bare screen,
 //              the colours while a menu opens, hovered rows, and the OSD while
 //              its level changes
+//   features   the top bar, menus growing out of their buttons, the desktop
+//              widgets, the glass clock and the launcher, on a photo wallpaper
+//              ($LG_DRV_WALLPAPER); LG_DRV_FEATURES picks parts (comma
+//              separated: morph, topbar, widgets, clock, launcher; default all;
+//              also morphtrace, qssub, clockshot, media)
 //   bench      global._lgBench.run() (run-glass.sh with LG_BENCH=1); LG_DRV_BENCH
 //              picks scenarios (comma separated, default all), LG_DRV_BENCH_SECONDS
 //              the seconds per scenario (default 3), LG_DRV_BENCH_AB=1 adds a run without UI glass
@@ -196,6 +201,17 @@ function glassRow(owner) {
   return glassRows().find(r => r.owner === owner) ?? null;
 }
 
+function findActors(root, test) {
+  const out = test(root) ? [root] : [];
+  for (const child of root.get_children())
+    out.push(...findActors(child, test));
+  return out;
+}
+
+function findActor(root, name) {
+  return findActors(root, a => a.get_name() === name)[0] ?? null;
+}
+
 function delta(a, b) {
   if (!a || !b)
     return 'n/a';
@@ -280,6 +296,8 @@ export default class LgDriver extends Extension {
       await this._arcMenuScenario();
     else if (SCENARIO === 'adaptive')
       await this._adaptiveScenario();
+    else if (SCENARIO === 'features')
+      await this._featuresScenario();
     log(`dump\n${lg().dump()}`);
   }
 
@@ -1188,6 +1206,495 @@ export default class LgDriver extends Extension {
     log(`toggles after enable: ${JSON.stringify(this._glass('quick-settings-toggles')?.stats ?? null)}`);
     qs.close(true);
     await sleep(600);
+  }
+
+  async _lgModule(path) {
+    return import(`file://${Extension.lookupByUUID(LG_UUID).path}/dist/${path}`);
+  }
+
+  // Runs the menus' morphs `factor` times slower, so shots catch them midway.
+  async _slowMorph(factor) {
+    const {MenuMorphMotion} = await this._lgModule('animation/menuMorph.js');
+    const step = MenuMorphMotion.prototype._drvStep ?? MenuMorphMotion.prototype.step;
+    MenuMorphMotion.prototype._drvStep = step;
+    MenuMorphMotion.prototype.step = function (elapsed) {
+      return step.call(this, elapsed / factor);
+    };
+  }
+
+  async _timedShots(tag, rect, times) {
+    const start = GLib.get_monotonic_time();
+    for (const t of times) {
+      const wait = t - (GLib.get_monotonic_time() - start) / 1000;
+      if (wait > 0)
+        await sleep(wait);
+      await shot(`${tag}-${t}`, rect);
+    }
+  }
+
+  // Moves and resizes the clock through its menu and edit frame, with a
+  // virtual pointer. With Desktop Icons (run-glass.sh with
+  // LG_EXTRA_EXTENSIONS=ding@rastersoft.com) the clock has to be above its window.
+  async _editClock(settings, m) {
+    const clock = findActor(global.window_group, 'liquid-glass-desktop-clock');
+    if (!clock) {
+      log('edit: no clock');
+      return;
+    }
+    // A new pointer starts in the hot corner and would open the overview.
+    new Gio.Settings({schema_id: 'org.gnome.desktop.interface'}).set_boolean('enable-hot-corners', false);
+    await sleep(300);
+    const backend = SHELL_MAJOR >= 48 ? global.stage.context.get_backend() : Clutter.get_default_backend();
+    const pointer = backend.get_default_seat().create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
+    await sleep(300);
+    if (Main.overview.visible) {
+      Main.overview.hide();
+      await sleep(1500);
+    }
+    const t = () => GLib.get_monotonic_time();
+    const move = async (x, y) => {
+      pointer.notify_absolute_motion(t(), x, y);
+      await sleep(60);
+    };
+    const click = async (x, y, button = Clutter.BUTTON_PRIMARY) => {
+      await move(x, y);
+      pointer.notify_button(t(), button, Clutter.ButtonState.PRESSED);
+      await sleep(60);
+      pointer.notify_button(t(), button, Clutter.ButtonState.RELEASED);
+      await sleep(300);
+    };
+    const drag = async ([x, y], [dx, dy]) => {
+      await move(x, y);
+      pointer.notify_button(t(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.PRESSED);
+      for (let i = 1; i <= 10; i++)
+        await move(x + dx * i / 10, y + dy * i / 10);
+      pointer.notify_button(t(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.RELEASED);
+      await sleep(300);
+    };
+    const pickChain = (x, y) => {
+      const chain = [];
+      for (let a = global.stage.get_actor_at_pos(Clutter.PickMode.REACTIVE, x, y); a; a = a.get_parent())
+        chain.push(a.get_name() || a.constructor.name);
+      return chain.slice(0, 4).join(' < ');
+    };
+    const container = clock.get_parent();
+    const below = container.get_previous_sibling();
+    log(`edit: container parent=${container.get_parent().constructor.name} ` +
+      `below=${below?.get_meta_window?.()?.get_title() ?? below?.constructor.name}`);
+
+    const [cx, cy] = clock.get_transformed_position();
+    const [cw, ch] = clock.get_transformed_size();
+    const centre = [cx + cw / 2, cy + ch * 0.7];
+    log(`edit: pick on the clock: ${pickChain(...centre)}`);
+    // A plain drag must not move it.
+    await drag(centre, [-200, 0]);
+    log(`edit: plain drag moved it by ${Math.round(clock.get_transformed_position()[0] - cx)}`);
+
+    await click(...centre, Clutter.BUTTON_SECONDARY);
+    await sleep(500);
+    const menuItems = Main.layoutManager.uiGroup.get_children()
+      .flatMap(c => findActors(c, a => a instanceof PopupMenu.PopupMenuItem && a.mapped));
+    log(`edit: menu items=${menuItems.map(i => i.label.text).join(',')}`);
+    await shot('clock-menu', [m.x, m.y, m.width, m.height]);
+    const editItem = menuItems.find(i => i.label.text === 'Move and Resize');
+    if (!editItem) return;
+    const [ix, iy] = editItem.get_transformed_position();
+    await click(ix + 20, iy + 10);
+    await sleep(500);
+    const layer = Main.layoutManager.uiGroup.get_children().find(c => c.get_name() === 'liquid-glass-edit');
+    log(`edit: frame=${!!layer} modal=${Main.modalCount}`);
+    await shot('clock-edit', [m.x, m.y, m.width, m.height]);
+    if (!layer) return;
+
+    await drag(centre, [-300, -100]);
+    await sleep(800);
+    log(`edit: moved by ${Math.round(clock.get_transformed_position()[0] - cx)},` +
+      `${Math.round(clock.get_transformed_position()[1] - cy)} positions=${settings.get_string('desktop-item-positions')}`);
+
+    // The right edge's handle, then the bottom's.
+    const handles = layer.get_children().filter(c => c.has_style_class_name('liquid-glass-edit-handle'));
+    const handleCentre = h => {
+      const [hx, hy] = h.get_transformed_position();
+      return [hx + h.width / 2, hy + h.height / 2];
+    };
+    const sizeBefore = [settings.get_int('glass-clock-size'), settings.get_double('glass-clock-stretch')];
+    await drag(handleCentre(handles[3]), [200, 0]);
+    await sleep(2500);
+    log(`edit: wider: size,stretch ${sizeBefore} -> ${settings.get_int('glass-clock-size')},` +
+      `${settings.get_double('glass-clock-stretch')}`);
+    await shot('clock-wider', [m.x, m.y, m.width, m.height]);
+    await drag(handleCentre(handles[5]), [0, 120]);
+    await sleep(2500);
+    log(`edit: taller: size,stretch,height ${settings.get_int('glass-clock-size')},` +
+      `${settings.get_double('glass-clock-stretch')},${settings.get_double('glass-clock-height')}`);
+    await shot('clock-taller', [m.x, m.y, m.width, m.height]);
+
+    // A click outside ends it.
+    await click(m.x + 40, m.y + m.height - 60);
+    await sleep(500);
+    log(`edit: ended frame=${!!Main.layoutManager.uiGroup.get_children().find(c => c.get_name() === 'liquid-glass-edit')} ` +
+      `modal=${Main.modalCount}`);
+    await shot('clock-edited', [m.x, m.y, m.width, m.height]);
+
+    // Position > Top Left puts it back at a corner.
+    const [ex, ey] = clock.get_transformed_position();
+    const [ew, eh] = clock.get_transformed_size();
+    await click(ex + ew / 2, ey + eh * 0.7, Clutter.BUTTON_SECONDARY);
+    await sleep(500);
+    const items = () => Main.layoutManager.uiGroup.get_children()
+      .flatMap(c => findActors(c, a => a instanceof PopupMenu.PopupBaseMenuItem && a.mapped));
+    const label = i => i.label?.text ?? '';
+    const sub = items().find(i => label(i) === 'Position');
+    if (!sub) return;
+    const [sx, sy] = sub.get_transformed_position();
+    await click(sx + 20, sy + 10);
+    await sleep(600);
+    await shot('clock-position-menu', [m.x, m.y, m.width, m.height]);
+    const topLeft = items().find(i => label(i) === 'Top Left');
+    log(`edit: position items=${items().map(label).join(',')}`);
+    if (!topLeft) return;
+    const [tx, ty] = topLeft.get_transformed_position();
+    await click(tx + 20, ty + 10);
+    await sleep(1500);
+    log(`edit: placed position=${settings.get_string('glass-clock-position')} ` +
+      `moved=${settings.get_string('desktop-item-positions')} at=${clock.get_transformed_position().map(Math.round)}`);
+
+    // A widget goes to a corner of its own the same way.
+    const weather = findActor(global.window_group, 'liquid-glass-desktop-weather');
+    if (!weather?.mapped) return;
+    const [wx, wy] = weather.get_transformed_position();
+    await click(wx + 40, wy + 40, Clutter.BUTTON_SECONDARY);
+    await sleep(500);
+    const wsub = items().find(i => label(i) === 'Position');
+    if (!wsub) return;
+    const [wsx, wsy] = wsub.get_transformed_position();
+    await click(wsx + 20, wsy + 10);
+    await sleep(600);
+    const bottomLeft = items().find(i => label(i) === 'Bottom Left');
+    if (!bottomLeft) return;
+    const [bx, by] = bottomLeft.get_transformed_position();
+    await click(bx + 20, by + 10);
+    await sleep(1500);
+    log(`edit: weather placed anchors=${settings.get_string('desktop-widget-anchors')} ` +
+      `at=${weather.get_transformed_position().map(Math.round)}`);
+    await shot('widget-position', [m.x, m.y, m.width, m.height]);
+  }
+
+  async _featuresScenario() {
+    const parts = (GLib.getenv('LG_DRV_FEATURES') ?? 'morph,topbar,widgets,clock,launcher').split(',');
+    const settings = this._lgSettings();
+    const wallpaper = GLib.getenv('LG_DRV_WALLPAPER');
+    if (wallpaper) {
+      const bg = new Gio.Settings({schema_id: 'org.gnome.desktop.background'});
+      bg.set_string('picture-uri', `file://${wallpaper}`);
+      bg.set_string('picture-uri-dark', `file://${wallpaper}`);
+      bg.set_string('picture-options', 'zoom');
+      await sleep(2000);
+    }
+    const m = Main.layoutManager.primaryMonitor;
+    // Menus grow from their button only when asked to.
+    if (parts.some(p => p.startsWith('morph'))) {
+      for (const surface of ['menu', 'panel-menu']) settings.set_boolean(`${surface}-grow-from-button`, true);
+      await sleep(500);
+    }
+    if (parts.includes('morph')) {
+      await this._slowMorph(12);
+      const dateMenu = Main.panel.statusArea.dateMenu.menu;
+      dateMenu.open(true);
+      await this._timedShots('morph-open', [m.x + m.width / 4, m.y, m.width / 2, 700],
+        [150, 700, 1300, 1800, 2400, 3000, 4500, 7000, 9500]);
+      await sleep(1000);
+      dateMenu.close(true);
+      await this._timedShots('morph-close', [m.x + m.width / 4, m.y, m.width / 2, 700],
+        [150, 1600, 3000, 4500, 6000, 7000, 8000, 9000, 10000, 11500]);
+      await sleep(2000);
+      await this._slowMorph(1);
+    }
+    if (parts.includes('morphtrace')) {
+      // Every frame of the calendar's glass at full speed.
+      const {MenuMorphMotion} = await this._lgModule('animation/menuMorph.js');
+      const step = MenuMorphMotion.prototype.step;
+      const t0 = GLib.get_monotonic_time();
+      MenuMorphMotion.prototype.step = function (elapsed) {
+        const f = step.call(this, elapsed);
+        const r = n => n.map(v => v.toFixed(1)).join(',');
+        log(`trace t=${((GLib.get_monotonic_time() - t0) / 1000).toFixed(0)} opening=${this.opening} ` +
+          `body=${r(f.body)} radius=${f.bodyRadius.toFixed(1)} ` +
+          `content=${f.contentScale.toFixed(2)}/${f.contentOpacity.toFixed(2)} lens=${f.lens.toFixed(2)} ` +
+          `glass=${f.glassOpacity.toFixed(2)}`);
+        return f;
+      };
+      const retarget = MenuMorphMotion.prototype.retarget;
+      MenuMorphMotion.prototype.retarget = function (button, menu, radius) {
+        const key = menu ? menu.map(v => v.toFixed(1)).join(',') : 'null';
+        if (key !== this._drvMenuKey) {
+          log(`trace t=${((GLib.get_monotonic_time() - t0) / 1000).toFixed(0)} menu=${key}`);
+          this._drvMenuKey = key;
+        }
+        return retarget.call(this, button, menu, radius);
+      };
+      // $LG_DRV_TRACE_NOTIFY: a few notifications in the calendar's list first.
+      for (let i = 0; i < Number(GLib.getenv('LG_DRV_TRACE_NOTIFY') ?? 0); i++)
+        Main.notify(`Driver ${i}`, 'A notification for the calendar menu');
+      await sleep(1500);
+      const dateMenu = Main.panel.statusArea.dateMenu.menu;
+      const clock = Main.panel.statusArea.dateMenu._clockDisplay;
+      log(`trace clock label at ${clock.get_transformed_position().map(Math.round)} size ${clock.get_transformed_size().map(Math.round)}`);
+      dateMenu.open(true);
+      await sleep(2500);
+      dateMenu.close(true);
+      await sleep(1500);
+      MenuMorphMotion.prototype.step = step;
+      MenuMorphMotion.prototype.retarget = retarget;
+    }
+    if (parts.includes('qssub')) {
+      // A Quick Settings submenu stays centred under the panel when the shell
+      // moves it after the last frame that would have noticed.
+      const qs = Main.panel.statusArea.quickSettings.menu;
+      qs.open(true);
+      // The shell reads the submenus' offset with the panel's opening scale on it.
+      await sleep(60);
+      log(`qssub: panel scale while opening ${qs.box.scale_x.toFixed(2)}`);
+      qs._grid.notify('x');
+      await sleep(1500);
+      const toggle = qs._grid.get_children().find(c => c.menu?.actor && c.visible && c.reactive);
+      const centres = () => {
+        const sub = toggle.menu.box;
+        const [bx] = qs.box.get_transformed_position();
+        const [sx] = sub.get_transformed_position();
+        return `${Math.round(sx + sub.get_transformed_size()[0] / 2 - bx - qs.box.get_transformed_size()[0] / 2)}`;
+      };
+      if (toggle) {
+        toggle.menu.open(true);
+        await sleep(1500);
+        const before = centres();
+        const xConstraint = qs._overlay.get_constraints().find(c => c.coordinate === Clutter.BindCoordinate.X);
+        xConstraint.offset += 30;
+        await sleep(1000);
+        log(`qssub: ${toggle.constructor.name} submenu off centre by ${before}, after the shell moved it by 30: ${centres()}`);
+        await shot('qs-submenu', [m.x + m.width - 700, m.y, 700, 900]);
+        xConstraint.offset -= 30;
+        toggle.menu.close(false);
+      } else {
+        log('qssub: no toggle with a submenu');
+      }
+      qs.close(false);
+      await sleep(1000);
+    }
+    if (parts.includes('media')) {
+      // A player of our own on the session bus, and its card's buttons clicked
+      // with a virtual pointer.
+      const calls = [];
+      const xml = `<node><interface name="org.mpris.MediaPlayer2.Player">
+        <method name="Previous"/><method name="PlayPause"/><method name="Next"/>
+        <property name="PlaybackStatus" type="s" access="read"/>
+        <property name="Metadata" type="a{sv}" access="read"/></interface></node>`;
+      const player = Gio.DBusExportedObject.wrapJSObject(xml, {
+        Previous: () => calls.push('Previous'),
+        PlayPause: () => calls.push('PlayPause'),
+        Next: () => calls.push('Next'),
+        get PlaybackStatus() { return 'Playing'; },
+        get Metadata() {
+          return {'xesam:title': new GLib.Variant('s', 'Driver Song'),
+            'xesam:artist': new GLib.Variant('as', ['Driver']),
+            'mpris:artUrl': new GLib.Variant('s', `file://${GLib.getenv('LG_DRV_WALLPAPER') ?? '/usr/share/pixmaps/debian-logo.png'}`)};
+        },
+      });
+      player.export(Gio.DBus.session, '/org/mpris/MediaPlayer2');
+      let owner = 0;
+      await new Promise(resolve => {
+        owner = Gio.bus_own_name_on_connection(Gio.DBus.session, 'org.mpris.MediaPlayer2.lgdrv',
+          Gio.BusNameOwnerFlags.NONE, resolve, null);
+      });
+      settings.set_boolean('output-logs', true);
+      settings.set_strv('desktop-widgets', ['media']);
+      settings.set_boolean('enable-desktop-widgets', true);
+      let card = null;
+      for (let i = 0; i < 40 && !card?.mapped; i++) {
+        await sleep(250);
+        card = findActor(global.window_group, 'liquid-glass-desktop-media');
+      }
+      log(`media: card shown=${card?.visible} mapped=${card?.mapped}`);
+      if (card?.mapped) {
+        new Gio.Settings({schema_id: 'org.gnome.desktop.interface'}).set_boolean('enable-hot-corners', false);
+        const backend = SHELL_MAJOR >= 48 ? global.stage.context.get_backend() : Clutter.get_default_backend();
+        const pointer = backend.get_default_seat().create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
+        await sleep(300);
+        if (Main.overview.visible) {
+          Main.overview.hide();
+          await sleep(1500);
+        }
+        const t = () => GLib.get_monotonic_time();
+        const buttons = findActors(card, a => a instanceof St.Button);
+        for (const button of buttons) {
+          const [bx, by] = button.get_transformed_position();
+          const [bw, bh] = button.get_transformed_size();
+          pointer.notify_absolute_motion(t(), bx + bw / 2, by + bh / 2);
+          await sleep(100);
+          pointer.notify_button(t(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.PRESSED);
+          await sleep(60);
+          pointer.notify_button(t(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.RELEASED);
+          await sleep(500);
+        }
+        log(`media: ${buttons.length} buttons clicked, the player got: ${calls.join(',') || 'nothing'}`);
+        const [cx, cy] = card.get_transformed_position();
+        const [cw, ch] = card.get_transformed_size();
+        // With PULSE_SERVER set to a running sound server, the bars follow what it plays.
+        for (let i = 0; i < 4; i++) {
+          await shot(`media-${i}`, [cx - 20, cy - 20, cw + 40, ch + 40]);
+          await sleep(350);
+        }
+      }
+      settings.set_boolean('enable-desktop-widgets', false);
+      Gio.bus_unown_name(owner);
+      player.unexport();
+      await sleep(500);
+    }
+    if (parts.includes('clocktick')) {
+      // How long the main loop stalls when the clock's minute changes, once
+      // its digits are drawn ($LG_DRV_CLOCK_SIZE, $LG_DRV_CLOCK_HEIGHT, $LG_DRV_CLOCK_FONT).
+      settings.set_boolean('output-logs', true);
+      settings.set_int('glass-clock-size', Number(GLib.getenv('LG_DRV_CLOCK_SIZE') ?? 240));
+      settings.set_double('glass-clock-height', Number(GLib.getenv('LG_DRV_CLOCK_HEIGHT') ?? 1));
+      settings.set_double('glass-clock-stretch', Number(GLib.getenv('LG_DRV_CLOCK_STRETCH') ?? 1));
+      settings.set_string('glass-clock-tall-style', GLib.getenv('LG_DRV_CLOCK_STYLE') ?? 'even');
+      const font = GLib.getenv('LG_DRV_CLOCK_FONT');
+      if (font !== null) settings.set_string('glass-clock-font', font);
+      const {GlassClock} = await this._lgModule('desktop/clock.js');
+      let text = '10:00';
+      let clock = null;
+      const timeText = GlassClock.prototype._timeText;
+      const tick = GlassClock.prototype._tick;
+      GlassClock.prototype._timeText = () => text;
+      GlassClock.prototype._tick = function () {
+        clock = this;
+        return tick.call(this);
+      };
+      // The longest the main loop stops from now until `done` resolves.
+      const stalls = async done => {
+        let last = GLib.get_monotonic_time(), worst = 0;
+        const probe = GLib.timeout_add(GLib.PRIORITY_HIGH, 2, () => {
+          const now = GLib.get_monotonic_time();
+          worst = Math.max(worst, now - last);
+          last = now;
+          return GLib.SOURCE_CONTINUE;
+        });
+        await done;
+        GLib.Source.remove(probe);
+        return (worst / 1000).toFixed(0);
+      };
+      // Every digit drawn once, as a clock that has run for a while has them.
+      log(`clocktick: first digits, longest stall ${await stalls((async () => {
+        settings.set_boolean('enable-glass-clock', true);
+        for (const t of ['01:23', '45:67', '89:00']) {
+          text = t;
+          clock?._tick();
+          await sleep(6000);
+        }
+      })())} ms`);
+      log(`clocktick: resized, longest stall ${await stalls((async () => {
+        settings.set_int('glass-clock-size', settings.get_int('glass-clock-size') - 20);
+        await sleep(8000);
+      })())} ms`);
+      for (const t of ['10:01', '10:02', '17:38', '23:59']) {
+        let last = GLib.get_monotonic_time(), worst = 0;
+        const probe = GLib.timeout_add(GLib.PRIORITY_HIGH, 2, () => {
+          const now = GLib.get_monotonic_time();
+          worst = Math.max(worst, now - last);
+          last = now;
+          return GLib.SOURCE_CONTINUE;
+        });
+        text = t;
+        const start = GLib.get_monotonic_time();
+        clock?._tick();
+        await sleep(3000);
+        GLib.Source.remove(probe);
+        log(`clocktick: ${t} longest stall ${(worst / 1000).toFixed(0)} ms (from ${((GLib.get_monotonic_time() - start) / 1000).toFixed(0)} ms)`);
+      }
+      GlassClock.prototype._timeText = timeText;
+      GlassClock.prototype._tick = tick;
+      settings.set_boolean('enable-glass-clock', false);
+      await sleep(500);
+    }
+    if (parts.includes('clockshot')) {
+      // The clock alone, large, for a close look at its glass ($LG_DRV_CLOCK_SIZE,
+      // $LG_DRV_CLOCK_HEIGHT, $LG_DRV_CLOCK_FONT, $LG_DRV_CLOCK_TEXT).
+      settings.set_boolean('output-logs', true);
+      settings.set_string('glass-clock-position', 'center');
+      settings.set_int('glass-clock-size', Number(GLib.getenv('LG_DRV_CLOCK_SIZE') ?? 240));
+      settings.set_double('glass-clock-height', Number(GLib.getenv('LG_DRV_CLOCK_HEIGHT') ?? 1));
+      const font = GLib.getenv('LG_DRV_CLOCK_FONT');
+      if (font !== null) settings.set_string('glass-clock-font', font);
+      settings.set_boolean('glass-clock-show-date', false);
+      // $LG_DRV_CLOCK_TEXT shows that instead of the time.
+      const text = GLib.getenv('LG_DRV_CLOCK_TEXT');
+      if (text) (await this._lgModule('desktop/clock.js')).GlassClock.prototype._timeText = () => text;
+      settings.set_boolean('enable-glass-clock', true);
+      await sleep(Number(GLib.getenv('LG_DRV_CLOCK_WAIT') ?? 4000));
+      const clock = findActor(global.window_group, 'liquid-glass-desktop-clock');
+      log(`clockshot: font=${settings.get_string('glass-clock-font')} size=${clock.get_transformed_size()}`);
+      const [x, y] = clock.get_transformed_position();
+      const [w, h] = clock.get_transformed_size();
+      await shot('clock-alone', [x, y, w, h]);
+    }
+    if (parts.includes('topbar')) {
+      for (const style of ['pill', 'islands']) {
+        settings.set_string('top-bar-style', style);
+        await sleep(1500);
+        await shot(`topbar-${style}`, [m.x, m.y, m.width, 80]);
+        const dateMenu = Main.panel.statusArea.dateMenu.menu;
+        dateMenu.open(true);
+        await sleep(1500);
+        await shot(`topbar-${style}-menu`, [m.x, m.y, m.width, 700]);
+        dateMenu.close(true);
+        await sleep(1000);
+      }
+    }
+    if (parts.includes('widgets')) {
+      // A town GNOME Weather has no location for.
+      settings.set_value('weather-place', new GLib.Variant('(sdd)', ['喜多方市', 37.65, 139.86667]));
+      settings.set_boolean('enable-desktop-widgets', true);
+      await sleep(8000);
+      const weather = findActor(global.window_group, 'liquid-glass-desktop-weather');
+      const texts = weather ? findActors(weather, a => a instanceof St.Label).map(l => l.text).filter(Boolean) : [];
+      log(`weather: ${texts.join(' | ').replace(/\n/g, ' / ')}`);
+      await shot('widgets', [m.x, m.y, m.width, m.height]);
+    }
+    if (parts.includes('clock')) {
+      settings.set_boolean('enable-glass-clock', true);
+      await sleep(3000);
+      await shot('clock', [m.x, m.y, m.width, m.height]);
+      for (const position of ['top-left', 'bottom-right']) {
+        settings.set_string('glass-clock-position', position);
+        await sleep(1500);
+        await shot(`clock-${position}`, [m.x, m.y, m.width, m.height]);
+      }
+      await this._editClock(settings, m);
+    }
+    if (parts.includes('launcher')) {
+      settings.set_boolean('enable-launcher', true);
+      await sleep(1000);
+      const {Launcher} = await this._lgModule('launcher/launcher.js');
+      const launcher = Launcher.instance;
+      launcher?.open();
+      await sleep(1200);
+      await shot('launcher-empty', [m.x, m.y, m.width, m.height]);
+      launcher?.setText('set');
+      await sleep(2500);
+      await shot('launcher-results', [m.x, m.y, m.width, m.height]);
+      launcher?.close();
+      await sleep(1000);
+    }
+    // Everything switched on, the launcher open: disabling has to leave nothing.
+    (await this._lgModule('launcher/launcher.js')).Launcher.instance?.open();
+    await sleep(500);
+    Main.extensionManager.disableExtension(LG_UUID);
+    await sleep(1000);
+    log(`features disabled: leftovers=${JSON.stringify(this._leftovers())} ` +
+      `panel transparent=${Main.panel.has_style_class_name('liquid-glass-transparent')} modal=${Main.modalCount}`);
+    Main.extensionManager.enableExtension(LG_UUID);
+    await sleep(4000);
+    log(`features enabled again: glasses=${lg()?.glassObjects().map(g => g._owner).join(',')}`);
   }
 
   _finish() {
